@@ -1,0 +1,7 @@
+PyQt5>=5.15
+asyncssh>=2.14
+pyte>=0.8
+qasync>=0.27
+cryptography>=42.0
+colorama
+loguru

@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+def _resolve_app_dir() -> Path:
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+APP_DIR = _resolve_app_dir()
+DATA_DIR = APP_DIR / 'config'
+CONFIG_FILE = DATA_DIR / 'config.json'
+SESSIONS_FILE = DATA_DIR / 'sessions.json'
+CREDENTIALS_FILE = DATA_DIR / 'credentials.json'
+SECRET_KEY_FILE = DATA_DIR / 'secret.key'
+LANGUAGES_DIR = APP_DIR / 'Languages'
+
+STORAGE_VERSION = 1

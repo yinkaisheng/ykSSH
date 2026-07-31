@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Dict, List
+
+AUTH_PASSWORD = 'password'
+AUTH_PUBLIC_KEY = 'publickey'
+
+
+@dataclass
+class SessionItem:
+    """A node in the session tree.
+
+    A folder has ``children`` but no ``host``.
+    A session leaf has connection fields but no ``children``.
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ''
+    host: str = ''
+    port: int = 22
+    username: str = ''
+    auth_type: str = AUTH_PASSWORD
+    key_path: str = ''
+    local_path: str = ''
+    remote_path: str = ''
+    children: List['SessionItem'] = field(default_factory=list)
+
+    def is_folder(self) -> bool:
+        return not self.host
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {'id': self.id, 'name': self.name}
+        if self.host:
+            d['host'] = self.host
+            d['port'] = self.port
+            d['username'] = self.username
+            d['auth_type'] = self.auth_type
+            if self.key_path:
+                d['key_path'] = self.key_path
+            if self.local_path:
+                d['local_path'] = self.local_path
+            if self.remote_path:
+                d['remote_path'] = self.remote_path
+        if self.children:
+            d['children'] = [c.to_dict() for c in self.children]
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'SessionItem':
+        host = str(data.get('host', '') or '')
+        return cls(
+            id=data.get('id', str(uuid.uuid4())),
+            name=data.get('name', ''),
+            host=host,
+            port=int(data.get('port', 22) or 22),
+            username=str(data.get('username', '') or ''),
+            auth_type=str(data.get('auth_type', AUTH_PASSWORD) or AUTH_PASSWORD),
+            key_path=str(data.get('key_path', '') or ''),
+            local_path=str(data.get('local_path', '') or ''),
+            remote_path=str(data.get('remote_path', '') or ''),
+            children=[cls.from_dict(c) for c in data.get('children', [])],
+        )
