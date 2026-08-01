@@ -28,6 +28,7 @@ class SftpUiHandler(QObject):
         self._on_refresh_ui = on_refresh_ui
         self._local_dir = os.path.expanduser('~')
         self._remote_dir = '/'
+        self._remote_home = '/'
         self._paths_initialized = False
 
     @property
@@ -38,11 +39,16 @@ class SftpUiHandler(QObject):
     def remote_dir(self) -> str:
         return self._remote_dir
 
+    @property
+    def remote_home(self) -> str:
+        return self._remote_home
+
     def try_init_session_paths(self, local_path: str, remote_path: str) -> bool:
         if self._paths_initialized:
             return False
         self._local_dir = local_path
         self._remote_dir = remote_path or '/'
+        self._remote_home = self._remote_dir
         self._paths_initialized = True
         return True
 

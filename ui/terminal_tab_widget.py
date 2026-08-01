@@ -20,10 +20,12 @@ class TerminalTabWidget(QTabWidget):
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
+        self.setObjectName('TerminalTabWidget')
         self.setTabsClosable(False)
         self.setMovable(True)
-        self.setDocumentMode(True)
         tab_bar = self.tabBar()
+        tab_bar.setObjectName('TerminalTabBar')
+        tab_bar.setDrawBase(False)
         tab_bar.setContextMenuPolicy(Qt.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
         tab_bar.tabMoved.connect(self._rebuild_tab_id_map)
@@ -36,6 +38,7 @@ class TerminalTabWidget(QTabWidget):
         tab_id = tab_id or uuid.uuid4().hex
         terminal = TerminalVTWidget()
         index = self.addTab(terminal, title)
+        self.tabBar().setDrawBase(False)
         self._tab_ids[index] = tab_id
         self._terminals[tab_id] = terminal
         self._display_titles[tab_id] = title

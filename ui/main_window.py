@@ -23,7 +23,12 @@ from core.path_resolver import resolve_local_path
 from core.sftp_ui_handler import SftpUiHandler
 from i18n import register_retranslator, set_language, tr
 from models.session_item import SessionItem
-from storage.app_config import get_app_config, save_app_preferences, save_window_state
+from storage.app_config import (
+    DEFAULT_SESSION_TREE_WIDTH,
+    get_app_config,
+    save_app_preferences,
+    save_window_state,
+)
 from storage.keyring_store import KeyringStore
 from storage.session_profile_store import SessionProfileStore
 from ui.about_dialog import show_about_dialog
@@ -59,7 +64,7 @@ def splitter_sizes_to_ratio(sizes: list[int]) -> float:
 class MainWindow(QMainWindow):
     DEFAULT_WIDTH = 1400
     DEFAULT_HEIGHT = 900
-    DEFAULT_MAIN_SPLITTER_RATIO = round(280 / (280 + 920), 3)
+    MIN_TERMINAL_PANE_WIDTH = 120
     DEFAULT_VERTICAL_SPLITTER_RATIO = 0.65
     RESIZE_MARGIN = 5
 
@@ -78,6 +83,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr('main.window_title'))
         self._main_splitter: Optional[QSplitter] = None
         self._vertical_splitter: Optional[QSplitter] = None
+        self._session_tree_width = DEFAULT_SESSION_TREE_WIDTH
         self._title_bar: Optional[WindowTitleBar] = None
         self._shell_frame: Optional[QFrame] = None
         self._init_ui()
@@ -109,9 +115,9 @@ class MainWindow(QMainWindow):
         self._main_splitter.setObjectName('mainSplitter')
         self._main_splitter.addWidget(self.session_panel)
         self._main_splitter.addWidget(self.terminal_tabs)
-        self._main_splitter.setStretchFactor(0, 1)
-        self._main_splitter.setStretchFactor(1, 3)
-        self._main_splitter.setSizes([280, 920])
+        self._main_splitter.setStretchFactor(0, 0)
+        self._main_splitter.setStretchFactor(1, 1)
+        self._main_splitter.setSizes([self._session_tree_width, 920])
 
         # 下区：双文件 Table 占满全宽
         self._vertical_splitter = QSplitter(Qt.Vertical)
@@ -157,7 +163,7 @@ class MainWindow(QMainWindow):
         self.terminal_tabs.currentChanged.connect(self._on_current_tab_changed)
         self.connection_manager.remote_list_updated.connect(self._on_remote_list_updated)
         if self._main_splitter is not None:
-            self._main_splitter.splitterMoved.connect(self._schedule_session_save)
+            self._main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
         if self._vertical_splitter is not None:
             self._vertical_splitter.splitterMoved.connect(self._schedule_session_save)
 
@@ -176,8 +182,9 @@ class MainWindow(QMainWindow):
         self.resize(width, height)
         self._center_on_screen()
 
-        if window.main_splitter is not None and self._main_splitter:
-            QTimer.singleShot(0, lambda r=float(window.main_splitter): self._apply_main_splitter_ratio(r))
+        if window.session_tree_width is not None and self._main_splitter:
+            self._session_tree_width = int(window.session_tree_width)
+            QTimer.singleShot(0, self._apply_session_tree_width)
 
         if window.vertical_splitter is not None and self._vertical_splitter:
             QTimer.singleShot(
@@ -194,14 +201,26 @@ class MainWindow(QMainWindow):
         y = available.y() + max(0, (available.height() - self.height()) // 2)
         self.move(x, y)
 
-    def _apply_main_splitter_ratio(self, ratio: float) -> None:
+    def _apply_session_tree_width(self) -> None:
         if not self._main_splitter:
             return
-        width = self._main_splitter.width()
-        if width <= 0:
-            QTimer.singleShot(50, lambda: self._apply_main_splitter_ratio(ratio))
+        total = self._main_splitter.width()
+        if total <= 0:
+            QTimer.singleShot(50, self._apply_session_tree_width)
             return
-        self._main_splitter.setSizes(splitter_ratio_to_sizes(width, ratio))
+        min_terminal = self.MIN_TERMINAL_PANE_WIDTH
+        max_tree = max(min_terminal, total - min_terminal)
+        tree_width = max(0, min(max_tree, self._session_tree_width))
+        self._session_tree_width = tree_width
+        self._main_splitter.setSizes([tree_width, max(min_terminal, total - tree_width)])
+
+    def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
+        if not self._main_splitter:
+            return
+        sizes = self._main_splitter.sizes()
+        if sizes:
+            self._session_tree_width = sizes[0]
+        self._schedule_session_save()
 
     def _apply_vertical_splitter_ratio(self, ratio: float) -> None:
         if not self._vertical_splitter:
@@ -216,10 +235,10 @@ class MainWindow(QMainWindow):
         save_window_state(
             width=self.width(),
             height=self.height(),
-            main_splitter=(
-                splitter_sizes_to_ratio(self._main_splitter.sizes())
-                if self._main_splitter
-                else self.DEFAULT_MAIN_SPLITTER_RATIO
+            session_tree_width=(
+                self._main_splitter.sizes()[0]
+                if self._main_splitter and self._main_splitter.sizes()
+                else self._session_tree_width
             ),
             vertical_splitter=(
                 splitter_sizes_to_ratio(self._vertical_splitter.sizes())
@@ -447,6 +466,7 @@ class MainWindow(QMainWindow):
         )
         self._apply_terminal_fonts(family, size_px)
         self.session_panel.apply_appearance()
+        self.file_panels.apply_file_panel_layout()
         window_cfg = get_app_config().window
         if self._title_bar is not None:
             apply_window_title_bar(
@@ -569,5 +589,6 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        self._apply_session_tree_width()
         if self._active_tab_id is not None:
             asyncio.create_task(self.connection_manager.resize_terminal(self._active_tab_id))

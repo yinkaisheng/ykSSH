@@ -6,7 +6,7 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional
 
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QFontMetrics
 from PyQt5.QtWidgets import QApplication
 
 from storage.app_config import get_app_config
@@ -217,13 +217,39 @@ def apply_main_window_border(shell_frame, border_color: str, border_width: int =
     )
 
 
+def build_window_menu_bar_stylesheet(*, menu_height: int, font: QFont | None = None) -> str:
+    """Menu bar item padding + hover/selected colors (widget-local QSS overrides app QSS)."""
+    p = active_theme_palette()
+    metrics = QFontMetrics(font or default_ui_font())
+    item_pad_v = max(0, (menu_height - metrics.height()) // 2)
+    return f'''
+QMenuBar#WindowMenuBar::item {{
+    padding-top: {item_pad_v}px;
+    padding-bottom: {item_pad_v}px;
+    padding-left: 10px;
+    padding-right: 10px;
+    background: transparent;
+    border-radius: 3px;
+}}
+QMenuBar#WindowMenuBar::item:hover {{
+    background-color: {p.background_menu_hover};
+}}
+QMenuBar#WindowMenuBar::item:selected {{
+    background-color: {p.background_hover};
+}}
+QMenuBar#WindowMenuBar::item:pressed {{
+    background-color: {p.background_hover};
+}}
+'''
+
+
 def apply_window_title_bar(
     title_bar,
     *,
     height: int,
     border_width: int = 0,
 ) -> None:
-    """Apply title bar height and window-control insets; colors come from global theme QSS."""
+    """Apply title bar height, menu bar theme, and window-control insets."""
     try:
         resolved_height = int(height)
     except (TypeError, ValueError):
@@ -234,6 +260,13 @@ def apply_window_title_bar(
     except (TypeError, ValueError):
         resolved_border = 0
     title_bar.apply_layout(resolved_height, border_width=resolved_border)
+    content_height = max(16, resolved_height - resolved_border - title_bar.BOTTOM_BORDER_PX)
+    title_bar.menu_bar.setStyleSheet(
+        build_window_menu_bar_stylesheet(
+            menu_height=content_height,
+            font=title_bar.menu_bar.font(),
+        )
+    )
 
 
 def resolve_ui_font_size_px() -> int:
@@ -268,6 +301,22 @@ def _build_stylesheet(
     tab_bar_height = get_app_config().window.tab_bar_height
     tab_padding_y = max(2, (tab_bar_height - ui_size_px - 2) // 2)
     session_tree_row_height = appearance.session_tree_row_height_px
+    filter_edit_font_size = appearance.filter_edit_font_size
+    filter_edit_height = appearance.filter_edit_height
+    _filter_edit_font = QFont()
+    _filter_edit_font.setPixelSize(filter_edit_font_size)
+    _filter_edit_fm = QFontMetrics(_filter_edit_font)
+    filter_edit_pad_y = max(
+        0, (filter_edit_height - 2 - _filter_edit_fm.lineSpacing()) // 2,
+    )
+    file_panel_toolbar_font_size = get_app_config().file_panel.file_panel_toolbar_font_size
+    file_panel_toolbar_height = get_app_config().file_panel.file_panel_toolbar_height
+    _fp_toolbar_font = QFont()
+    _fp_toolbar_font.setPixelSize(file_panel_toolbar_font_size)
+    _fp_toolbar_fm = QFontMetrics(_fp_toolbar_font)
+    file_panel_toolbar_pad_y = max(
+        0, (file_panel_toolbar_height - 2 - _fp_toolbar_fm.lineSpacing()) // 2,
+    )
     if terminal_font_size is None:
         resolved_terminal_font_size = appearance.terminal_font_size_px
     else:
@@ -305,6 +354,19 @@ QMenuBar#WindowMenuBar {{
 QMenuBar#WindowMenuBar::item {{
     background: transparent;
     padding: 0px 10px;
+    border-radius: 3px;
+}}
+
+QMenuBar#WindowMenuBar::item:hover {{
+    background-color: {p.background_menu_hover};
+}}
+
+QMenuBar#WindowMenuBar::item:selected {{
+    background-color: {p.background_hover};
+}}
+
+QMenuBar#WindowMenuBar::item:pressed {{
+    background-color: {p.background_hover};
 }}
 
 QWidget#WindowTitleControls {{
@@ -421,7 +483,8 @@ QFrame#fileTableHost {{
 QFrame#fileTableHost QTableWidget#fileTableInner {{
     border: none;
     border-radius: 0px;
-    background-color: transparent;
+    background-color: {p.background_primary};
+    alternate-background-color: {p.background_row_stripe};
 }}
 
 QTableWidget#fileTableInner QHeaderView#fileTableHeader,
@@ -436,10 +499,26 @@ QTabWidget::pane {{
     top: -1px;
 }}
 
+QTabWidget#TerminalTabWidget {{
+    background-color: {p.title_bar_background};
+}}
+
+QTabBar {{
+    background-color: {p.title_bar_background};
+    border: none;
+    qproperty-drawBase: 0;
+}}
+
+QTabBar#TerminalTabBar {{
+    background-color: {p.title_bar_background};
+    qproperty-drawBase: 0;
+}}
+
 QTabBar::tab {{
     background-color: {p.tab_background};
     color: {p.text_secondary};
     border: 1px solid {p.border};
+    border-top: none;
     border-bottom: none;
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
@@ -453,7 +532,8 @@ QTabBar::tab {{
 QTabBar::tab:selected {{
     background-color: {p.tab_selected_background};
     color: {p.text_primary};
-    border: 1px solid {p.border_emphasis};
+    border: 1px solid {p.border};
+    border-top: none;
     border-bottom: 1px solid {p.tab_selected_background};
 }}
 
@@ -608,6 +688,37 @@ QLineEdit, QPlainTextEdit {{
     padding: 4px 8px;
     selection-background-color: {p.highlight};
     selection-color: {p.highlight_text};
+}}
+
+QLineEdit#SessionFilterEdit {{
+    font-size: {filter_edit_font_size}px;
+    padding: {filter_edit_pad_y}px 6px;
+}}
+
+QWidget#filePanelToolbar QLabel,
+QWidget#filePanelToolbar QPushButton {{
+    font-size: {file_panel_toolbar_font_size}px;
+}}
+
+QWidget#filePanelToolbar QLineEdit {{
+    font-size: {file_panel_toolbar_font_size}px;
+    padding: {file_panel_toolbar_pad_y}px 8px;
+}}
+
+QWidget#fileNavToolbar QToolButton#filePanelNavButton {{
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+    margin: 0px;
+}}
+
+QWidget#fileNavToolbar QToolButton#filePanelNavButton:hover {{
+    background-color: {p.background_hover};
+}}
+
+QWidget#fileNavToolbar QToolButton#filePanelNavButton:pressed {{
+    background-color: {p.border};
 }}
 
 QComboBox, QSpinBox {{

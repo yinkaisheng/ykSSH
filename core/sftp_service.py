@@ -20,6 +20,8 @@ async def listdir(sftp: asyncssh.SFTPClient, path: str) -> List[Dict[str, Any]]:
         return entries
 
     for name in sorted(names):
+        if name in ('.', '..'):
+            continue
         full = f'{path.rstrip("/")}/{name}' if path not in ('', '/') else f'/{name}'
         try:
             attrs = await sftp.stat(full)

@@ -23,6 +23,7 @@ from ui.appearance_defaults import (
 from ui.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
+    _FILE_PANEL_BOOL_DEFAULTS,
     _FILE_PANEL_INT_BOUNDS,
     _FILE_PANEL_INT_DEFAULTS,
     default_file_panel,
@@ -50,6 +51,8 @@ class AppearanceConfig:
     status_font_size_px: int
     session_tree_font_size_px: int
     session_tree_row_height_px: int
+    filter_edit_height: int
+    filter_edit_font_size: int
     ui_font_families_win: Tuple[str, ...]
     terminal_font_family: str
     terminal_font_size_px: int
@@ -59,7 +62,7 @@ class AppearanceConfig:
     terminal_font_fallbacks: Tuple[str, ...]
 
 
-DEFAULT_WINDOW_BORDER_WIDTH = 2
+DEFAULT_WINDOW_BORDER_WIDTH = 1
 _MAX_WINDOW_BORDER_WIDTH = 8
 DEFAULT_TITLE_BAR_HEIGHT = 32
 _MIN_TITLE_BAR_HEIGHT = 24
@@ -67,6 +70,9 @@ _MAX_TITLE_BAR_HEIGHT = 48
 DEFAULT_TAB_BAR_HEIGHT = 28
 _MIN_TAB_BAR_HEIGHT = 20
 _MAX_TAB_BAR_HEIGHT = 48
+DEFAULT_SESSION_TREE_WIDTH = 280
+_MIN_SESSION_TREE_WIDTH = 120
+_MAX_SESSION_TREE_WIDTH = 800
 
 
 @dataclass(frozen=True)
@@ -76,7 +82,7 @@ class WindowConfig:
     tab_bar_height: int = DEFAULT_TAB_BAR_HEIGHT
     width: Optional[int] = None
     height: Optional[int] = None
-    main_splitter: Optional[float] = None
+    session_tree_width: Optional[int] = None
     vertical_splitter: Optional[float] = None
 
 
@@ -86,6 +92,9 @@ class FilePanelConfig:
     remote_column_widths: Tuple[int, ...]
     header_height_px: int
     row_height_px: int
+    file_panel_toolbar_height: int
+    file_panel_toolbar_font_size: int
+    folder_name_bold: bool
 
 
 @dataclass(frozen=True)
@@ -108,6 +117,20 @@ def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, min(maximum, number))
+
+
+def _normalize_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().casefold()
+        if lowered in ('true', '1', 'yes', 'on'):
+            return True
+        if lowered in ('false', '0', 'no', 'off'):
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
 
 
 def _normalize_string_list(
@@ -207,6 +230,8 @@ def _appearance_to_config(appearance: Dict[str, Any]) -> AppearanceConfig:
         status_font_size_px=appearance['status_font_size_px'],
         session_tree_font_size_px=appearance['session_tree_font_size_px'],
         session_tree_row_height_px=appearance['session_tree_row_height_px'],
+        filter_edit_height=appearance['filter_edit_height'],
+        filter_edit_font_size=appearance['filter_edit_font_size'],
         ui_font_families_win=tuple(appearance['ui_font_families_win']),
         terminal_font_family=appearance['terminal_font_family'],
         terminal_font_size_px=appearance['terminal_font_size_px'],
@@ -269,6 +294,8 @@ def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
     for key, default in _FILE_PANEL_INT_DEFAULTS.items():
         minimum, maximum = _FILE_PANEL_INT_BOUNDS[key]
         normalized[key] = _clamp_int(raw.get(key), default, minimum, maximum)
+    for key, default in _FILE_PANEL_BOOL_DEFAULTS.items():
+        normalized[key] = _normalize_bool(raw.get(key), default)
     return normalized
 
 
@@ -278,6 +305,9 @@ def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
         remote_column_widths=tuple(file_panel['remote_column_widths']),
         header_height_px=file_panel['header_height_px'],
         row_height_px=file_panel['row_height_px'],
+        file_panel_toolbar_height=file_panel['file_panel_toolbar_height'],
+        file_panel_toolbar_font_size=file_panel['file_panel_toolbar_font_size'],
+        folder_name_bold=file_panel['folder_name_bold'],
     )
 
 
@@ -305,14 +335,23 @@ def _normalize_window(raw: Any) -> Dict[str, Any]:
     }
     width = raw.get('width')
     height = raw.get('height')
-    main_splitter = raw.get('main_splitter')
     vertical_splitter = raw.get('vertical_splitter')
     if isinstance(width, int) and width > 0:
         normalized['width'] = width
     if isinstance(height, int) and height > 0:
         normalized['height'] = height
-    if isinstance(main_splitter, (int, float)) and 0.0 <= float(main_splitter) <= 1.0:
-        normalized['main_splitter'] = round(float(main_splitter), 3)
+    session_tree_width = raw.get('session_tree_width')
+    if session_tree_width is None and isinstance(raw.get('main_splitter'), (int, float)):
+        legacy = float(raw['main_splitter'])
+        if 0.0 < legacy <= 1.0:
+            base_width = width if isinstance(width, int) and width > 0 else DEFAULT_SESSION_TREE_WIDTH * 4
+            session_tree_width = int(base_width * legacy)
+    normalized['session_tree_width'] = _clamp_int(
+        session_tree_width,
+        DEFAULT_SESSION_TREE_WIDTH,
+        _MIN_SESSION_TREE_WIDTH,
+        _MAX_SESSION_TREE_WIDTH,
+    )
     if isinstance(vertical_splitter, (int, float)) and 0.0 <= float(vertical_splitter) <= 1.0:
         normalized['vertical_splitter'] = round(float(vertical_splitter), 3)
     return normalized
@@ -325,7 +364,7 @@ def _window_to_config(window: Dict[str, Any]) -> WindowConfig:
         tab_bar_height=window['tab_bar_height'],
         width=window.get('width'),
         height=window.get('height'),
-        main_splitter=window.get('main_splitter'),
+        session_tree_width=window.get('session_tree_width'),
         vertical_splitter=window.get('vertical_splitter'),
     )
 
@@ -490,7 +529,7 @@ def save_window_state(
     *,
     width: int,
     height: int,
-    main_splitter: float,
+    session_tree_width: int,
     vertical_splitter: float,
     path: Path = CONFIG_FILE,
 ) -> AppConfig:
@@ -500,7 +539,12 @@ def save_window_state(
     window = dict(_raw_config_cache.get('window', {}))
     window['width'] = max(1, int(width))
     window['height'] = max(1, int(height))
-    window['main_splitter'] = round(float(main_splitter), 3)
+    window['session_tree_width'] = _clamp_int(
+        session_tree_width,
+        DEFAULT_SESSION_TREE_WIDTH,
+        _MIN_SESSION_TREE_WIDTH,
+        _MAX_SESSION_TREE_WIDTH,
+    )
     window['vertical_splitter'] = round(float(vertical_splitter), 3)
     data = dict(_raw_config_cache)
     data['window'] = _normalize_window(window)

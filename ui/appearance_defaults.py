@@ -9,11 +9,13 @@ AppearanceDict = Dict[str, object]
 
 DEFAULT_THEME = 'solarized'
 
-DEFAULT_UI_FONT_SIZE_PX = 14
-DEFAULT_TABLE_FONT_SIZE_PX = 14
-DEFAULT_STATUS_FONT_SIZE_PX = 12
-DEFAULT_SESSION_TREE_FONT_SIZE_PX = 14
-DEFAULT_SESSION_TREE_ROW_HEIGHT_PX = 24
+DEFAULT_UI_FONT_SIZE_PX = 18
+DEFAULT_TABLE_FONT_SIZE_PX = 18
+DEFAULT_STATUS_FONT_SIZE_PX = 14
+DEFAULT_SESSION_TREE_FONT_SIZE_PX = 18
+DEFAULT_SESSION_TREE_ROW_HEIGHT_PX = 28
+DEFAULT_FILTER_EDIT_HEIGHT = 30
+DEFAULT_FILTER_EDIT_FONT_SIZE = 14
 DEFAULT_UI_FONT_FAMILIES_WIN: Tuple[str, ...] = (
     'Microsoft YaHei UI',
     'Segoe UI',
@@ -21,7 +23,7 @@ DEFAULT_UI_FONT_FAMILIES_WIN: Tuple[str, ...] = (
 )
 
 DEFAULT_TERMINAL_FONT_FAMILY = 'Consolas'
-DEFAULT_TERMINAL_FONT_SIZE_PX = 18
+DEFAULT_TERMINAL_FONT_SIZE_PX = 24
 DEFAULT_TERMINAL_FONT_SIZE_MIN = 14
 DEFAULT_TERMINAL_FONT_SIZE_MAX = 48
 DEFAULT_TERMINAL_FONT_FAMILIES: Tuple[str, ...] = (
@@ -43,6 +45,8 @@ _APPEARANCE_INT_DEFAULTS: Dict[str, int] = {
     'status_font_size_px': DEFAULT_STATUS_FONT_SIZE_PX,
     'session_tree_font_size_px': DEFAULT_SESSION_TREE_FONT_SIZE_PX,
     'session_tree_row_height_px': DEFAULT_SESSION_TREE_ROW_HEIGHT_PX,
+    'filter_edit_height': DEFAULT_FILTER_EDIT_HEIGHT,
+    'filter_edit_font_size': DEFAULT_FILTER_EDIT_FONT_SIZE,
     'terminal_font_size_px': DEFAULT_TERMINAL_FONT_SIZE_PX,
     'terminal_font_size_min': DEFAULT_TERMINAL_FONT_SIZE_MIN,
     'terminal_font_size_max': DEFAULT_TERMINAL_FONT_SIZE_MAX,
@@ -54,6 +58,8 @@ _APPEARANCE_INT_BOUNDS: Dict[str, Tuple[int, int]] = {
     'status_font_size_px': (8, 24),
     'session_tree_font_size_px': (8, 32),
     'session_tree_row_height_px': (18, 48),
+    'filter_edit_height': (18, 48),
+    'filter_edit_font_size': (8, 32),
     'terminal_font_size_px': (8, 48),
     'terminal_font_size_min': (6, 32),
     'terminal_font_size_max': (8, 72),

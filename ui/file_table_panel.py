@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Iterable, List, Optional
 
-from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont, QFontMetrics, QShowEvent
+from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, pyqtSignal
+from PyQt5.QtGui import QFont, QFontMetrics, QMouseEvent, QShowEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -17,12 +18,14 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QSplitterHandle,
     QStackedWidget,
     QStyleOptionHeader,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +40,7 @@ SORT_NAME = Qt.UserRole + 2
 SORT_SIZE = Qt.UserRole + 3
 SORT_MTIME = Qt.UserRole + 4
 SORT_PERM = Qt.UserRole + 5
+_PARENT_SORT_RANK = 0
 
 
 class EqualSplitSplitter(QSplitter):
@@ -63,6 +67,9 @@ class EqualSplitSplitter(QSplitter):
             return
         half = total // 2
         self.setSizes([half, total - half])
+
+
+_FILE_PANEL_TOOLBAR_TABLE_SPACING = 4
 
 
 def _wrap_file_table(table: QTableWidget) -> QFrame:
@@ -96,10 +103,17 @@ def _format_mtime(ts: float) -> str:
 
 def _entry_sort_rank(entry_type: str, *, is_parent: bool = False) -> int:
     if is_parent:
-        return 0
+        return _PARENT_SORT_RANK
     if entry_type == 'dir':
         return 1
     return 2
+
+
+def _item_sort_rank(item: QTableWidgetItem) -> int:
+    value = item.data(SORT_RANK)
+    if value is None:
+        return 2
+    return int(value)
 
 
 def _set_name_item_sort_keys(
@@ -120,6 +134,12 @@ def _set_name_item_sort_keys(
     name_item.setData(SORT_PERM, perm.casefold())
 
 
+def _apply_entry_name_font(name_item: QTableWidgetItem, entry_type: str) -> None:
+    font = QFont(name_item.font())
+    font.setBold(get_app_config().file_panel.folder_name_bold and entry_type == 'dir')
+    name_item.setFont(font)
+
+
 class _FileSortItem(QTableWidgetItem):
     """Table item that sorts folders before files and supports per-column ordering."""
 
@@ -136,8 +156,16 @@ class _FileSortItem(QTableWidgetItem):
         if left_key is None or right_key is None:
             return super().__lt__(other)
 
-        left_rank = int(left_key.data(SORT_RANK) or 2)
-        right_rank = int(right_key.data(SORT_RANK) or 2)
+        left_rank = _item_sort_rank(left_key)
+        right_rank = _item_sort_rank(right_key)
+        left_is_parent = left_rank == _PARENT_SORT_RANK
+        right_is_parent = right_rank == _PARENT_SORT_RANK
+        if left_is_parent != right_is_parent:
+            header = table.horizontalHeader()
+            ascending = header.sortIndicatorSection() < 0 or header.sortIndicatorOrder() == Qt.AscendingOrder
+            if left_is_parent:
+                return ascending
+            return not ascending
         if left_rank != right_rank:
             return left_rank < right_rank
 
@@ -184,6 +212,25 @@ class _FileTableHeaderView(QHeaderView):
         super().initStyleOption(option)
         option.font = self._body_font
         option.fontMetrics = QFontMetrics(self._body_font)
+
+
+def _apply_file_panel_toolbar_layout(
+    toolbar: QWidget,
+    *,
+    label: QLabel,
+    path_edit: QLineEdit,
+    nav_toolbar: Optional[QWidget] = None,
+) -> None:
+    cfg = get_app_config().file_panel
+    toolbar_height = cfg.file_panel_toolbar_height
+    toolbar.setFixedHeight(toolbar_height)
+    font = QFont()
+    font.setPixelSize(cfg.file_panel_toolbar_font_size)
+    for widget in (label, path_edit):
+        widget.setFont(font)
+    path_edit.setFixedHeight(toolbar_height)
+    if nav_toolbar is not None and hasattr(nav_toolbar, 'apply_layout'):
+        nav_toolbar.apply_layout(toolbar_height, font)
 
 
 def _apply_column_widths(table: QTableWidget, column_widths: tuple[int, ...]) -> None:
@@ -233,15 +280,42 @@ class _BaseFileTable(QTableWidget):
         header = self.horizontalHeader()
         header.setSortIndicatorShown(True)
         header.setSectionsClickable(True)
-        self._apply_default_sort()
         self._current_path = ''
         self.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
+    def _is_at_root(self) -> bool:
+        raise NotImplementedError
+
+    def _can_go_to_parent(self) -> bool:
+        return not self._is_at_root()
+
+    def _go_to_parent(self) -> None:
+        if self._can_go_to_parent():
+            self._enter_directory('..')
+
+    def _is_blank_area_at(self, pos) -> bool:
+        if not self.indexAt(pos).isValid():
+            return True
+        if self.rowCount() == 0:
+            return True
+        last_row = self.rowCount() - 1
+        last_col = self.columnCount() - 1
+        if last_col < 0:
+            return True
+        last_cell = self.model().index(last_row, last_col)
+        last_rect = self.visualRect(last_cell)
+        return pos.y() > last_rect.bottom() or pos.x() > last_rect.right()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and self._is_blank_area_at(event.pos()):
+            if self._can_go_to_parent():
+                self._go_to_parent()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def _apply_default_sort(self) -> None:
-        self.horizontalHeader().setSortIndicator(
-            self.DEFAULT_SORT_COLUMN,
-            self.DEFAULT_SORT_ORDER,
-        )
+        self.apply_sort(self.DEFAULT_SORT_COLUMN, self.DEFAULT_SORT_ORDER)
 
     def reset_sort_to_default(self) -> None:
         self._apply_default_sort()
@@ -267,6 +341,9 @@ class _BaseFileTable(QTableWidget):
         return sort_column, sort_order
 
     def _end_refresh(self, sort_column: int, sort_order: Qt.SortOrder) -> None:
+        if sort_column < 0:
+            sort_column = self.DEFAULT_SORT_COLUMN
+            sort_order = self.DEFAULT_SORT_ORDER
         header = self.horizontalHeader()
         self.setSortingEnabled(True)
         header.setSortIndicator(sort_column, sort_order)
@@ -294,6 +371,7 @@ class _BaseFileTable(QTableWidget):
             perm=perm,
             is_parent=is_parent,
         )
+        _apply_entry_name_font(name_item, entry_type)
         self.setItem(row, 0, name_item)
         self.setItem(row, 1, _make_sort_item('' if entry_type == 'dir' else _format_size(size)))
         self.setItem(row, 2, _make_sort_item(_format_mtime(mtime) if mtime > 0 else ''))
@@ -324,13 +402,16 @@ class LocalFileTable(_BaseFileTable):
             tr('file.name'), tr('file.size'), tr('file.modified'),
         ])
         _apply_file_table_layout(self, get_app_config().file_panel.local_column_widths)
+        self._apply_default_sort()
         self._current_path = os.path.expanduser('~')
+
+    def _is_at_root(self) -> bool:
+        return _is_local_root(self._current_path)
 
     def refresh(self) -> None:
         path = self._current_path
         sort_column, sort_order = self._begin_refresh()
-        parent = os.path.dirname(path.rstrip(os.sep))
-        if parent and parent != path:
+        if not _is_local_root(path):
             self._append_entry_row('..', 'dir', 0, 0.0, is_parent=True)
 
         try:
@@ -342,6 +423,8 @@ class LocalFileTable(_BaseFileTable):
         dirs: list[tuple[str, int, float]] = []
         files: list[tuple[str, int, float]] = []
         for name in entries:
+            if name in ('.', '..'):
+                continue
             full = os.path.join(path, name)
             try:
                 stat = os.stat(full)
@@ -390,10 +473,14 @@ class RemoteFileTable(_BaseFileTable):
             tr('file.name'), tr('file.size'), tr('file.modified'), tr('file.perm'),
         ])
         _apply_file_table_layout(self, get_app_config().file_panel.remote_column_widths)
+        self._apply_default_sort()
         self._current_path = '/'
         self._list_callback: Optional[Callable[[str], Any]] = None
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+
+    def _is_at_root(self) -> bool:
+        return _is_remote_root(self._current_path)
 
     def _selected_entries(self) -> list[tuple[str, str]]:
         rows = sorted({idx.row() for idx in self.selectedIndexes()})
@@ -462,12 +549,15 @@ class RemoteFileTable(_BaseFileTable):
 
         sort_column, sort_order = self._begin_refresh()
         entries = self._list_callback(self._current_path) or []
-        if self._current_path not in ('/', ''):
+        if not _is_remote_root(self._current_path):
             self._append_entry_row('..', 'dir', 0, 0.0, is_parent=True)
 
         dirs: list[dict] = []
         files: list[dict] = []
         for entry in entries:
+            name = str(entry.get('name', '') or '')
+            if name in ('.', '..'):
+                continue
             if entry.get('is_dir'):
                 dirs.append(entry)
             else:
@@ -504,6 +594,179 @@ class RemoteFileTable(_BaseFileTable):
         self.setRowCount(0)
 
 
+def _list_windows_drives() -> List[str]:
+    if sys.platform != 'win32':
+        return []
+    import ctypes
+
+    bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+    drives: List[str] = []
+    for index in range(26):
+        if bitmask & (1 << index):
+            drives.append(f'{chr(ord("A") + index)}:')
+    return drives
+
+
+def _windows_drive_root(path: str) -> str:
+    drive, _ = os.path.splitdrive(path)
+    if drive:
+        return f'{drive}\\'
+    return path
+
+
+def _is_local_root(path: str) -> bool:
+    if not path:
+        return True
+    normalized = os.path.abspath(os.path.normpath(path))
+    if sys.platform == 'win32':
+        _drive, tail = os.path.splitdrive(normalized)
+        return tail in ('\\', '/')
+    return normalized == '/'
+
+
+def _is_remote_root(path: str) -> bool:
+    text = (path or '/').strip()
+    return text in ('', '/') or text.rstrip('/') == ''
+
+
+_FILE_NAV_FAVORITES_TEXT = '★'
+
+
+class _FileNavToolbar(QWidget):
+    """Square flat navigation buttons for local/remote file panel toolbars."""
+
+    refresh_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget = None, *, local: bool = True) -> None:
+        super().__init__(parent)
+        self._local = local
+        self.setObjectName('fileNavToolbar')
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
+        self._drive_buttons: list[QToolButton] = []
+        self._drive_labels: list[str] = []
+
+        if local and sys.platform == 'win32':
+            for drive in _list_windows_drives():
+                btn = self._make_text_button(drive)
+                btn.clicked.connect(lambda _checked=False, target=drive: self._navigate_drive(target))
+                self._drive_buttons.append(btn)
+                self._drive_labels.append(drive)
+                self._layout.addWidget(btn)
+
+        self._root_btn = self._make_text_button('/')
+        self._root_btn.clicked.connect(self._navigate_root)
+        self._layout.addWidget(self._root_btn)
+
+        self._home_btn = self._make_text_button('~')
+        self._home_btn.clicked.connect(self._navigate_home)
+        self._layout.addWidget(self._home_btn)
+
+        self._favorites_btn = self._make_text_button(_FILE_NAV_FAVORITES_TEXT)
+        self._layout.addWidget(self._favorites_btn)
+
+        self._refresh_btn = self._make_icon_button('SP_BrowserReload')
+        self._refresh_btn.clicked.connect(self.refresh_requested.emit)
+        self._layout.addWidget(self._refresh_btn)
+
+        self._path_provider: Optional[Callable[[], str]] = None
+        self._home_path_provider: Optional[Callable[[], str]] = None
+        self._navigate_handler: Optional[Callable[[str], None]] = None
+        self.retranslate_ui()
+
+    def set_path_provider(self, provider: Callable[[], str]) -> None:
+        self._path_provider = provider
+
+    def set_home_path_provider(self, provider: Callable[[], str]) -> None:
+        self._home_path_provider = provider
+
+    def set_navigate_handler(self, handler: Callable[[str], None]) -> None:
+        self._navigate_handler = handler
+
+    def _make_text_button(self, text: str) -> QToolButton:
+        btn = QToolButton(self)
+        btn.setObjectName('filePanelNavButton')
+        btn.setText(text)
+        btn.setAutoRaise(True)
+        btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        return btn
+
+    def _make_icon_button(self, icon_name: str) -> QToolButton:
+        btn = QToolButton(self)
+        btn.setObjectName('filePanelNavButton')
+        btn.setAutoRaise(True)
+        btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        icon = getattr(self.style().StandardPixmap, icon_name)
+        btn.setIcon(self.style().standardIcon(icon))
+        return btn
+
+    def _all_buttons(self) -> Iterable[QToolButton]:
+        yield from self._drive_buttons
+        yield self._root_btn
+        yield self._home_btn
+        yield self._favorites_btn
+        yield self._refresh_btn
+
+    def apply_layout(self, toolbar_height: int, font: QFont) -> None:
+        self.setFixedHeight(toolbar_height)
+        icon_inner = max(12, toolbar_height - 8)
+        icon_size = QSize(icon_inner, icon_inner)
+        square = QSize(toolbar_height, toolbar_height)
+        for btn in self._all_buttons():
+            btn.setFont(font)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            btn.setMinimumSize(square)
+            btn.setMaximumSize(square)
+            btn.setFixedSize(square)
+            if btn.toolButtonStyle() == Qt.ToolButtonIconOnly:
+                btn.setIconSize(icon_size)
+
+    def _current_path_value(self) -> str:
+        if self._path_provider is not None:
+            return self._path_provider()
+        return ''
+
+    def _navigate(self, path: str) -> None:
+        if not path or self._navigate_handler is None:
+            return
+        self._navigate_handler(path)
+
+    def _navigate_drive(self, drive: str) -> None:
+        self._navigate(f'{drive}\\')
+
+    def _navigate_root(self) -> None:
+        if self._local and sys.platform == 'win32':
+            current = self._current_path_value()
+            self._navigate(_windows_drive_root(current))
+        else:
+            self._navigate('/')
+
+    def _navigate_home(self) -> None:
+        if self._home_path_provider is not None:
+            home = self._home_path_provider().strip()
+            if home:
+                self._navigate(home)
+                return
+        if self._local:
+            self._navigate(os.path.expanduser('~'))
+
+    def retranslate_ui(self) -> None:
+        current = self._current_path_value()
+        if self._local and sys.platform == 'win32':
+            drive_root = _windows_drive_root(current)
+            self._root_btn.setToolTip(tr('file.local_nav.root_win', drive=drive_root))
+        else:
+            self._root_btn.setToolTip(tr('file.local_nav.root'))
+        self._home_btn.setToolTip(tr('file.local_nav.home'))
+        self._favorites_btn.setToolTip(tr('file.local_nav.favorites'))
+        self._refresh_btn.setToolTip(tr('file.local_nav.refresh'))
+        for btn, drive in zip(self._drive_buttons, self._drive_labels):
+            btn.setToolTip(tr('file.local_nav.drive', drive=drive))
+
+
 class LocalFilePanel(QWidget):
     """Local path bar + local file table."""
 
@@ -522,24 +785,38 @@ class LocalFilePanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        header = QHBoxLayout()
+        layout.setSpacing(_FILE_PANEL_TOOLBAR_TABLE_SPACING)
+        self._toolbar = QWidget()
+        self._toolbar.setObjectName('filePanelToolbar')
+        header = QHBoxLayout(self._toolbar)
+        header.setContentsMargins(0, 0, 0, 0)
         self._label = QLabel(tr('file.local'))
         header.addWidget(self._label)
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         header.addWidget(self.path_edit, 1)
-        self.refresh_btn = QPushButton(tr('file.refresh'))
-        header.addWidget(self.refresh_btn)
-        layout.addLayout(header)
 
         self.table = LocalFileTable()
+        self._nav_toolbar = _FileNavToolbar(self, local=True)
+        self._nav_toolbar.set_path_provider(self.table.current_path)
+        self._nav_toolbar.set_navigate_handler(self.table.set_path)
+        header.addWidget(self._nav_toolbar)
+        _apply_file_panel_toolbar_layout(
+            self._toolbar,
+            label=self._label,
+            path_edit=self.path_edit,
+            nav_toolbar=self._nav_toolbar,
+        )
+        layout.addWidget(self._toolbar)
+
         self._table_host = _wrap_file_table(self.table)
         layout.addWidget(self._table_host, 1)
 
         self.table.path_changed.connect(self.path_edit.setText)
         self.table.path_changed.connect(self.path_changed.emit)
+        self.table.path_changed.connect(lambda _path: self._nav_toolbar.retranslate_ui())
         self.path_edit.returnPressed.connect(self._path_entered)
-        self.refresh_btn.clicked.connect(self.table.refresh)
+        self._nav_toolbar.refresh_requested.connect(self.table.refresh)
         self._setup_table_header_menu(is_local=True)
         self.table.refresh()
         self.path_edit.setText(self.table.current_path())
@@ -575,12 +852,20 @@ class LocalFilePanel(QWidget):
     def refresh(self) -> None:
         self.table.refresh()
 
+    def apply_toolbar_layout(self) -> None:
+        _apply_file_panel_toolbar_layout(
+            self._toolbar,
+            label=self._label,
+            path_edit=self.path_edit,
+            nav_toolbar=self._nav_toolbar,
+        )
+
     def apply_column_widths(self, widths: tuple[int, ...]) -> None:
         _apply_column_widths(self.table, widths)
 
     def retranslate_ui(self) -> None:
         self._label.setText(tr('file.local'))
-        self.refresh_btn.setText(tr('file.refresh'))
+        self._nav_toolbar.retranslate_ui()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         self.table.setHorizontalHeaderLabels([
             tr('file.name'), tr('file.size'), tr('file.modified'),
@@ -606,17 +891,31 @@ class RemoteFilePanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        header = QHBoxLayout()
+        layout.setSpacing(_FILE_PANEL_TOOLBAR_TABLE_SPACING)
+        self._toolbar = QWidget()
+        self._toolbar.setObjectName('filePanelToolbar')
+        header = QHBoxLayout(self._toolbar)
+        header.setContentsMargins(0, 0, 0, 0)
         self._label = QLabel(tr('file.remote'))
         header.addWidget(self._label)
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         header.addWidget(self.path_edit, 1)
-        self.refresh_btn = QPushButton(tr('file.refresh'))
-        header.addWidget(self.refresh_btn)
-        layout.addLayout(header)
 
         self.table = RemoteFileTable()
+        self._nav_toolbar = _FileNavToolbar(self, local=False)
+        self._nav_toolbar.set_path_provider(self.table.current_path)
+        self._nav_toolbar.set_navigate_handler(self.table.set_path)
+        self._nav_toolbar.set_home_path_provider(self._remote_home_path)
+        header.addWidget(self._nav_toolbar)
+        _apply_file_panel_toolbar_layout(
+            self._toolbar,
+            label=self._label,
+            path_edit=self.path_edit,
+            nav_toolbar=self._nav_toolbar,
+        )
+        layout.addWidget(self._toolbar)
+
         self.placeholder = QLabel(tr('file.not_connected'))
         self.placeholder.setAlignment(Qt.AlignCenter)
         self._placeholder_host = QFrame()
@@ -632,9 +931,15 @@ class RemoteFilePanel(QWidget):
 
         self.table.path_changed.connect(self.path_edit.setText)
         self.table.path_changed.connect(self.path_changed.emit)
+        self.table.path_changed.connect(lambda _path: self._nav_toolbar.retranslate_ui())
         self.path_edit.returnPressed.connect(self._path_entered)
-        self.refresh_btn.clicked.connect(self._remote_refresh)
+        self._nav_toolbar.refresh_requested.connect(self._remote_refresh)
         self._setup_table_header_menu(is_local=False)
+
+    def _remote_home_path(self) -> str:
+        if self._sftp_handler is not None:
+            return self._sftp_handler.remote_home
+        return '/'
 
     def _setup_table_header_menu(self, *, is_local: bool) -> None:
         header = self.table.horizontalHeader()
@@ -672,6 +977,14 @@ class RemoteFilePanel(QWidget):
 
     def refresh(self) -> None:
         self.table.refresh()
+
+    def apply_toolbar_layout(self) -> None:
+        _apply_file_panel_toolbar_layout(
+            self._toolbar,
+            label=self._label,
+            path_edit=self.path_edit,
+            nav_toolbar=self._nav_toolbar,
+        )
 
     def apply_column_widths(self, widths: tuple[int, ...]) -> None:
         _apply_column_widths(self.table, widths)
@@ -713,7 +1026,7 @@ class RemoteFilePanel(QWidget):
 
     def retranslate_ui(self) -> None:
         self._label.setText(tr('file.remote'))
-        self.refresh_btn.setText(tr('file.refresh'))
+        self._nav_toolbar.retranslate_ui()
         self.placeholder.setText(tr('file.not_connected'))
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         self.table.setHorizontalHeaderLabels([
@@ -777,6 +1090,15 @@ class FilesPanel(QWidget):
         self.local_file_panel.retranslate_ui()
         self.remote_file_panel.retranslate_ui()
 
+    def apply_toolbar_layout(self) -> None:
+        self.local_file_panel.apply_toolbar_layout()
+        self.remote_file_panel.apply_toolbar_layout()
+
+    def apply_file_panel_layout(self) -> None:
+        self.apply_toolbar_layout()
+        self.local_file_panel.refresh()
+        self.remote_file_panel.refresh()
+
 
 class FilePanelsContainer(QWidget):
     """Manages one FilesPanel per terminal tab; switches visible panel on tab change."""
@@ -839,3 +1161,7 @@ class FilePanelsContainer(QWidget):
     def retranslate_ui(self) -> None:
         for panel in self._panels.values():
             panel.retranslate_ui()
+
+    def apply_file_panel_layout(self) -> None:
+        for panel in self._panels.values():
+            panel.apply_file_panel_layout()

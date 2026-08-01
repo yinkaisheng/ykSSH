@@ -74,14 +74,15 @@ class SessionTreePanel(QWidget):
         self.tree.deleteRequested.connect(lambda item: self._delete_item(item, confirm=True))
         self.tree.setAnimated(True)
         self.tree.setIndentation(16)
-        self.apply_appearance()
         layout.addWidget(self.tree, 1)
 
         self._filter_edit = QLineEdit()
+        self._filter_edit.setObjectName('SessionFilterEdit')
         self._filter_edit.setPlaceholderText(tr('sessions.filter_placeholder'))
         self._filter_edit.setClearButtonEnabled(False)
         self._filter_edit.textChanged.connect(self._on_filter_text_changed)
         layout.addWidget(self._filter_edit)
+        self.apply_appearance()
 
         self.tree.installEventFilter(self)
         self.tree.viewport().installEventFilter(self)
@@ -525,6 +526,10 @@ class SessionTreePanel(QWidget):
         tree_font = QFont()
         tree_font.setPixelSize(appearance.session_tree_font_size_px)
         self.tree.setFont(tree_font)
+        filter_font = QFont()
+        filter_font.setPixelSize(appearance.filter_edit_font_size)
+        self._filter_edit.setFont(filter_font)
+        self._filter_edit.setFixedHeight(appearance.filter_edit_height)
 
     def retranslate_ui(self) -> None:
         self._title_label.setText(tr('sessions.title'))
