@@ -20,6 +20,13 @@ from ui.appearance_defaults import (
     _APPEARANCE_INT_DEFAULTS,
     default_appearance,
 )
+from ui.file_panel_defaults import (
+    DEFAULT_LOCAL_COLUMN_WIDTHS,
+    DEFAULT_REMOTE_COLUMN_WIDTHS,
+    _FILE_PANEL_INT_BOUNDS,
+    _FILE_PANEL_INT_DEFAULTS,
+    default_file_panel,
+)
 from ui.theme_defaults import DEFAULT_THEMES, DEFAULT_THEME_NAMES, merge_theme_colors
 
 CONFIG_VERSION = 1
@@ -69,12 +76,21 @@ class WindowConfig:
 
 
 @dataclass(frozen=True)
+class FilePanelConfig:
+    local_column_widths: Tuple[int, ...]
+    remote_column_widths: Tuple[int, ...]
+    header_height_px: int
+    row_height_px: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     language: str
     themes: Dict[str, Dict[str, str]]
     appearance: AppearanceConfig
     terminal: Dict[str, Any]
     window: WindowConfig
+    file_panel: FilePanelConfig
 
 
 _config_cache: Optional[AppConfig] = None
@@ -219,6 +235,46 @@ def _normalize_language(value: Any) -> str:
     return code if code in available else DEFAULT_LOCALE
 
 
+def _normalize_column_widths(value: Any, default: Tuple[int, ...]) -> Tuple[int, ...]:
+    if not isinstance(value, list):
+        return default
+    widths: list[int] = []
+    for item in value:
+        try:
+            width = int(item)
+        except (TypeError, ValueError):
+            continue
+        widths.append(max(40, min(2000, width)))
+    if len(widths) != len(default):
+        return default
+    return tuple(widths)
+
+
+def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
+    raw = raw if isinstance(raw, dict) else {}
+    normalized: Dict[str, Any] = {
+        'local_column_widths': list(
+            _normalize_column_widths(raw.get('local_column_widths'), DEFAULT_LOCAL_COLUMN_WIDTHS)
+        ),
+        'remote_column_widths': list(
+            _normalize_column_widths(raw.get('remote_column_widths'), DEFAULT_REMOTE_COLUMN_WIDTHS)
+        ),
+    }
+    for key, default in _FILE_PANEL_INT_DEFAULTS.items():
+        minimum, maximum = _FILE_PANEL_INT_BOUNDS[key]
+        normalized[key] = _clamp_int(raw.get(key), default, minimum, maximum)
+    return normalized
+
+
+def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
+    return FilePanelConfig(
+        local_column_widths=tuple(file_panel['local_column_widths']),
+        remote_column_widths=tuple(file_panel['remote_column_widths']),
+        header_height_px=file_panel['header_height_px'],
+        row_height_px=file_panel['row_height_px'],
+    )
+
+
 def _normalize_window(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     normalized: Dict[str, Any] = {
@@ -268,6 +324,7 @@ def _normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized['language'] = _normalize_language(raw.get('language'))
     normalized['terminal'] = _normalize_terminal(raw.get('terminal'))
     normalized['window'] = _normalize_window(raw.get('window'))
+    normalized['file_panel'] = _normalize_file_panel(raw.get('file_panel'))
     return normalized
 
 
@@ -279,6 +336,7 @@ def _default_config() -> Dict[str, Any]:
         'language': DEFAULT_LOCALE,
         'terminal': dict(_TERMINAL_SETTING_DEFAULTS),
         'window': _normalize_window({}),
+        'file_panel': _normalize_file_panel({}),
     }
 
 
@@ -289,6 +347,7 @@ def _to_app_config(data: Dict[str, Any]) -> AppConfig:
         appearance=_appearance_to_config(data['appearance']),
         terminal=dict(data.get('terminal', _TERMINAL_SETTING_DEFAULTS)),
         window=_window_to_config(data.get('window', _normalize_window({}))),
+        file_panel=_file_panel_to_config(data.get('file_panel', _normalize_file_panel({}))),
     )
 
 
@@ -320,6 +379,8 @@ def _config_needs_save(raw: Dict[str, Any], normalized: Dict[str, Any]) -> bool:
     if raw.get('terminal') != normalized['terminal']:
         return True
     if raw.get('window') != normalized['window']:
+        return True
+    if raw.get('file_panel') != normalized['file_panel']:
         return True
     return False
 
@@ -429,6 +490,33 @@ def save_window_state(
     window['vertical_splitter'] = round(float(vertical_splitter), 3)
     data = dict(_raw_config_cache)
     data['window'] = _normalize_window(window)
+    _save_config(path, data)
+    _raw_config_cache = data
+    _config_cache = _to_app_config(data)
+    return _config_cache
+
+
+def save_file_panel_column_widths(
+    *,
+    local_column_widths: Optional[Tuple[int, ...]] = None,
+    remote_column_widths: Optional[Tuple[int, ...]] = None,
+    path: Path = CONFIG_FILE,
+) -> AppConfig:
+    global _config_cache, _raw_config_cache
+    if _raw_config_cache is None:
+        _raw_config_cache = _normalize_config(_default_config())
+    file_panel = dict(_raw_config_cache.get('file_panel', _normalize_file_panel({})))
+    if local_column_widths is not None:
+        file_panel['local_column_widths'] = list(
+            _normalize_column_widths(list(local_column_widths), DEFAULT_LOCAL_COLUMN_WIDTHS)
+        )
+    if remote_column_widths is not None:
+        file_panel['remote_column_widths'] = list(
+            _normalize_column_widths(list(remote_column_widths), DEFAULT_REMOTE_COLUMN_WIDTHS)
+        )
+    file_panel = _normalize_file_panel(file_panel)
+    data = dict(_raw_config_cache)
+    data['file_panel'] = file_panel
     _save_config(path, data)
     _raw_config_cache = data
     _config_cache = _to_app_config(data)

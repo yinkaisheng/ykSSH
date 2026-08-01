@@ -86,6 +86,7 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'file.not_connected': 'Connect a session to browse remote files.',
     'file.prompt_name': 'Name:',
     'file.confirm_delete': 'Are you sure you want to delete the selected items?',
+    'file.save_column_widths': 'Save Column Widths',
     'dialog.ok': 'OK',
     'dialog.cancel': 'Cancel',
     'dialog.apply': 'Apply',

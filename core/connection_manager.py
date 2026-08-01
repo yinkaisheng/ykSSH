@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from typing import Callable, Dict, List, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -90,6 +91,19 @@ class ConnectionManager(QObject):
             username = session_item.username
         return await resolve_remote_path(sftp, configured, username=username)
 
+    async def cd_shell(self, tab_id: str, remote_path: str) -> None:
+        """Send ``cd`` into the interactive shell for the given tab."""
+        path = (remote_path or '').strip()
+        if not path or tab_id not in self._sessions:
+            return
+        # Brief delay so login banner / first prompt can settle.
+        await asyncio.sleep(0.15)
+        ssh = self._sessions.get(tab_id)
+        if ssh is None:
+            return
+        # write() no-ops when the shell process is already gone
+        ssh.write(f'cd {shlex.quote(path)}\r'.encode('utf-8'))
+
     async def open_tab(
         self,
         tab_id: str,
@@ -113,14 +127,30 @@ class ConnectionManager(QObject):
         self._remote_cache[tab_id] = {}
 
         def _on_data(text: str) -> None:
-            terminal.write_text(text)
+            if tab_id not in self._terminals:
+                return
+            term = self._terminals.get(tab_id)
+            if term is None:
+                return
+            try:
+                term.write_text(text)
+            except RuntimeError:
+                return
 
         def _on_disconnected() -> None:
             if on_disconnected is not None:
                 on_disconnected()
 
         def _on_error(message: str) -> None:
-            terminal.write_text(f'\r\n{message}\r\n')
+            if tab_id not in self._terminals:
+                return
+            term = self._terminals.get(tab_id)
+            if term is None:
+                return
+            try:
+                term.write_text(f'\r\n{message}\r\n')
+            except RuntimeError:
+                return
             if on_error is not None:
                 on_error(message)
 
@@ -151,11 +181,25 @@ class ConnectionManager(QObject):
 
     async def close_tab(self, tab_id: str) -> None:
         ssh = self._sessions.pop(tab_id, None)
-        self._terminals.pop(tab_id, None)
+        terminal = self._terminals.pop(tab_id, None)
         self._tab_titles.pop(tab_id, None)
         self._remote_cache.pop(tab_id, None)
         if ssh is not None:
+            self._disconnect_ssh_signals(ssh, terminal)
             await ssh.disconnect()
+
+    @staticmethod
+    def _disconnect_ssh_signals(ssh: SSHSession, terminal) -> None:
+        for signal in (ssh.data_received, ssh.disconnected, ssh.error):
+            try:
+                signal.disconnect()
+            except TypeError:
+                pass
+        if terminal is not None:
+            try:
+                terminal.input_received.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
     async def close_all(self) -> None:
         for tab_id in list(self._sessions.keys()):

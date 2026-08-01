@@ -43,8 +43,11 @@ MyPyShell/
     ├── terminal_vt_widget.py   # pyte + QPainter 终端控件（~2000 行，慎改）
     ├── file_table_panel.py # 本地/远程双文件 Table
     ├── theme.py            # QSS 主题（来自 http-requester）
-    ├── dialogs.py          # 设置/关于对话框
-    └── widgets.py          # ArrowComboBox 等通用控件
+    ├── dialog_common.py    # 对话框共享布局辅助
+    ├── prompt_dialog.py    # 文本输入提示框
+    ├── settings_dialog.py  # 设置对话框
+    ├── about_dialog.py     # 关于对话框
+    └── widgets.py          # ArrowComboBox / GlyphSpinBox 等通用控件
 ```
 
 ## 界面布局

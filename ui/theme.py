@@ -299,6 +299,11 @@ QMenuBar#WindowMenuBar {{
     padding: 0px;
 }}
 
+QMenuBar#WindowMenuBar::item {{
+    background: transparent;
+    padding: 0px 10px;
+}}
+
 QWidget#WindowTitleControls {{
     background: transparent;
 }}
@@ -387,6 +392,38 @@ QSplitter#contentSplitter::handle:horizontal {{
 
 QSplitter#contentSplitter::handle:horizontal:hover {{
     background-color: {p.background_primary};
+}}
+
+QSplitter#filePanelSplitter {{
+    background-color: {p.background_primary};
+}}
+
+QSplitter#filePanelSplitter::handle:horizontal {{
+    background-color: {p.background_primary};
+    width: 4px;
+    margin: 0;
+    border: none;
+}}
+
+QSplitter#filePanelSplitter::handle:horizontal:hover {{
+    background-color: {p.background_primary};
+}}
+
+QFrame#fileTableHost {{
+    border: 1px solid {p.border};
+    border-radius: 4px;
+    background-color: {p.background_primary};
+}}
+
+QFrame#fileTableHost QTableWidget#fileTableInner {{
+    border: none;
+    border-radius: 0px;
+    background-color: transparent;
+}}
+
+QTableWidget#fileTableInner QHeaderView#fileTableHeader,
+QTableWidget#fileTableInner QHeaderView#fileTableHeader::section {{
+    font-weight: normal;
 }}
 
 QTabWidget::pane {{

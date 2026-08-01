@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import os
 from typing import Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -14,7 +15,6 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -22,7 +22,14 @@ from PyQt5.QtWidgets import (
 from i18n import tr
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
 from ui.dialog_i18n import translate_button_box
-from ui.widgets import ArrowComboBox
+from ui.widgets import ArrowComboBox, GlyphSpinBox
+
+
+def _normalize_local_path(path: str) -> str:
+    text = (path or '').strip()
+    if not text:
+        return ''
+    return os.path.normpath(text)
 
 
 class SessionDialog(QDialog):
@@ -43,11 +50,16 @@ class SessionDialog(QDialog):
         self.setWindowTitle(title or (
             tr('sessions.dialog_title_edit') if session else tr('sessions.dialog_title_new')
         ))
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(700)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self._build_ui()
         if session is not None:
             self._load_session(session)
+        QTimer.singleShot(0, self._focus_name_edit)
+
+    def _focus_name_edit(self) -> None:
+        self.name_edit.setFocus(Qt.OtherFocusReason)
+        self.name_edit.selectAll()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -57,7 +69,7 @@ class SessionDialog(QDialog):
 
         self.name_edit = QLineEdit()
         self.host_edit = QLineEdit()
-        self.port_spin = QSpinBox()
+        self.port_spin = GlyphSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(22)
         self.username_edit = QLineEdit()
@@ -140,7 +152,7 @@ class SessionDialog(QDialog):
             start,
         )
         if path:
-            self.local_path_edit.setText(path)
+            self.local_path_edit.setText(_normalize_local_path(path))
 
     def _load_session(self, session: SessionItem) -> None:
         self.name_edit.setText(session.name)
@@ -151,7 +163,7 @@ class SessionDialog(QDialog):
         if idx >= 0:
             self.auth_combo.setCurrentIndex(idx)
         self.key_path_edit.setText(session.key_path)
-        self.local_path_edit.setText(session.local_path)
+        self.local_path_edit.setText(_normalize_local_path(session.local_path))
         self.remote_path_edit.setText(session.remote_path)
         if self._initial_password:
             self.password_edit.setText(self._initial_password)
@@ -174,7 +186,7 @@ class SessionDialog(QDialog):
             username=self.username_edit.text().strip(),
             auth_type=self.auth_combo.currentData(),
             key_path=self.key_path_edit.text().strip(),
-            local_path=self.local_path_edit.text().strip(),
+            local_path=_normalize_local_path(self.local_path_edit.text()),
             remote_path=self.remote_path_edit.text().strip(),
         )
 

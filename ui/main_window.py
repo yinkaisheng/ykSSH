@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QMainWindow,
     QSplitter,
+    QSplitterHandle,
     QVBoxLayout,
     QWidget,
 )
@@ -25,7 +26,8 @@ from models.session_item import SessionItem
 from storage.app_config import get_app_config, save_app_preferences, save_window_state
 from storage.keyring_store import KeyringStore
 from storage.session_profile_store import SessionProfileStore
-from ui.dialogs import AppSettings, prompt_app_settings, show_about_dialog
+from ui.about_dialog import show_about_dialog
+from ui.settings_dialog import AppSettings, prompt_app_settings
 from ui.file_table_panel import FilePanelWidget
 from ui.session_tree_panel import SessionTreePanel
 from ui.terminal_tab_widget import TerminalTabWidget
@@ -104,6 +106,7 @@ class MainWindow(QMainWindow):
 
         # 上区：Session 树与终端同高
         self._main_splitter = QSplitter(Qt.Horizontal)
+        self._main_splitter.setObjectName('mainSplitter')
         self._main_splitter.addWidget(self.session_panel)
         self._main_splitter.addWidget(self.terminal_tabs)
         self._main_splitter.setStretchFactor(0, 1)
@@ -155,6 +158,10 @@ class MainWindow(QMainWindow):
         self.connection_manager.remote_list_updated.connect(self._on_remote_list_updated)
         self.file_panel.local_table.path_changed.connect(self._on_local_path_changed)
         self.file_panel.remote_table.path_changed.connect(self._on_remote_path_changed)
+        if self._main_splitter is not None:
+            self._main_splitter.splitterMoved.connect(self._schedule_session_save)
+        if self._vertical_splitter is not None:
+            self._vertical_splitter.splitterMoved.connect(self._schedule_session_save)
 
     def _schedule_session_save(self, *_args) -> None:
         self._session_save_timer.start()
@@ -269,10 +276,25 @@ class MainWindow(QMainWindow):
         self.file_panel.local_table.refresh()
         self.file_panel.refresh_remote_table()
 
-    def _attach_file_panel(self, tab_id: str) -> None:
-        handler = self._ensure_sftp_handler(tab_id)
+    def _save_active_tab_paths(self) -> None:
+        tab_id = self._active_tab_id
+        if not tab_id:
+            return
+        handler = self._sftp_handlers.get(tab_id)
+        if handler is None:
+            return
         handler.set_local_dir(self.file_panel.local_table.current_path())
         handler.set_remote_dir(self.file_panel.remote_table.current_path())
+        self.file_panel.capture_sort_state_to_handler(handler)
+
+    def _attach_file_panel(self, tab_id: str) -> None:
+        handler = self._ensure_sftp_handler(tab_id)
+        if handler.reset_file_sort:
+            handler.reset_sort_state_to_default()
+            handler.reset_file_sort = False
+        self.file_panel.apply_sort_state_from_handler(handler)
+        self.file_panel.local_table.set_path(handler.local_dir)
+        self.file_panel.remote_table.set_path(handler.remote_dir)
         self.file_panel.set_sftp_handler(handler)
         callback = self.connection_manager.get_remote_list_callback(tab_id)
         if callback is not None:
@@ -295,10 +317,14 @@ class MainWindow(QMainWindow):
         terminal.write_text(tr('terminal.connecting') + '\r\n')
 
         def _on_connected() -> None:
+            if not self._terminal_is_alive(terminal):
+                return
             terminal.write_text(tr('terminal.connected') + '\r\n')
             asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item))
 
         def _on_disconnected() -> None:
+            if not self._terminal_is_alive(terminal):
+                return
             terminal.write_text('\r\n' + tr('terminal.disconnected') + '\r\n')
             if self._active_tab_id == tab_id:
                 self.file_panel.clear_remote()
@@ -312,20 +338,34 @@ class MainWindow(QMainWindow):
                 on_disconnected=_on_disconnected,
             )
         except Exception as exc:
-            terminal.write_text(tr('terminal.connection_error', error=str(exc)) + '\r\n')
+            if self._terminal_is_alive(terminal):
+                terminal.write_text(tr('terminal.connection_error', error=str(exc)) + '\r\n')
+
+    @staticmethod
+    def _terminal_is_alive(terminal: TerminalVTWidget) -> bool:
+        try:
+            from PyQt5 import sip
+            return not sip.isdeleted(terminal)
+        except Exception:
+            return True
 
     async def _init_file_panel_for_session(self, tab_id: str, session_item: SessionItem) -> None:
+        handler = self._ensure_sftp_handler(tab_id)
         local_path = resolve_local_path(session_item.local_path)
-        self.file_panel.local_table.set_path(local_path)
         remote_path = await self.connection_manager.resolve_remote_path(
             tab_id,
             session_item.remote_path,
         )
-        self.file_panel.remote_table.set_path(remote_path)
+        if (session_item.remote_path or '').strip():
+            await self.connection_manager.cd_shell(tab_id, remote_path)
+        if handler.try_init_session_paths(local_path, remote_path):
+            await self.connection_manager.refresh_remote_list(tab_id, remote_path)
+        else:
+            await self.connection_manager.refresh_remote_list(tab_id, handler.remote_dir)
+        if self._active_tab_id != tab_id:
+            return
         self._attach_file_panel(tab_id)
-        await self.connection_manager.refresh_remote_list(tab_id, remote_path)
-        if self._active_tab_id == tab_id:
-            self.file_panel.refresh_remote_table()
+        self.file_panel.refresh_remote_table()
 
     def _on_tab_closed(self, tab_id: str) -> None:
         asyncio.create_task(self.connection_manager.close_tab(tab_id))
@@ -336,9 +376,11 @@ class MainWindow(QMainWindow):
 
     def _on_current_tab_changed(self, index: int) -> None:
         if index < 0:
+            self._save_active_tab_paths()
             self.file_panel.clear_remote()
             self._active_tab_id = None
             return
+        self._save_active_tab_paths()
         tab_id = self.terminal_tabs._tab_ids.get(index)
         self._active_tab_id = tab_id
         if tab_id is None:
@@ -429,6 +471,18 @@ class MainWindow(QMainWindow):
         return edges
 
     @staticmethod
+    def _splitter_handle_at(widget: Optional[QWidget]) -> Optional[QSplitterHandle]:
+        while widget is not None:
+            if isinstance(widget, QSplitterHandle):
+                return widget
+            widget = widget.parentWidget()
+        return None
+
+    @staticmethod
+    def _cursor_for_splitter_handle(handle: QSplitterHandle) -> Qt.CursorShape:
+        return Qt.SizeHorCursor if handle.orientation() == Qt.Horizontal else Qt.SizeVerCursor
+
+    @staticmethod
     def _cursor_for_edges(edges: Qt.Edges) -> Qt.CursorShape:
         if not edges:
             return Qt.ArrowCursor
@@ -456,6 +510,11 @@ class MainWindow(QMainWindow):
         edges = self._resize_edge_at(local_pos)
 
         if event.type() == QEvent.MouseMove and event.buttons() == Qt.NoButton and not self.isMaximized():
+            hover = QApplication.widgetAt(event.globalPos())
+            handle = self._splitter_handle_at(hover)
+            if handle is not None:
+                handle.setCursor(self._cursor_for_splitter_handle(handle))
+                return False
             watched.setCursor(self._cursor_for_edges(edges))
             return False
 

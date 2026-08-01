@@ -6,7 +6,7 @@ import asyncio
 import os
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import QObject
+from PyQt5.QtCore import QObject, Qt
 
 from core.sftp_service import delete_path, download, mkdir, rename, upload
 from core.connection_manager import ConnectionManager
@@ -28,15 +28,53 @@ class SftpUiHandler(QObject):
         self._on_refresh_ui = on_refresh_ui
         self._local_dir = os.path.expanduser('~')
         self._remote_dir = '/'
+        self._paths_initialized = False
+        self.reset_file_sort = True
+        self.local_sort_column = 0
+        self.local_sort_order = Qt.AscendingOrder
+        self.remote_sort_column = 0
+        self.remote_sort_order = Qt.AscendingOrder
+
+    def reset_sort_state_to_default(self) -> None:
+        self.local_sort_column = 0
+        self.local_sort_order = Qt.AscendingOrder
+        self.remote_sort_column = 0
+        self.remote_sort_order = Qt.AscendingOrder
+
+    def set_local_sort(self, column: int, order: Qt.SortOrder) -> None:
+        self.local_sort_column = max(0, int(column))
+        self.local_sort_order = order
+
+    def set_remote_sort(self, column: int, order: Qt.SortOrder) -> None:
+        self.remote_sort_column = max(0, int(column))
+        self.remote_sort_order = order
+
+    @property
+    def local_dir(self) -> str:
+        return self._local_dir
+
+    @property
+    def remote_dir(self) -> str:
+        return self._remote_dir
+
+    def try_init_session_paths(self, local_path: str, remote_path: str) -> bool:
+        if self._paths_initialized:
+            return False
+        self._local_dir = local_path
+        self._remote_dir = remote_path or '/'
+        self._paths_initialized = True
+        return True
 
     def set_local_dir(self, path: str) -> None:
         self._local_dir = path
+        self._paths_initialized = True
 
     def set_remote_dir(self, path: str) -> None:
         self._remote_dir = path or '/'
+        self._paths_initialized = True
 
     def refresh_remote(self, path: str) -> None:
-        self._remote_dir = path or '/'
+        self.set_remote_dir(path)
         asyncio.create_task(self._cm.refresh_remote_list(self.tab_id, self._remote_dir))
 
     def upload_local_paths(self, local_paths: List[str]) -> None:

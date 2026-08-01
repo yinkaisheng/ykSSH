@@ -22,6 +22,11 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QWidget, QMessageBox, QSizePolicy, QMenu
 
+try:
+    from PyQt5 import sip
+except ImportError:  # pragma: no cover
+    sip = None
+
 from i18n import tr as t
 from storage.app_config import get_app_config, get_setting
 from storage.paths import DATA_DIR
@@ -286,7 +291,17 @@ class TerminalVTWidget(QWidget):
         self._cell_h = max(1.0, fm.lineSpacing())
         self._ascent = fm.ascent()
 
+    def _is_alive(self) -> bool:
+        if sip is None:
+            return True
+        try:
+            return not sip.isdeleted(self)
+        except Exception:
+            return False
+
     def _calc_cols_rows(self) -> tuple[int, int]:
+        if not self._is_alive():
+            return 80, 24
         vp = self.size()
         # 给予至少 4 像素的右侧安全边距，并使用浮点数除法
         cols = max(20, int(max(0.0, vp.width() - 4.0) // self._cell_w))
@@ -616,6 +631,8 @@ class TerminalVTWidget(QWidget):
     # Public API (compatible with legacy TerminalWidget)
     # -------------------------
     def write_text(self, text: str) -> None:
+        if not self._is_alive():
+            return
         self._process_input(text, record=True)
 
     def _process_input(self, text: str, record: bool) -> None:
@@ -1324,6 +1341,8 @@ class TerminalVTWidget(QWidget):
             self._mark_full_repaint()
 
     def _mark_dirty(self) -> None:
+        if not self._is_alive():
+            return
         self._collect_pyte_dirty_lines()
         cursor = getattr(self.screen, "cursor", None)
         cx = int(getattr(cursor, "x", -1)) if cursor else -1

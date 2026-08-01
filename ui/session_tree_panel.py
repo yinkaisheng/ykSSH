@@ -6,14 +6,13 @@ from __future__ import annotations
 import json
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtGui import QFont, QKeyEvent
 from PyQt5.QtWidgets import (
     QApplication,
-    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMenu,
-    QPushButton,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -25,7 +24,7 @@ from storage.app_config import get_app_config
 from storage.keyring_store import KeyringStore
 from storage.session_profile_store import SessionProfileStore
 from ui.dialog_i18n import ask_yes_no
-from ui.dialogs import prompt_text
+from ui.prompt_dialog import prompt_text
 from ui.favorite_tree_widget import (
     FavoriteTreeWidget,
     ITEM_TYPE_FOLDER,
@@ -60,23 +59,9 @@ class SessionTreePanel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        filter_layout = QHBoxLayout()
-        filter_layout.setContentsMargins(0, 0, 0, 0)
-        filter_layout.setSpacing(4)
-        self._filter_edit = QLineEdit()
-        self._filter_edit.setPlaceholderText(tr('sessions.filter_placeholder'))
-        self._filter_edit.setClearButtonEnabled(False)
-        self._filter_edit.textChanged.connect(self._on_filter_text_changed)
-        filter_layout.addWidget(self._filter_edit, 0, Qt.AlignVCenter)
-
-        self._clear_btn = QPushButton('×')
-        self._clear_btn.setObjectName('favoriteClearButton')
-        self._clear_btn.setMaximumWidth(36)
-        self._clear_btn.setToolTip(tr('sessions.clear_filter'))
-        self._clear_btn.clicked.connect(self._clear_filter)
-        filter_layout.addWidget(self._clear_btn, 0, Qt.AlignVCenter)
-        filter_layout.addStretch()
-        layout.addLayout(filter_layout)
+        self._title_label = QLabel(tr('sessions.title'))
+        self._title_label.setObjectName('panelTitle')
+        layout.addWidget(self._title_label)
 
         self.tree = FavoriteTreeWidget()
         self.tree.setHeaderHidden(True)
@@ -93,6 +78,45 @@ class SessionTreePanel(QWidget):
         tree_font.setPixelSize(appearance.ui_font_size_px)
         self.tree.setFont(tree_font)
         layout.addWidget(self.tree, 1)
+
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText(tr('sessions.filter_placeholder'))
+        self._filter_edit.setClearButtonEnabled(False)
+        self._filter_edit.textChanged.connect(self._on_filter_text_changed)
+        layout.addWidget(self._filter_edit)
+
+        self.tree.installEventFilter(self)
+        self.tree.viewport().installEventFilter(self)
+        self._filter_edit.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.KeyPress and isinstance(event, QKeyEvent):
+            if (
+                obj in (self.tree, self._filter_edit)
+                and event.key() == Qt.Key_Escape
+                and self._filter_edit.text().strip()
+            ):
+                self._clear_filter()
+                return True
+
+            if obj in (self.tree, self.tree.viewport()) and self._begin_filter_from_tree(event):
+                return True
+
+        return super().eventFilter(obj, event)
+
+    def _begin_filter_from_tree(self, event: QKeyEvent) -> bool:
+        """Move focus to filter and seed it with the typed printable character."""
+        if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
+            return False
+
+        text = event.text()
+        if not text or not text.isprintable() or text.isspace():
+            return False
+
+        self._filter_edit.setText(text)
+        self._filter_edit.setFocus(Qt.OtherFocusReason)
+        self._filter_edit.setCursorPosition(len(text))
+        return True
 
     def reload(self) -> None:
         self._items = self.store.load()
@@ -499,5 +523,5 @@ class SessionTreePanel(QWidget):
         self._filter_edit.clear()
 
     def retranslate_ui(self) -> None:
+        self._title_label.setText(tr('sessions.title'))
         self._filter_edit.setPlaceholderText(tr('sessions.filter_placeholder'))
-        self._clear_btn.setToolTip(tr('sessions.clear_filter'))

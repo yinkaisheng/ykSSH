@@ -22,6 +22,7 @@ class TerminalTabWidget(QTabWidget):
         self.setTabsClosable(True)
         self.setDocumentMode(True)
         self.tabCloseRequested.connect(self._on_tab_close_requested)
+        self.tabBarDoubleClicked.connect(self._on_tab_bar_double_clicked)
         self._tab_ids: Dict[int, str] = {}
         self._terminals: Dict[str, TerminalVTWidget] = {}
 
@@ -54,6 +55,14 @@ class TerminalTabWidget(QTabWidget):
                 return
 
     def _on_tab_close_requested(self, index: int) -> None:
+        tab_id = self._tab_ids.get(index)
+        if tab_id is not None:
+            self.tab_closed.emit(tab_id)
+        self._remove_tab(index)
+
+    def _on_tab_bar_double_clicked(self, index: int) -> None:
+        if index < 0:
+            return
         tab_id = self._tab_ids.get(index)
         if tab_id is not None:
             self.tab_closed.emit(tab_id)

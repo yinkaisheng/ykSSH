@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QMenuBar, QToolButton, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QMenuBar, QSizePolicy, QToolButton, QWidget
 
 from i18n import tr
 
@@ -25,13 +25,15 @@ class WindowTitleBar(QWidget):
         self.setFixedHeight(self._height)
 
         layout = QHBoxLayout(self)
+        self._root_layout = layout
         layout.setContentsMargins(4, 0, 0, 0)
         layout.setSpacing(0)
 
         self.menu_bar = QMenuBar(self)
         self.menu_bar.setObjectName('WindowMenuBar')
         self.menu_bar.setNativeMenuBar(False)
-        layout.addWidget(self.menu_bar, 0)
+        self.menu_bar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        layout.addWidget(self.menu_bar, 0, Qt.AlignVCenter)
 
         self._title_label = QLabel(tr('main.window_title'), self)
         self._title_label.setObjectName('WindowTitleLabel')
@@ -70,11 +72,28 @@ class WindowTitleBar(QWidget):
         top_inset = self._border_width
         bottom_inset = self.BOTTOM_BORDER_PX
         right_inset = self._border_width
-        btn_size = max(16, self._height - top_inset - bottom_inset)
-        self._controls_layout.setContentsMargins(0, top_inset, right_inset, bottom_inset)
-        self._controls_box.setFixedHeight(self._height)
+        content_height = max(16, self._height - top_inset - bottom_inset)
+        btn_size = content_height
+        menu_height = content_height
+        self._root_layout.setContentsMargins(4, top_inset, 0, bottom_inset)
+        self.menu_bar.setFixedHeight(menu_height)
+        item_pad_v = max(0, (menu_height - self.menu_bar.fontMetrics().height()) // 2)
+        self.menu_bar.setStyleSheet(
+            'QMenuBar#WindowMenuBar::item {'
+            f'padding-top: {item_pad_v}px;'
+            f'padding-bottom: {item_pad_v}px;'
+            'padding-left: 10px;'
+            'padding-right: 10px;'
+            'background: transparent;'
+            '}'
+        )
+        self._controls_layout.setContentsMargins(0, 0, right_inset, 0)
+        self._controls_layout.setAlignment(Qt.AlignVCenter)
+        self._controls_box.setFixedHeight(content_height)
         for btn in self._window_buttons:
             btn.setFixedSize(btn_size, btn_size)
+        self._root_layout.setAlignment(self.menu_bar, Qt.AlignVCenter)
+        self._root_layout.setAlignment(self._controls_box, Qt.AlignVCenter)
 
     def apply_height(self, height: int) -> None:
         self.apply_layout(height, border_width=self._border_width)
