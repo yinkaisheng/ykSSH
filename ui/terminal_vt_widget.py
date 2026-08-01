@@ -31,9 +31,9 @@ from i18n import tr as t
 from storage.app_config import get_app_config, get_setting
 from storage.paths import DATA_DIR
 from ui.theme import (
-    body_text_font_family_css,
-    normalize_body_text_font_family,
-    normalize_body_text_font_size,
+    terminal_font_family_css,
+    normalize_terminal_font_family,
+    normalize_terminal_font_size,
 )
 
 
@@ -228,11 +228,11 @@ class TerminalVTWidget(QWidget):
         size_px: Optional[int] = None,
     ) -> QFont:
         appearance = get_app_config().appearance
-        family = normalize_body_text_font_family(family or appearance.body_text_font_family)
-        size_px = normalize_body_text_font_size(
-            size_px if size_px is not None else appearance.body_text_font_size_px
+        family = normalize_terminal_font_family(family or appearance.terminal_font_family)
+        size_px = normalize_terminal_font_size(
+            size_px if size_px is not None else appearance.terminal_font_size_px
         )
-        candidates = [family, *appearance.body_text_font_families, 'Consolas', 'Courier New']
+        candidates = [family, *appearance.terminal_font_families, 'Consolas', 'Courier New']
         seen: set[str] = set()
         for name in candidates:
             if not name or name in seen:
@@ -256,7 +256,7 @@ class TerminalVTWidget(QWidget):
         size_px = source.pixelSize()
         if size_px <= 0:
             size_px = max(8, int(source.pointSizeF()))
-        family_css = body_text_font_family_css(source.family())
+        family_css = terminal_font_family_css(source.family())
         self.setStyleSheet(
             f'font-family: {family_css}; font-size: {size_px}px;'
         )

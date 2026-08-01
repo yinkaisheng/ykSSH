@@ -113,34 +113,34 @@ def _appearance():
     return get_app_config().appearance
 
 
-def body_text_font_size_min() -> int:
-    return _appearance().body_text_font_size_min
+def terminal_font_size_min() -> int:
+    return _appearance().terminal_font_size_min
 
 
-def body_text_font_size_max() -> int:
-    return _appearance().body_text_font_size_max
+def terminal_font_size_max() -> int:
+    return _appearance().terminal_font_size_max
 
 
-def default_body_text_font_family() -> str:
-    return _appearance().body_text_font_family
+def default_terminal_font_family() -> str:
+    return _appearance().terminal_font_family
 
 
-def normalize_body_text_font_family(value) -> str:
+def normalize_terminal_font_family(value) -> str:
     appearance = _appearance()
     if isinstance(value, str):
         name = value.strip().replace('"', '')
         if name:
             return name
-    return appearance.body_text_font_family
+    return appearance.terminal_font_family
 
 
-def body_text_font_family_css(family: str | None = None) -> str:
+def terminal_font_family_css(family: str | None = None) -> str:
     appearance = _appearance()
-    name = normalize_body_text_font_family(family)
+    name = normalize_terminal_font_family(family)
     primary = f'"{name}"' if ' ' in name else name
     fallbacks = ', '.join(
         f'"{fallback}"' if ' ' in fallback else fallback
-        for fallback in appearance.body_text_font_fallbacks
+        for fallback in appearance.terminal_font_fallbacks
         if fallback != name
     )
     return f'{primary}, {fallbacks}, monospace'
@@ -171,20 +171,20 @@ def apply_app_font(app: QApplication) -> None:
     app.setFont(default_ui_font())
 
 
-def normalize_body_text_font_size(value) -> int:
+def normalize_terminal_font_size(value) -> int:
     appearance = _appearance()
-    minimum = appearance.body_text_font_size_min
-    maximum = appearance.body_text_font_size_max
+    minimum = appearance.terminal_font_size_min
+    maximum = appearance.terminal_font_size_max
     if isinstance(value, int) and minimum <= value <= maximum:
         return value
-    return appearance.body_text_font_size_px
+    return appearance.terminal_font_size_px
 
 
 def apply_app_theme(
     app: QApplication,
     theme: str | None = THEME_SOLARIZED,
-    body_text_font_size: int | None = None,
-    body_text_font_family: str | None = None,
+    terminal_font_size: int | None = None,
+    terminal_font_family: str | None = None,
 ) -> None:
     global _active_palette
     theme_name = normalize_theme_name(theme)
@@ -194,8 +194,8 @@ def apply_app_theme(
         _build_stylesheet(
             app.font(),
             palette,
-            body_text_font_size,
-            body_text_font_family,
+            terminal_font_size,
+            terminal_font_family,
         )
     )
 
@@ -260,16 +260,19 @@ def popup_list_font(font: QFont | None = None) -> QFont:
 def _build_stylesheet(
     font: QFont,
     palette: ThemePalette,
-    body_text_font_size: int | None = None,
-    body_text_font_family: str | None = None,
+    terminal_font_size: int | None = None,
+    terminal_font_family: str | None = None,
 ) -> str:
     appearance = _appearance()
     ui_size_px = appearance.ui_font_size_px
-    if body_text_font_size is None:
-        resolved_body_text_font_size = appearance.body_text_font_size_px
+    tab_bar_height = get_app_config().window.tab_bar_height
+    tab_padding_y = max(2, (tab_bar_height - ui_size_px - 2) // 2)
+    session_tree_row_height = appearance.session_tree_row_height_px
+    if terminal_font_size is None:
+        resolved_terminal_font_size = appearance.terminal_font_size_px
     else:
-        resolved_body_text_font_size = normalize_body_text_font_size(body_text_font_size)
-    body_text_font_family = body_text_font_family_css(body_text_font_family)
+        resolved_terminal_font_size = normalize_terminal_font_size(terminal_font_size)
+    terminal_font_family_css_value = terminal_font_family_css(terminal_font_family)
     ui_font_family = font.family().replace('"', '\\"')
     p = palette
     return f'''
@@ -440,9 +443,11 @@ QTabBar::tab {{
     border-bottom: none;
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
-    padding: 6px 14px;
+    padding: {tab_padding_y}px 14px;
     margin-right: 2px;
     min-width: 80px;
+    min-height: {tab_bar_height - 4}px;
+    max-height: {tab_bar_height}px;
 }}
 
 QTabBar::tab:selected {{
@@ -521,25 +526,6 @@ QTableWidget QLineEdit#formCellLineEdit {{
     margin: 0px;
     min-height: 0px;
     border: none;
-}}
-
-QPushButton#tabCloseButton {{
-    background-color: transparent;
-    border: none;
-    color: {p.text_secondary};
-    padding: -2 0 2 0;
-    min-width: 18px;
-    max-width: 18px;
-    min-height: 18px;
-    max-height: 18px;
-    border-radius: 3px;
-    font-size: {appearance.tab_close_font_size_px}px;
-    font-weight: bold;
-}}
-
-QPushButton#tabCloseButton:hover {{
-    background-color: {p.status_error};
-    color: {p.highlight_text};
 }}
 
 QPushButton {{
@@ -649,13 +635,13 @@ QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {{
 }}
 
 QPlainTextEdit#bodyTextEdit {{
-    font-family: {body_text_font_family};
-    font-size: {resolved_body_text_font_size}px;
+    font-family: {terminal_font_family_css_value};
+    font-size: {resolved_terminal_font_size}px;
 }}
 
 TerminalVTWidget#terminalVTWidget {{
-    font-family: {body_text_font_family};
-    font-size: {resolved_body_text_font_size}px;
+    font-family: {terminal_font_family_css_value};
+    font-size: {resolved_terminal_font_size}px;
 }}
 
 QComboBox::drop-down {{
@@ -745,6 +731,11 @@ QTreeWidget {{
 
 QTreeWidget::item {{
     padding: 2px 4px;
+}}
+
+QTreeWidget#SessionTree::item {{
+    height: {session_tree_row_height}px;
+    padding: 0px 4px;
 }}
 
 QTableWidget::item {{

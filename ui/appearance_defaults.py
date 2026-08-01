@@ -12,23 +12,24 @@ DEFAULT_THEME = 'solarized'
 DEFAULT_UI_FONT_SIZE_PX = 14
 DEFAULT_TABLE_FONT_SIZE_PX = 14
 DEFAULT_STATUS_FONT_SIZE_PX = 12
-DEFAULT_TAB_CLOSE_FONT_SIZE_PX = 14
+DEFAULT_SESSION_TREE_FONT_SIZE_PX = 14
+DEFAULT_SESSION_TREE_ROW_HEIGHT_PX = 24
 DEFAULT_UI_FONT_FAMILIES_WIN: Tuple[str, ...] = (
     'Microsoft YaHei UI',
     'Segoe UI',
     'MS Shell Dlg 2',
 )
 
-DEFAULT_BODY_TEXT_FONT_FAMILY = 'Consolas'
-DEFAULT_BODY_TEXT_FONT_SIZE_PX = 18
-DEFAULT_BODY_TEXT_FONT_SIZE_MIN = 14
-DEFAULT_BODY_TEXT_FONT_SIZE_MAX = 48
-DEFAULT_BODY_TEXT_FONT_FAMILIES: Tuple[str, ...] = (
+DEFAULT_TERMINAL_FONT_FAMILY = 'Consolas'
+DEFAULT_TERMINAL_FONT_SIZE_PX = 18
+DEFAULT_TERMINAL_FONT_SIZE_MIN = 14
+DEFAULT_TERMINAL_FONT_SIZE_MAX = 48
+DEFAULT_TERMINAL_FONT_FAMILIES: Tuple[str, ...] = (
     'Consolas',
     'Cascadia Mono',
     'Courier New',
 )
-DEFAULT_BODY_TEXT_FONT_FALLBACKS: Tuple[str, ...] = (
+DEFAULT_TERMINAL_FONT_FALLBACKS: Tuple[str, ...] = (
     'Cascadia Mono',
     'Menlo',
     'Monaco',
@@ -40,20 +41,22 @@ _APPEARANCE_INT_DEFAULTS: Dict[str, int] = {
     'ui_font_size_px': DEFAULT_UI_FONT_SIZE_PX,
     'table_font_size_px': DEFAULT_TABLE_FONT_SIZE_PX,
     'status_font_size_px': DEFAULT_STATUS_FONT_SIZE_PX,
-    'tab_close_font_size_px': DEFAULT_TAB_CLOSE_FONT_SIZE_PX,
-    'body_text_font_size_px': DEFAULT_BODY_TEXT_FONT_SIZE_PX,
-    'body_text_font_size_min': DEFAULT_BODY_TEXT_FONT_SIZE_MIN,
-    'body_text_font_size_max': DEFAULT_BODY_TEXT_FONT_SIZE_MAX,
+    'session_tree_font_size_px': DEFAULT_SESSION_TREE_FONT_SIZE_PX,
+    'session_tree_row_height_px': DEFAULT_SESSION_TREE_ROW_HEIGHT_PX,
+    'terminal_font_size_px': DEFAULT_TERMINAL_FONT_SIZE_PX,
+    'terminal_font_size_min': DEFAULT_TERMINAL_FONT_SIZE_MIN,
+    'terminal_font_size_max': DEFAULT_TERMINAL_FONT_SIZE_MAX,
 }
 
 _APPEARANCE_INT_BOUNDS: Dict[str, Tuple[int, int]] = {
     'ui_font_size_px': (8, 32),
     'table_font_size_px': (8, 32),
     'status_font_size_px': (8, 24),
-    'tab_close_font_size_px': (8, 24),
-    'body_text_font_size_px': (8, 48),
-    'body_text_font_size_min': (6, 32),
-    'body_text_font_size_max': (8, 72),
+    'session_tree_font_size_px': (8, 32),
+    'session_tree_row_height_px': (18, 48),
+    'terminal_font_size_px': (8, 48),
+    'terminal_font_size_min': (6, 32),
+    'terminal_font_size_max': (8, 72),
 }
 
 
@@ -62,7 +65,7 @@ def default_appearance() -> AppearanceDict:
         'theme': DEFAULT_THEME,
         **_APPEARANCE_INT_DEFAULTS,
         'ui_font_families_win': list(DEFAULT_UI_FONT_FAMILIES_WIN),
-        'body_text_font_family': DEFAULT_BODY_TEXT_FONT_FAMILY,
-        'body_text_font_families': list(DEFAULT_BODY_TEXT_FONT_FAMILIES),
-        'body_text_font_fallbacks': list(DEFAULT_BODY_TEXT_FONT_FALLBACKS),
+        'terminal_font_family': DEFAULT_TERMINAL_FONT_FAMILY,
+        'terminal_font_families': list(DEFAULT_TERMINAL_FONT_FAMILIES),
+        'terminal_font_fallbacks': list(DEFAULT_TERMINAL_FONT_FALLBACKS),
     }

@@ -64,6 +64,7 @@ class SessionTreePanel(QWidget):
         layout.addWidget(self._title_label)
 
         self.tree = FavoriteTreeWidget()
+        self.tree.setObjectName('SessionTree')
         self.tree.setHeaderHidden(True)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
@@ -73,10 +74,7 @@ class SessionTreePanel(QWidget):
         self.tree.deleteRequested.connect(lambda item: self._delete_item(item, confirm=True))
         self.tree.setAnimated(True)
         self.tree.setIndentation(16)
-        appearance = get_app_config().appearance
-        tree_font = QFont()
-        tree_font.setPixelSize(appearance.ui_font_size_px)
-        self.tree.setFont(tree_font)
+        self.apply_appearance()
         layout.addWidget(self.tree, 1)
 
         self._filter_edit = QLineEdit()
@@ -521,6 +519,12 @@ class SessionTreePanel(QWidget):
 
     def _clear_filter(self) -> None:
         self._filter_edit.clear()
+
+    def apply_appearance(self) -> None:
+        appearance = get_app_config().appearance
+        tree_font = QFont()
+        tree_font.setPixelSize(appearance.session_tree_font_size_px)
+        self.tree.setFont(tree_font)
 
     def retranslate_ui(self) -> None:
         self._title_label.setText(tr('sessions.title'))

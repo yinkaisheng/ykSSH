@@ -6,7 +6,7 @@ import asyncio
 import os
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import QObject, Qt
+from PyQt5.QtCore import QObject
 
 from core.sftp_service import delete_path, download, mkdir, rename, upload
 from core.connection_manager import ConnectionManager
@@ -29,25 +29,6 @@ class SftpUiHandler(QObject):
         self._local_dir = os.path.expanduser('~')
         self._remote_dir = '/'
         self._paths_initialized = False
-        self.reset_file_sort = True
-        self.local_sort_column = 0
-        self.local_sort_order = Qt.AscendingOrder
-        self.remote_sort_column = 0
-        self.remote_sort_order = Qt.AscendingOrder
-
-    def reset_sort_state_to_default(self) -> None:
-        self.local_sort_column = 0
-        self.local_sort_order = Qt.AscendingOrder
-        self.remote_sort_column = 0
-        self.remote_sort_order = Qt.AscendingOrder
-
-    def set_local_sort(self, column: int, order: Qt.SortOrder) -> None:
-        self.local_sort_column = max(0, int(column))
-        self.local_sort_order = order
-
-    def set_remote_sort(self, column: int, order: Qt.SortOrder) -> None:
-        self.remote_sort_column = max(0, int(column))
-        self.remote_sort_order = order
 
     @property
     def local_dir(self) -> str:

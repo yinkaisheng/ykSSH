@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSplitter,
     QSplitterHandle,
+    QStackedWidget,
     QStyleOptionHeader,
     QTableWidget,
     QTableWidgetItem,
@@ -208,9 +209,6 @@ def _apply_file_table_layout(table: QTableWidget, column_widths: tuple[int, ...]
     vheader = table.verticalHeader()
     vheader.setDefaultSectionSize(cfg.row_height_px)
     vheader.setMinimumSectionSize(cfg.row_height_px)
-
-    table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-    table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
 
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
@@ -506,12 +504,235 @@ class RemoteFileTable(_BaseFileTable):
         self.setRowCount(0)
 
 
-class FilePanelWidget(QWidget):
-    """Horizontal splitter with local and remote file tables."""
+class LocalFilePanel(QWidget):
+    """Local path bar + local file table."""
 
-    def __init__(self, parent: QWidget = None) -> None:
+    path_changed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        parent: QWidget = None,
+        *,
+        on_save_column_widths: Optional[Callable[[bool, tuple[int, ...]], None]] = None,
+    ) -> None:
         super().__init__(parent)
+        self._on_save_column_widths = on_save_column_widths
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        header = QHBoxLayout()
+        self._label = QLabel(tr('file.local'))
+        header.addWidget(self._label)
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
+        header.addWidget(self.path_edit, 1)
+        self.refresh_btn = QPushButton(tr('file.refresh'))
+        header.addWidget(self.refresh_btn)
+        layout.addLayout(header)
+
+        self.table = LocalFileTable()
+        self._table_host = _wrap_file_table(self.table)
+        layout.addWidget(self._table_host, 1)
+
+        self.table.path_changed.connect(self.path_edit.setText)
+        self.table.path_changed.connect(self.path_changed.emit)
+        self.path_edit.returnPressed.connect(self._path_entered)
+        self.refresh_btn.clicked.connect(self.table.refresh)
+        self._setup_table_header_menu(is_local=True)
+        self.table.refresh()
+        self.path_edit.setText(self.table.current_path())
+
+    def _setup_table_header_menu(self, *, is_local: bool) -> None:
+        header = self.table.horizontalHeader()
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(
+            lambda pos, local=is_local: self._show_table_header_menu(local, pos),
+        )
+
+    def _show_table_header_menu(self, is_local: bool, pos) -> None:
+        menu = QMenu(self)
+        save_action = menu.addAction(tr('file.save_column_widths'))
+        chosen = menu.exec_(self.table.horizontalHeader().mapToGlobal(pos))
+        if chosen != save_action:
+            return
+        widths = tuple(self.table.columnWidth(index) for index in range(self.table.columnCount()))
+        if self._on_save_column_widths is not None:
+            self._on_save_column_widths(is_local, widths)
+
+    def _path_entered(self) -> None:
+        path = self.path_edit.text().strip()
+        if path:
+            self.table.set_path(path)
+
+    def current_path(self) -> str:
+        return self.table.current_path()
+
+    def set_path(self, path: str) -> None:
+        self.table.set_path(path)
+
+    def refresh(self) -> None:
+        self.table.refresh()
+
+    def apply_column_widths(self, widths: tuple[int, ...]) -> None:
+        _apply_column_widths(self.table, widths)
+
+    def retranslate_ui(self) -> None:
+        self._label.setText(tr('file.local'))
+        self.refresh_btn.setText(tr('file.refresh'))
+        self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
+        self.table.setHorizontalHeaderLabels([
+            tr('file.name'), tr('file.size'), tr('file.modified'),
+        ])
+
+
+class RemoteFilePanel(QWidget):
+    """Remote path bar + remote file table (or not-connected placeholder)."""
+
+    path_changed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        parent: QWidget = None,
+        *,
+        on_save_column_widths: Optional[Callable[[bool, tuple[int, ...]], None]] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._on_save_column_widths = on_save_column_widths
         self._sftp_handler = None
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        header = QHBoxLayout()
+        self._label = QLabel(tr('file.remote'))
+        header.addWidget(self._label)
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
+        header.addWidget(self.path_edit, 1)
+        self.refresh_btn = QPushButton(tr('file.refresh'))
+        header.addWidget(self.refresh_btn)
+        layout.addLayout(header)
+
+        self.table = RemoteFileTable()
+        self.placeholder = QLabel(tr('file.not_connected'))
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self._placeholder_host = QFrame()
+        self._placeholder_host.setObjectName('fileTableHost')
+        self._placeholder_host.setFrameShape(QFrame.NoFrame)
+        placeholder_layout = QVBoxLayout(self._placeholder_host)
+        placeholder_layout.setContentsMargins(1, 1, 1, 1)
+        placeholder_layout.addWidget(self.placeholder)
+        self._table_host = _wrap_file_table(self.table)
+        layout.addWidget(self._placeholder_host, 1)
+        layout.addWidget(self._table_host, 1)
+        self._table_host.hide()
+
+        self.table.path_changed.connect(self.path_edit.setText)
+        self.table.path_changed.connect(self.path_changed.emit)
+        self.path_edit.returnPressed.connect(self._path_entered)
+        self.refresh_btn.clicked.connect(self._remote_refresh)
+        self._setup_table_header_menu(is_local=False)
+
+    def _setup_table_header_menu(self, *, is_local: bool) -> None:
+        header = self.table.horizontalHeader()
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(
+            lambda pos, local=is_local: self._show_table_header_menu(local, pos),
+        )
+
+    def _show_table_header_menu(self, is_local: bool, pos) -> None:
+        menu = QMenu(self)
+        save_action = menu.addAction(tr('file.save_column_widths'))
+        chosen = menu.exec_(self.table.horizontalHeader().mapToGlobal(pos))
+        if chosen != save_action:
+            return
+        widths = tuple(self.table.columnWidth(index) for index in range(self.table.columnCount()))
+        if self._on_save_column_widths is not None:
+            self._on_save_column_widths(is_local, widths)
+
+    def _path_entered(self) -> None:
+        path = self.path_edit.text().strip()
+        if path:
+            self.table.set_path(path)
+
+    def _remote_refresh(self) -> None:
+        if self._sftp_handler is not None:
+            self._sftp_handler.refresh_remote(self.table.current_path())
+        else:
+            self.table.refresh()
+
+    def current_path(self) -> str:
+        return self.table.current_path()
+
+    def set_path(self, path: str) -> None:
+        self.table.set_path(path)
+
+    def refresh(self) -> None:
+        self.table.refresh()
+
+    def apply_column_widths(self, widths: tuple[int, ...]) -> None:
+        _apply_column_widths(self.table, widths)
+
+    def set_list_callback(self, callback: Callable[[str], List[dict]]) -> None:
+        self.table.set_list_callback(callback)
+        self._placeholder_host.hide()
+        self._table_host.show()
+        self._remote_refresh()
+
+    def clear_remote(self) -> None:
+        self.table.clear_remote()
+        self._table_host.hide()
+        self._placeholder_host.show()
+        self.path_edit.clear()
+
+    def set_sftp_handler(self, handler) -> None:
+        if self._sftp_handler is not None:
+            try:
+                self.table.upload_requested.disconnect()
+                self.table.download_requested.disconnect()
+                self.table.delete_requested.disconnect()
+                self.table.rename_requested.disconnect()
+                self.table.mkdir_requested.disconnect()
+                self.table.refresh_requested.disconnect()
+            except TypeError:
+                pass
+        self._sftp_handler = handler
+        if handler is None:
+            return
+        self.table.upload_requested.connect(handler.upload_local_paths)
+        self.table.download_requested.connect(handler.download_remote_paths)
+        self.table.delete_requested.connect(handler.delete_remote_paths)
+        self.table.rename_requested.connect(handler.rename_remote)
+        self.table.mkdir_requested.connect(handler.mkdir_remote)
+        self.table.refresh_requested.connect(
+            lambda: handler.refresh_remote(self.table.current_path()),
+        )
+
+    def retranslate_ui(self) -> None:
+        self._label.setText(tr('file.remote'))
+        self.refresh_btn.setText(tr('file.refresh'))
+        self.placeholder.setText(tr('file.not_connected'))
+        self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
+        self.table.setHorizontalHeaderLabels([
+            tr('file.name'), tr('file.size'), tr('file.modified'), tr('file.perm'),
+        ])
+
+
+class FilesPanel(QWidget):
+    """One tab's file panel: local | splitter | remote."""
+
+    def __init__(
+        self,
+        parent: QWidget = None,
+        *,
+        on_save_column_widths: Optional[Callable[[bool, tuple[int, ...]], None]] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._on_save_column_widths = on_save_column_widths
+        self._splitter_layout_initialized = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -524,198 +745,97 @@ class FilePanelWidget(QWidget):
         self.file_splitter.setChildrenCollapsible(False)
         self.file_splitter.setHandleWidth(6)
 
-        local_panel = QWidget()
-        local_layout = QVBoxLayout(local_panel)
-        local_layout.setContentsMargins(0, 0, 0, 0)
-        local_header = QHBoxLayout()
-        self._local_label = QLabel(tr('file.local'))
-        local_header.addWidget(self._local_label)
-        self.local_path_edit = QLineEdit()
-        self.local_path_edit.setPlaceholderText(tr('file.path_placeholder'))
-        local_header.addWidget(self.local_path_edit, 1)
-        self.local_refresh_btn = QPushButton(tr('file.refresh'))
-        local_header.addWidget(self.local_refresh_btn)
-        local_layout.addLayout(local_header)
+        self.local_file_panel = LocalFilePanel(
+            on_save_column_widths=self._on_save_column_widths,
+        )
+        self.remote_file_panel = RemoteFilePanel(
+            on_save_column_widths=self._on_save_column_widths,
+        )
 
-        self.local_table = LocalFileTable()
-        local_layout.addWidget(_wrap_file_table(self.local_table), 1)
-
-        remote_panel = QWidget()
-        remote_layout = QVBoxLayout(remote_panel)
-        remote_layout.setContentsMargins(0, 0, 0, 0)
-        remote_header = QHBoxLayout()
-        self._remote_label = QLabel(tr('file.remote'))
-        remote_header.addWidget(self._remote_label)
-        self.remote_path_edit = QLineEdit()
-        self.remote_path_edit.setPlaceholderText(tr('file.path_placeholder'))
-        remote_header.addWidget(self.remote_path_edit, 1)
-        self.remote_refresh_btn = QPushButton(tr('file.refresh'))
-        remote_header.addWidget(self.remote_refresh_btn)
-        remote_layout.addLayout(remote_header)
-
-        self.remote_table = RemoteFileTable()
-        self.remote_placeholder = QLabel(tr('file.not_connected'))
-        self.remote_placeholder.setAlignment(Qt.AlignCenter)
-        self._remote_placeholder_host = QFrame()
-        self._remote_placeholder_host.setObjectName('fileTableHost')
-        self._remote_placeholder_host.setFrameShape(QFrame.NoFrame)
-        placeholder_layout = QVBoxLayout(self._remote_placeholder_host)
-        placeholder_layout.setContentsMargins(1, 1, 1, 1)
-        placeholder_layout.addWidget(self.remote_placeholder)
-        self._remote_table_host = _wrap_file_table(self.remote_table)
-        remote_layout.addWidget(self._remote_placeholder_host, 1)
-        remote_layout.addWidget(self._remote_table_host, 1)
-        self._remote_table_host.hide()
-
-        self.file_splitter.addWidget(local_panel)
-        self.file_splitter.addWidget(remote_panel)
+        self.file_splitter.addWidget(self.local_file_panel)
+        self.file_splitter.addWidget(self.remote_file_panel)
         self.file_splitter.setStretchFactor(0, 1)
         self.file_splitter.setStretchFactor(1, 1)
         self.file_splitter.setSizes([1, 1])
-
         layout.addWidget(self.file_splitter, 1)
 
-        self.local_table.path_changed.connect(self.local_path_edit.setText)
-        self.remote_table.path_changed.connect(self.remote_path_edit.setText)
-        self.local_path_edit.returnPressed.connect(self._local_path_entered)
-        self.remote_path_edit.returnPressed.connect(self._remote_path_entered)
-        self.local_refresh_btn.clicked.connect(self.local_table.refresh)
-        self.remote_refresh_btn.clicked.connect(self._remote_refresh)
-
-        self.local_table.refresh()
-        self.local_path_edit.setText(self.local_table.current_path())
-        self._setup_table_header_menu(self.local_table, is_local=True)
-        self._setup_table_header_menu(self.remote_table, is_local=False)
-        self._connect_sort_persistence()
-        QTimer.singleShot(0, self.file_splitter.reset_equal_sizes)
-
-    def _connect_sort_persistence(self) -> None:
-        self.local_table.horizontalHeader().sortIndicatorChanged.connect(
-            self._persist_local_sort,
-        )
-        self.remote_table.horizontalHeader().sortIndicatorChanged.connect(
-            self._persist_remote_sort,
-        )
-
-    def _persist_local_sort(self, _column: int, _order: Qt.SortOrder) -> None:
-        if self._sftp_handler is None:
+    def _init_splitter_layout_once(self) -> None:
+        if self._splitter_layout_initialized:
             return
-        sort_column, sort_order = self.local_table._current_sort()
-        self._sftp_handler.set_local_sort(sort_column, sort_order)
-
-    def _persist_remote_sort(self, _column: int, _order: Qt.SortOrder) -> None:
-        if self._sftp_handler is None:
+        if self.file_splitter.width() <= 0:
+            QTimer.singleShot(50, self._init_splitter_layout_once)
             return
-        sort_column, sort_order = self.remote_table._current_sort()
-        self._sftp_handler.set_remote_sort(sort_column, sort_order)
-
-    def _setup_table_header_menu(self, table: _BaseFileTable, *, is_local: bool) -> None:
-        header = table.horizontalHeader()
-        header.setContextMenuPolicy(Qt.CustomContextMenu)
-        header.customContextMenuRequested.connect(
-            lambda pos, target=table, local=is_local: self._show_table_header_menu(target, local, pos),
-        )
-
-    def _show_table_header_menu(self, table: _BaseFileTable, is_local: bool, pos) -> None:
-        menu = QMenu(self)
-        save_action = menu.addAction(tr('file.save_column_widths'))
-        chosen = menu.exec_(table.horizontalHeader().mapToGlobal(pos))
-        if chosen == save_action:
-            self._save_table_column_widths(table, is_local=is_local)
-
-    def _save_table_column_widths(self, table: _BaseFileTable, *, is_local: bool) -> None:
-        widths = tuple(table.columnWidth(index) for index in range(table.columnCount()))
-        if is_local:
-            save_file_panel_column_widths(local_column_widths=widths)
-            _apply_column_widths(self.local_table, widths)
-            return
-        save_file_panel_column_widths(remote_column_widths=widths)
-        _apply_column_widths(self.remote_table, widths)
+        self._splitter_layout_initialized = True
+        self.file_splitter.reset_equal_sizes()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
-        QTimer.singleShot(0, self.file_splitter.reset_equal_sizes)
-
-    def _local_path_entered(self) -> None:
-        path = self.local_path_edit.text().strip()
-        if path:
-            self.local_table.set_path(path)
-
-    def _remote_path_entered(self) -> None:
-        path = self.remote_path_edit.text().strip()
-        if path:
-            self.remote_table.set_path(path)
-
-    def _remote_refresh(self) -> None:
-        if self._sftp_handler is not None:
-            self._sftp_handler.refresh_remote(self.remote_table.current_path())
-        else:
-            self.remote_table.refresh()
-
-    def set_remote_list_callback(self, callback: Callable[[str], List[dict]]) -> None:
-        self.remote_table.set_list_callback(callback)
-        self._remote_placeholder_host.hide()
-        self._remote_table_host.show()
-        self._remote_refresh()
-
-    def clear_remote(self) -> None:
-        self.remote_table.clear_remote()
-        self._remote_table_host.hide()
-        self._remote_placeholder_host.show()
-        self.remote_path_edit.clear()
-
-    def reset_sort_to_default(self) -> None:
-        self.local_table.reset_sort_to_default()
-        self.remote_table.reset_sort_to_default()
-
-    def apply_sort_state_from_handler(self, handler) -> None:
-        self.local_table.apply_sort(handler.local_sort_column, handler.local_sort_order)
-        self.remote_table.apply_sort(handler.remote_sort_column, handler.remote_sort_order)
-
-    def capture_sort_state_to_handler(self, handler) -> None:
-        column, order = self.local_table._current_sort()
-        handler.set_local_sort(column, order)
-        column, order = self.remote_table._current_sort()
-        handler.set_remote_sort(column, order)
+        if not self._splitter_layout_initialized:
+            QTimer.singleShot(0, self._init_splitter_layout_once)
 
     def retranslate_ui(self) -> None:
-        self._local_label.setText(tr('file.local'))
-        self._remote_label.setText(tr('file.remote'))
-        self.local_refresh_btn.setText(tr('file.refresh'))
-        self.remote_refresh_btn.setText(tr('file.refresh'))
-        self.remote_placeholder.setText(tr('file.not_connected'))
-        self.local_path_edit.setPlaceholderText(tr('file.path_placeholder'))
-        self.remote_path_edit.setPlaceholderText(tr('file.path_placeholder'))
-        self.local_table.setHorizontalHeaderLabels([
-            tr('file.name'), tr('file.size'), tr('file.modified'),
-        ])
-        self.remote_table.setHorizontalHeaderLabels([
-            tr('file.name'), tr('file.size'), tr('file.modified'), tr('file.perm'),
-        ])
+        self.local_file_panel.retranslate_ui()
+        self.remote_file_panel.retranslate_ui()
 
 
-    def set_sftp_handler(self, handler) -> None:
-        if self._sftp_handler is not None:
-            try:
-                self.remote_table.upload_requested.disconnect()
-                self.remote_table.download_requested.disconnect()
-                self.remote_table.delete_requested.disconnect()
-                self.remote_table.rename_requested.disconnect()
-                self.remote_table.mkdir_requested.disconnect()
-                self.remote_table.refresh_requested.disconnect()
-            except TypeError:
-                pass
-        self._sftp_handler = handler
-        if handler is None:
+class FilePanelsContainer(QWidget):
+    """Manages one FilesPanel per terminal tab; switches visible panel on tab change."""
+
+    def __init__(self, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self._panels: dict[str, FilesPanel] = {}
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._stack = QStackedWidget()
+        layout.addWidget(self._stack, 1)
+        self._empty = QWidget()
+        self._stack.addWidget(self._empty)
+        self._stack.setCurrentWidget(self._empty)
+
+    def create_panel(self, tab_id: str) -> FilesPanel:
+        panel = self._panels.get(tab_id)
+        if panel is not None:
+            return panel
+        panel = FilesPanel(on_save_column_widths=self._on_save_column_widths)
+        self._panels[tab_id] = panel
+        self._stack.addWidget(panel)
+        return panel
+
+    def get_panel(self, tab_id: str) -> Optional[FilesPanel]:
+        return self._panels.get(tab_id)
+
+    def show_panel(self, tab_id: str) -> Optional[FilesPanel]:
+        panel = self._panels.get(tab_id)
+        if panel is not None:
+            self._stack.setCurrentWidget(panel)
+        return panel
+
+    def show_empty(self) -> None:
+        self._stack.setCurrentWidget(self._empty)
+
+    def remove_panel(self, tab_id: str) -> None:
+        panel = self._panels.pop(tab_id, None)
+        if panel is None:
             return
-        self.remote_table.upload_requested.connect(handler.upload_local_paths)
-        self.remote_table.download_requested.connect(handler.download_remote_paths)
-        self.remote_table.delete_requested.connect(handler.delete_remote_paths)
-        self.remote_table.rename_requested.connect(handler.rename_remote)
-        self.remote_table.mkdir_requested.connect(handler.mkdir_remote)
-        self.remote_table.refresh_requested.connect(
-            lambda: handler.refresh_remote(self.remote_table.current_path())
-        )
+        self._stack.removeWidget(panel)
+        panel.deleteLater()
+        if self._stack.currentWidget() is panel:
+            self.show_empty()
 
-    def refresh_remote_table(self) -> None:
-        self.remote_table.refresh()
+    def _on_save_column_widths(self, is_local: bool, widths: tuple[int, ...]) -> None:
+        if is_local:
+            save_file_panel_column_widths(local_column_widths=widths)
+            for panel in self._panels.values():
+                panel.local_file_panel.apply_column_widths(widths)
+            return
+        save_file_panel_column_widths(remote_column_widths=widths)
+        for panel in self._panels.values():
+            panel.remote_file_panel.apply_column_widths(widths)
+
+    def retranslate_ui(self) -> None:
+        for panel in self._panels.values():
+            panel.retranslate_ui()

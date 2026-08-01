@@ -21,9 +21,9 @@ from ui.dialog_i18n import translate_button_box
 from ui.theme import (
     THEME_OPTIONS,
     ThemeName,
-    body_text_font_size_max,
-    body_text_font_size_min,
-    normalize_body_text_font_family,
+    terminal_font_size_max,
+    terminal_font_size_min,
+    normalize_terminal_font_family,
     normalize_theme_name,
 )
 from ui.widgets import ArrowComboBox, GlyphSpinBox
@@ -38,7 +38,7 @@ class AppSettings:
 
 
 def _select_body_font_family(combo: ArrowComboBox, family: str) -> None:
-    target = normalize_body_text_font_family(family)
+    target = normalize_terminal_font_family(family)
     index = combo.findText(target)
     if index >= 0:
         combo.setCurrentIndex(index)
@@ -60,7 +60,7 @@ def prompt_app_settings(
     initial = AppSettings(
         theme=normalize_theme_name(current_theme),
         size=current_size,
-        family=normalize_body_text_font_family(current_family),
+        family=normalize_terminal_font_family(current_family),
         language=current_language or get_language(),
     )
     last_saved = initial
@@ -85,7 +85,7 @@ def prompt_app_settings(
     family_combo.setMinimumWidth(min_width - 48)
     db = QFontDatabase()
     system_families = set(db.families())
-    preferred = get_app_config().appearance.body_text_font_families
+    preferred = get_app_config().appearance.terminal_font_families
     seen: set = set()
     for family_name in preferred:
         if family_name not in seen and family_name in system_families:
@@ -99,7 +99,7 @@ def prompt_app_settings(
     family_label = add_form_field(grid, 2, tr('settings.editor_font_family'), family_combo)
 
     spin = GlyphSpinBox()
-    spin.setRange(body_text_font_size_min(), body_text_font_size_max())
+    spin.setRange(terminal_font_size_min(), terminal_font_size_max())
     spin.setValue(initial.size)
     spin.setMinimumWidth(120)
     size_label = add_form_field(grid, 3, tr('settings.editor_font_size'), spin)
@@ -108,7 +108,7 @@ def prompt_app_settings(
         return AppSettings(
             theme=normalize_theme_name(theme_combo.currentData()),
             size=spin.value(),
-            family=normalize_body_text_font_family(family_combo.currentText()),
+            family=normalize_terminal_font_family(family_combo.currentText()),
             language=language_combo.currentData(),
         )
 

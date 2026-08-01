@@ -11,9 +11,9 @@ from i18n.translator import DEFAULT_LOCALE, list_languages
 from log_util import logger
 from storage.paths import CONFIG_FILE
 from ui.appearance_defaults import (
-    DEFAULT_BODY_TEXT_FONT_FAMILIES,
-    DEFAULT_BODY_TEXT_FONT_FAMILY,
-    DEFAULT_BODY_TEXT_FONT_FALLBACKS,
+    DEFAULT_TERMINAL_FONT_FAMILIES,
+    DEFAULT_TERMINAL_FONT_FAMILY,
+    DEFAULT_TERMINAL_FONT_FALLBACKS,
     DEFAULT_THEME,
     DEFAULT_UI_FONT_FAMILIES_WIN,
     _APPEARANCE_INT_BOUNDS,
@@ -48,14 +48,15 @@ class AppearanceConfig:
     ui_font_size_px: int
     table_font_size_px: int
     status_font_size_px: int
-    tab_close_font_size_px: int
+    session_tree_font_size_px: int
+    session_tree_row_height_px: int
     ui_font_families_win: Tuple[str, ...]
-    body_text_font_family: str
-    body_text_font_size_px: int
-    body_text_font_size_min: int
-    body_text_font_size_max: int
-    body_text_font_families: Tuple[str, ...]
-    body_text_font_fallbacks: Tuple[str, ...]
+    terminal_font_family: str
+    terminal_font_size_px: int
+    terminal_font_size_min: int
+    terminal_font_size_max: int
+    terminal_font_families: Tuple[str, ...]
+    terminal_font_fallbacks: Tuple[str, ...]
 
 
 DEFAULT_WINDOW_BORDER_WIDTH = 2
@@ -63,12 +64,16 @@ _MAX_WINDOW_BORDER_WIDTH = 8
 DEFAULT_TITLE_BAR_HEIGHT = 32
 _MIN_TITLE_BAR_HEIGHT = 24
 _MAX_TITLE_BAR_HEIGHT = 48
+DEFAULT_TAB_BAR_HEIGHT = 28
+_MIN_TAB_BAR_HEIGHT = 20
+_MAX_TAB_BAR_HEIGHT = 48
 
 
 @dataclass(frozen=True)
 class WindowConfig:
     border_width: int = DEFAULT_WINDOW_BORDER_WIDTH
     title_bar_height: int = DEFAULT_TITLE_BAR_HEIGHT
+    tab_bar_height: int = DEFAULT_TAB_BAR_HEIGHT
     width: Optional[int] = None
     height: Optional[int] = None
     main_splitter: Optional[float] = None
@@ -145,8 +150,8 @@ def _normalize_appearance(raw: Any) -> Dict[str, Any]:
     defaults = default_appearance()
     raw = raw if isinstance(raw, dict) else {}
     candidates = _normalize_string_list(
-        raw.get('body_text_font_families'),
-        DEFAULT_BODY_TEXT_FONT_FAMILIES,
+        raw.get('terminal_font_families'),
+        DEFAULT_TERMINAL_FONT_FAMILIES,
         strip_quotes=True,
     )
     normalized: Dict[str, Any] = {
@@ -156,29 +161,29 @@ def _normalize_appearance(raw: Any) -> Dict[str, Any]:
             DEFAULT_UI_FONT_FAMILIES_WIN,
             strip_quotes=True,
         )),
-        'body_text_font_family': _normalize_font_family(
-            raw.get('body_text_font_family'),
-            DEFAULT_BODY_TEXT_FONT_FAMILY,
+        'terminal_font_family': _normalize_font_family(
+            raw.get('terminal_font_family'),
+            DEFAULT_TERMINAL_FONT_FAMILY,
             candidates,
         ),
-        'body_text_font_families': list(candidates),
-        'body_text_font_fallbacks': list(_normalize_string_list(
-            raw.get('body_text_font_fallbacks'),
-            DEFAULT_BODY_TEXT_FONT_FALLBACKS,
+        'terminal_font_families': list(candidates),
+        'terminal_font_fallbacks': list(_normalize_string_list(
+            raw.get('terminal_font_fallbacks'),
+            DEFAULT_TERMINAL_FONT_FALLBACKS,
             strip_quotes=True,
         )),
     }
     for key, default in _APPEARANCE_INT_DEFAULTS.items():
         minimum, maximum = _APPEARANCE_INT_BOUNDS[key]
         normalized[key] = _clamp_int(raw.get(key), default, minimum, maximum)
-    if normalized['body_text_font_size_min'] > normalized['body_text_font_size_max']:
-        normalized['body_text_font_size_min'] = defaults['body_text_font_size_min']
-        normalized['body_text_font_size_max'] = defaults['body_text_font_size_max']
-    normalized['body_text_font_size_px'] = _clamp_int(
-        raw.get('body_text_font_size_px'),
-        defaults['body_text_font_size_px'],
-        normalized['body_text_font_size_min'],
-        normalized['body_text_font_size_max'],
+    if normalized['terminal_font_size_min'] > normalized['terminal_font_size_max']:
+        normalized['terminal_font_size_min'] = defaults['terminal_font_size_min']
+        normalized['terminal_font_size_max'] = defaults['terminal_font_size_max']
+    normalized['terminal_font_size_px'] = _clamp_int(
+        raw.get('terminal_font_size_px'),
+        defaults['terminal_font_size_px'],
+        normalized['terminal_font_size_min'],
+        normalized['terminal_font_size_max'],
     )
     return normalized
 
@@ -200,14 +205,15 @@ def _appearance_to_config(appearance: Dict[str, Any]) -> AppearanceConfig:
         ui_font_size_px=appearance['ui_font_size_px'],
         table_font_size_px=appearance['table_font_size_px'],
         status_font_size_px=appearance['status_font_size_px'],
-        tab_close_font_size_px=appearance['tab_close_font_size_px'],
+        session_tree_font_size_px=appearance['session_tree_font_size_px'],
+        session_tree_row_height_px=appearance['session_tree_row_height_px'],
         ui_font_families_win=tuple(appearance['ui_font_families_win']),
-        body_text_font_family=appearance['body_text_font_family'],
-        body_text_font_size_px=appearance['body_text_font_size_px'],
-        body_text_font_size_min=appearance['body_text_font_size_min'],
-        body_text_font_size_max=appearance['body_text_font_size_max'],
-        body_text_font_families=tuple(appearance['body_text_font_families']),
-        body_text_font_fallbacks=tuple(appearance['body_text_font_fallbacks']),
+        terminal_font_family=appearance['terminal_font_family'],
+        terminal_font_size_px=appearance['terminal_font_size_px'],
+        terminal_font_size_min=appearance['terminal_font_size_min'],
+        terminal_font_size_max=appearance['terminal_font_size_max'],
+        terminal_font_families=tuple(appearance['terminal_font_families']),
+        terminal_font_fallbacks=tuple(appearance['terminal_font_fallbacks']),
     )
 
 
@@ -290,6 +296,12 @@ def _normalize_window(raw: Any) -> Dict[str, Any]:
             _MIN_TITLE_BAR_HEIGHT,
             _MAX_TITLE_BAR_HEIGHT,
         ),
+        'tab_bar_height': _clamp_int(
+            raw.get('tab_bar_height'),
+            DEFAULT_TAB_BAR_HEIGHT,
+            _MIN_TAB_BAR_HEIGHT,
+            _MAX_TAB_BAR_HEIGHT,
+        ),
     }
     width = raw.get('width')
     height = raw.get('height')
@@ -310,6 +322,7 @@ def _window_to_config(window: Dict[str, Any]) -> WindowConfig:
     return WindowConfig(
         border_width=window['border_width'],
         title_bar_height=window['title_bar_height'],
+        tab_bar_height=window['tab_bar_height'],
         width=window.get('width'),
         height=window.get('height'),
         main_splitter=window.get('main_splitter'),
@@ -439,8 +452,8 @@ def get_setting(key: str, default: Any = None) -> Any:
 def save_app_preferences(
     *,
     theme: str,
-    body_text_font_family: str,
-    body_text_font_size_px: int,
+    terminal_font_family: str,
+    terminal_font_size_px: int,
     language: str,
     path: Path = CONFIG_FILE,
 ) -> AppConfig:
@@ -452,14 +465,15 @@ def save_app_preferences(
         'ui_font_size_px': current.ui_font_size_px,
         'table_font_size_px': current.table_font_size_px,
         'status_font_size_px': current.status_font_size_px,
-        'tab_close_font_size_px': current.tab_close_font_size_px,
+        'session_tree_font_size_px': current.session_tree_font_size_px,
+        'session_tree_row_height_px': current.session_tree_row_height_px,
         'ui_font_families_win': list(current.ui_font_families_win),
-        'body_text_font_family': body_text_font_family,
-        'body_text_font_size_px': body_text_font_size_px,
-        'body_text_font_size_min': current.body_text_font_size_min,
-        'body_text_font_size_max': current.body_text_font_size_max,
-        'body_text_font_families': list(current.body_text_font_families),
-        'body_text_font_fallbacks': list(current.body_text_font_fallbacks),
+        'terminal_font_family': terminal_font_family,
+        'terminal_font_size_px': terminal_font_size_px,
+        'terminal_font_size_min': current.terminal_font_size_min,
+        'terminal_font_size_max': current.terminal_font_size_max,
+        'terminal_font_families': list(current.terminal_font_families),
+        'terminal_font_fallbacks': list(current.terminal_font_fallbacks),
     })
     if _raw_config_cache is None:
         _raw_config_cache = _normalize_config(_default_config())

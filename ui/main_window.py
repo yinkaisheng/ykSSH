@@ -28,7 +28,7 @@ from storage.keyring_store import KeyringStore
 from storage.session_profile_store import SessionProfileStore
 from ui.about_dialog import show_about_dialog
 from ui.settings_dialog import AppSettings, prompt_app_settings
-from ui.file_table_panel import FilePanelWidget
+from ui.file_table_panel import FilePanelsContainer, FilesPanel
 from ui.session_tree_panel import SessionTreePanel
 from ui.terminal_tab_widget import TerminalTabWidget
 from ui.terminal_vt_widget import TerminalVTWidget
@@ -38,8 +38,8 @@ from ui.theme import (
     apply_main_window_border,
     apply_window_title_bar,
     get_theme_palette,
-    normalize_body_text_font_family,
-    normalize_body_text_font_size,
+    normalize_terminal_font_family,
+    normalize_terminal_font_size,
     normalize_theme_name,
 )
 
@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
 
         self.session_panel = SessionTreePanel(self.profile_store, self.keyring_store)
         self.terminal_tabs = TerminalTabWidget()
-        self.file_panel = FilePanelWidget()
+        self.file_panels = FilePanelsContainer()
 
         # 上区：Session 树与终端同高
         self._main_splitter = QSplitter(Qt.Horizontal)
@@ -116,7 +116,7 @@ class MainWindow(QMainWindow):
         # 下区：双文件 Table 占满全宽
         self._vertical_splitter = QSplitter(Qt.Vertical)
         self._vertical_splitter.addWidget(self._main_splitter)
-        self._vertical_splitter.addWidget(self.file_panel)
+        self._vertical_splitter.addWidget(self.file_panels)
         self._vertical_splitter.setStretchFactor(0, 3)
         self._vertical_splitter.setStretchFactor(1, 2)
         self._vertical_splitter.setSizes([520, 280])
@@ -156,8 +156,6 @@ class MainWindow(QMainWindow):
         self.terminal_tabs.tab_closed.connect(self._on_tab_closed)
         self.terminal_tabs.currentChanged.connect(self._on_current_tab_changed)
         self.connection_manager.remote_list_updated.connect(self._on_remote_list_updated)
-        self.file_panel.local_table.path_changed.connect(self._on_local_path_changed)
-        self.file_panel.remote_table.path_changed.connect(self._on_remote_path_changed)
         if self._main_splitter is not None:
             self._main_splitter.splitterMoved.connect(self._schedule_session_save)
         if self._vertical_splitter is not None:
@@ -242,21 +240,35 @@ class MainWindow(QMainWindow):
         self._setup_menus()
         self.session_panel.retranslate_ui()
         self.terminal_tabs.retranslate_ui()
-        self.file_panel.retranslate_ui()
+        self.file_panels.retranslate_ui()
 
+    def _active_files_panel(self) -> Optional[FilesPanel]:
+        if not self._active_tab_id:
+            return None
+        return self.file_panels.get_panel(self._active_tab_id)
 
+    def _register_files_panel(self, tab_id: str, panel: FilesPanel) -> None:
+        panel.local_file_panel.path_changed.connect(
+            lambda path, tid=tab_id: self._on_local_path_changed_for_tab(tid, path),
+        )
+        panel.remote_file_panel.path_changed.connect(
+            lambda path, tid=tab_id: self._on_remote_path_changed_for_tab(tid, path),
+        )
 
     def _on_remote_list_updated(self, tab_id: str) -> None:
-        if self._active_tab_id == tab_id:
-            self.file_panel.refresh_remote_table()
+        if self._active_tab_id != tab_id:
+            return
+        panel = self.file_panels.get_panel(tab_id)
+        if panel is not None:
+            panel.remote_file_panel.refresh()
 
-    def _on_local_path_changed(self, path: str) -> None:
-        handler = self._sftp_handlers.get(self._active_tab_id or '')
+    def _on_local_path_changed_for_tab(self, tab_id: str, path: str) -> None:
+        handler = self._sftp_handlers.get(tab_id)
         if handler is not None:
             handler.set_local_dir(path)
 
-    def _on_remote_path_changed(self, path: str) -> None:
-        handler = self._sftp_handlers.get(self._active_tab_id or '')
+    def _on_remote_path_changed_for_tab(self, tab_id: str, path: str) -> None:
+        handler = self._sftp_handlers.get(tab_id)
         if handler is not None:
             handler.set_remote_dir(path)
 
@@ -273,32 +285,35 @@ class MainWindow(QMainWindow):
         return handler
 
     def _refresh_file_panels(self) -> None:
-        self.file_panel.local_table.refresh()
-        self.file_panel.refresh_remote_table()
+        panel = self._active_files_panel()
+        if panel is None:
+            return
+        panel.local_file_panel.refresh()
+        panel.remote_file_panel.refresh()
 
     def _save_active_tab_paths(self) -> None:
         tab_id = self._active_tab_id
         if not tab_id:
             return
         handler = self._sftp_handlers.get(tab_id)
-        if handler is None:
+        panel = self.file_panels.get_panel(tab_id)
+        if handler is None or panel is None:
             return
-        handler.set_local_dir(self.file_panel.local_table.current_path())
-        handler.set_remote_dir(self.file_panel.remote_table.current_path())
-        self.file_panel.capture_sort_state_to_handler(handler)
+        handler.set_local_dir(panel.local_file_panel.current_path())
+        handler.set_remote_dir(panel.remote_file_panel.current_path())
 
     def _attach_file_panel(self, tab_id: str) -> None:
+        panel = self.file_panels.get_panel(tab_id)
+        if panel is None:
+            return
+        self.file_panels.show_panel(tab_id)
         handler = self._ensure_sftp_handler(tab_id)
-        if handler.reset_file_sort:
-            handler.reset_sort_state_to_default()
-            handler.reset_file_sort = False
-        self.file_panel.apply_sort_state_from_handler(handler)
-        self.file_panel.local_table.set_path(handler.local_dir)
-        self.file_panel.remote_table.set_path(handler.remote_dir)
-        self.file_panel.set_sftp_handler(handler)
+        panel.remote_file_panel.set_sftp_handler(handler)
         callback = self.connection_manager.get_remote_list_callback(tab_id)
         if callback is not None:
-            self.file_panel.set_remote_list_callback(callback)
+            panel.remote_file_panel.set_list_callback(callback)
+        else:
+            panel.remote_file_panel.clear_remote()
 
     def _on_connect_clicked(self) -> None:
         item = self.session_panel.tree.currentItem()
@@ -314,6 +329,9 @@ class MainWindow(QMainWindow):
     async def _connect_session_async(self, session_item: SessionItem) -> None:
         tab_id, terminal = self.terminal_tabs.add_terminal_tab(session_item.name)
         self._active_tab_id = tab_id
+        panel = self.file_panels.create_panel(tab_id)
+        self.file_panels.show_panel(tab_id)
+        self._register_files_panel(tab_id, panel)
         terminal.write_text(tr('terminal.connecting') + '\r\n')
 
         def _on_connected() -> None:
@@ -327,7 +345,9 @@ class MainWindow(QMainWindow):
                 return
             terminal.write_text('\r\n' + tr('terminal.disconnected') + '\r\n')
             if self._active_tab_id == tab_id:
-                self.file_panel.clear_remote()
+                panel = self.file_panels.get_panel(tab_id)
+                if panel is not None:
+                    panel.remote_file_panel.clear_remote()
 
         try:
             await self.connection_manager.open_tab(
@@ -351,6 +371,9 @@ class MainWindow(QMainWindow):
 
     async def _init_file_panel_for_session(self, tab_id: str, session_item: SessionItem) -> None:
         handler = self._ensure_sftp_handler(tab_id)
+        panel = self.file_panels.get_panel(tab_id)
+        if panel is None:
+            return
         local_path = resolve_local_path(session_item.local_path)
         remote_path = await self.connection_manager.resolve_remote_path(
             tab_id,
@@ -359,34 +382,52 @@ class MainWindow(QMainWindow):
         if (session_item.remote_path or '').strip():
             await self.connection_manager.cd_shell(tab_id, remote_path)
         if handler.try_init_session_paths(local_path, remote_path):
+            panel.local_file_panel.set_path(local_path)
+            panel.remote_file_panel.set_path(remote_path)
             await self.connection_manager.refresh_remote_list(tab_id, remote_path)
         else:
             await self.connection_manager.refresh_remote_list(tab_id, handler.remote_dir)
         if self._active_tab_id != tab_id:
             return
         self._attach_file_panel(tab_id)
-        self.file_panel.refresh_remote_table()
+        panel.remote_file_panel.refresh()
 
     def _on_tab_closed(self, tab_id: str) -> None:
         asyncio.create_task(self.connection_manager.close_tab(tab_id))
         self._sftp_handlers.pop(tab_id, None)
+        self.file_panels.remove_panel(tab_id)
         if self._active_tab_id == tab_id:
             self._active_tab_id = None
-            self.file_panel.clear_remote()
+            index = self.terminal_tabs.currentIndex()
+            if index >= 0:
+                new_tab_id = self.terminal_tabs._tab_ids.get(index)
+                if new_tab_id is not None:
+                    self._active_tab_id = new_tab_id
+                    self._attach_file_panel(new_tab_id)
+            else:
+                self.file_panels.show_empty()
 
     def _on_current_tab_changed(self, index: int) -> None:
         if index < 0:
             self._save_active_tab_paths()
-            self.file_panel.clear_remote()
+            self.file_panels.show_empty()
             self._active_tab_id = None
             return
         self._save_active_tab_paths()
         tab_id = self.terminal_tabs._tab_ids.get(index)
         self._active_tab_id = tab_id
         if tab_id is None:
-            self.file_panel.clear_remote()
+            self.file_panels.show_empty()
             return
-        self._attach_file_panel(tab_id) if self.connection_manager.get_session(tab_id) is not None else self.file_panel.clear_remote()
+        panel = self.file_panels.get_panel(tab_id)
+        if panel is None:
+            self.file_panels.show_empty()
+            return
+        if self.connection_manager.get_session(tab_id) is not None:
+            self._attach_file_panel(tab_id)
+        else:
+            self.file_panels.show_panel(tab_id)
+            panel.remote_file_panel.clear_remote()
 
     def _current_theme(self) -> str:
         return normalize_theme_name(self._appearance().theme)
@@ -396,8 +437,8 @@ class MainWindow(QMainWindow):
         if app is None:
             return
         appearance = self._appearance()
-        family = normalize_body_text_font_family(appearance.body_text_font_family)
-        size_px = normalize_body_text_font_size(appearance.body_text_font_size_px)
+        family = normalize_terminal_font_family(appearance.terminal_font_family)
+        size_px = normalize_terminal_font_size(appearance.terminal_font_size_px)
         apply_app_theme(
             app,
             self._current_theme(),
@@ -405,6 +446,7 @@ class MainWindow(QMainWindow):
             family,
         )
         self._apply_terminal_fonts(family, size_px)
+        self.session_panel.apply_appearance()
         window_cfg = get_app_config().window
         if self._title_bar is not None:
             apply_window_title_bar(
@@ -429,8 +471,8 @@ class MainWindow(QMainWindow):
     def _save_settings(self, settings: AppSettings) -> None:
         save_app_preferences(
             theme=settings.theme,
-            body_text_font_family=settings.family,
-            body_text_font_size_px=settings.size,
+            terminal_font_family=settings.family,
+            terminal_font_size_px=settings.size,
             language=settings.language,
         )
         set_language(settings.language)
@@ -441,8 +483,8 @@ class MainWindow(QMainWindow):
         prompt_app_settings(
             self,
             self._current_theme(),
-            appearance.body_text_font_size_px,
-            appearance.body_text_font_family,
+            appearance.terminal_font_size_px,
+            appearance.terminal_font_family,
             get_app_config().language,
             on_save=self._save_settings,
         )
