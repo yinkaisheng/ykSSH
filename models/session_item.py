@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from models.favorite_path import FavoritePath, favorite_paths_from_raw, favorite_paths_to_raw
+
 AUTH_PASSWORD = 'password'
 AUTH_PUBLIC_KEY = 'publickey'
 
@@ -26,6 +28,8 @@ class SessionItem:
     key_path: str = ''
     local_path: str = ''
     remote_path: str = ''
+    local_favorites: List[FavoritePath] = field(default_factory=list)
+    remote_favorites: List[FavoritePath] = field(default_factory=list)
     children: List['SessionItem'] = field(default_factory=list)
 
     def is_folder(self) -> bool:
@@ -44,6 +48,10 @@ class SessionItem:
                 d['local_path'] = self.local_path
             if self.remote_path:
                 d['remote_path'] = self.remote_path
+            if self.local_favorites:
+                d['local_favorites'] = favorite_paths_to_raw(self.local_favorites)
+            if self.remote_favorites:
+                d['remote_favorites'] = favorite_paths_to_raw(self.remote_favorites)
         if self.children:
             d['children'] = [c.to_dict() for c in self.children]
         return d
@@ -61,5 +69,7 @@ class SessionItem:
             key_path=str(data.get('key_path', '') or ''),
             local_path=str(data.get('local_path', '') or ''),
             remote_path=str(data.get('remote_path', '') or ''),
+            local_favorites=favorite_paths_from_raw(data.get('local_favorites')),
+            remote_favorites=favorite_paths_from_raw(data.get('remote_favorites')),
             children=[cls.from_dict(c) for c in data.get('children', [])],
         )

@@ -82,7 +82,8 @@ MyPyShell/
 ├── log_util.py                  # loguru 日志封装
 │
 ├── models/
-│   └── session_item.py          # SessionItem 树节点 dataclass
+│   ├── session_item.py          # SessionItem 树节点 dataclass
+│   └── favorite_path.py         # FavoritePath（path + note）
 │
 ├── core/
 │   ├── ssh_session.py           # 单条 SSH 连接（Shell PTY + SFTP）
@@ -109,17 +110,18 @@ MyPyShell/
 │
 └── ui/
     ├── main_window.py           # 主窗口：布局、连接生命周期、Tab 切换
-    ├── window_title_bar.py      # 无边框标题栏 + 菜单
+    ├── window_title_bar.py      # 无边框标题栏 + 菜单（见 §5.1）
     ├── session_tree_panel.py    # Session 树 CRUD / 过滤 / 连接
     ├── favorite_tree_widget.py  # 可拖拽 QTreeWidget
     ├── session_dialog.py        # 新建/编辑 Session
     ├── terminal_tab_widget.py   # 终端 Tab 容器
     ├── terminal_vt_widget.py    # pyte 终端渲染（~2000 行）
     ├── file_table_panel.py      # 文件面板全套组件（见 §6.3）
-    ├── theme.py                 # QSS 生成与应用
+    ├── favorites_dialog.py      # 本地/远端收藏管理（非模态）
+    ├── theme.py                 # QSS 生成与应用（含动态 padding）
     ├── theme_defaults.py        # 三套主题默认色值
-    ├── file_panel_defaults.py   # 文件 Table 默认列宽/行高
-    ├── appearance_defaults.py   # 外观默认值
+    ├── file_panel_defaults.py   # 文件面板列宽/行高/工具栏/文件夹粗体默认值
+    ├── appearance_defaults.py   # 外观默认值（UI/终端字体、过滤框高度等）
     ├── dialog_common.py         # 对话框布局辅助
     ├── dialog_i18n.py           # QMessageBox 等翻译
     ├── prompt_dialog.py         # 文本输入框
@@ -145,7 +147,24 @@ MyPyShell/
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Splitter 持久化：** 写入 `config/config.json` 的 `window.main_splitter`、`window.vertical_splitter`（比例 0~1），以及 `window.width`、`window.height`。拖动 splitter 后 500ms 防抖保存（`MainWindow._schedule_session_save`）。
+**Splitter / 窗口持久化：** 写入 `config/config.json`：
+
+| 字段 | 含义 |
+|------|------|
+| `window.width` / `window.height` | 主窗口尺寸 |
+| `window.session_tree_width` | Session 树像素宽度（水平 splitter 左侧） |
+| `window.vertical_splitter` | 终端|文件面板垂直比例（0~1） |
+| `window.tab_bar_height` / `window.title_bar_height` / `window.border_width` | Tab 栏 / 标题栏 / 边框高度 |
+
+拖动 splitter 后 500ms 防抖保存（`MainWindow._schedule_session_save`）。旧版 `window.main_splitter`（0~1 比例）在 `app_config` normalize 时会换算为 `session_tree_width`。
+
+### 5.1 无边框标题栏拖动（Windows）
+
+`WindowTitleBar` 在标题文字区域用 `window.move()` **手动拖动**，**不**调用 `QWindow.startSystemMove()`。
+
+- **原因：** `startSystemMove()` 在 MouseButtonPress 时由系统接管鼠标后，Qt 收不到完整 press/release，导致最小化/最大化/关闭按钮的 `:hover` 高亮失效。
+- **代价：** 无 Windows 原生贴边吸附（Aero Snap）。
+- 详情与已验证无效方案见 `ui/window_title_bar.py` 类 docstring。
 
 ---
 
@@ -170,7 +189,7 @@ asyncio.set_event_loop(loop)
 | 类型 | 判定 | 字段 |
 |------|------|------|
 | 分组（folder） | `host` 为空 | `id`, `name`, `children[]` |
-| Session（leaf） | `host` 非空 | 上述 + `host`, `port`, `username`, `auth_type`, `key_path`, `local_path`, `remote_path` |
+| Session（leaf） | `host` 非空 | 上述 + `host`, `port`, `username`, `auth_type`, `key_path`, `local_path`, `remote_path`, `local_favorites[]`, `remote_favorites[]` |
 
 - 密码 **不** 写入 `sessions.json`，仅存 `config/credentials.json`（Fernet 加密，密钥在 `config/secret.key`）。
 - 树 UI 使用 `FavoriteTreeWidget`；CRUD / 拖拽后 `_sync_data_model()` 同步回 `List[SessionItem]` 并由 `SessionProfileStore` 持久化。
@@ -182,9 +201,11 @@ asyncio.set_event_loop(loop)
 ```
 FilePanelsContainer                    # 主窗口底部，QStackedWidget
 ├── FilesPanel（tab_id = A）
-│   ├── LocalFilePanel                 # 路径栏 + 刷新 + LocalFileTable
+│   ├── LocalFilePanel                 # 工具栏 + LocalFileTable
+│   │     └── toolbar: 标签 | 路径框 | _FileNavToolbar
 │   ├── EqualSplitSplitter             # 本地|远端分割，比例各 Tab 独立
-│   └── RemoteFilePanel                # 路径栏 + 刷新 + RemoteFileTable / 未连接占位
+│   └── RemoteFilePanel                # 工具栏 + RemoteFileTable / 未连接占位
+│         └── toolbar: 标签 | 路径框 | _FileNavToolbar
 ├── FilesPanel（tab_id = B）
 └── _empty                             # 无 Tab 时的空白页
 ```
@@ -193,10 +214,39 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 
 | 类 | 职责 |
 |----|------|
-| `LocalFileTable` / `RemoteFileTable` | 排序、目录浏览、双击进入子目录 |
-| `LocalFilePanel` / `RemoteFilePanel` | 路径编辑框、刷新按钮、Table 容器 |
+| `LocalFileTable` / `RemoteFileTable` | 排序、目录浏览、双击进入子目录；空白区双击返回上级 |
+| `_FileNavToolbar` | 导航快捷按钮（见下）；`objectName: fileNavToolbar` |
+| `LocalFilePanel` / `RemoteFilePanel` | 路径编辑框 + 导航栏 + Table 容器 |
 | `FilesPanel` | 组合本地 + splitter + 远端 |
 | `FilePanelsContainer` | 按 `tab_id` 创建/销毁/切换 FilesPanel |
+
+**导航工具栏（`_FileNavToolbar`）：**
+
+| 环境 | 按钮（从左到右） |
+|------|------------------|
+| 本地 Windows | 各盘符（`GetLogicalDrives`）→ `/`（当前盘根）→ `~` → `★`（收藏）→ 刷新 |
+| 本地非 Windows / 远端 | `/` → `~` → `★` → 刷新 |
+
+- 按钮为正方形（边长 = `file_panel.file_panel_toolbar_height`）。
+- 远端 `~` 使用 `SftpUiHandler.remote_home`（连接时由 Session `remote_path` 初始化，缺省 `/`）。
+- 本地 `~` 为 `os.path.expanduser('~')`；Windows 下 `/` 跳转到当前路径所在盘根（如 `D:\`）。
+- 工具栏与 Table 间距：`_FILE_PANEL_TOOLBAR_TABLE_SPACING`（4px）。
+
+**收藏（★）：**
+
+| 范围 | 存储 | 菜单内容 |
+|------|------|----------|
+| 全局本地 | `config.json` → `file_panel.local_favorites` | 本地 ★ 菜单中列出 |
+| Session 本地 | `sessions.json` → Session `local_favorites` | 本地 ★ 菜单中列出 |
+| Session 远端 | `sessions.json` → Session `remote_favorites` | 远端 ★ 菜单中列出 |
+
+- 条目结构：`{"path": "...", "note": "..."}`（`models/favorite_path.py` → `FavoritePath`）；菜单显示 `路径` 或 `路径 (备注)`。
+- 点击 ★：弹出菜单「管理收藏」+ 对应列表；点路径跳转；点「管理收藏」打开**非模态**对话框（`ui/favorites_dialog.py`）。
+- 本地管理对话框：左全局 / 右 Session；路径可粘贴、手动输入或浏览选择（浏览结果经 `os.path.normpath`，Windows 下 `D:/x` → `D:\x`）。
+- 远端管理对话框：仅 Session 列表；路径仅粘贴或手动输入（无浏览）。
+- 关闭管理对话框时写入窗口尺寸（`file_panel.local/remote_favorites_dialog_width/height`），下次打开恢复。
+- 不自动去重；收藏内容经 `save_file_panel_local_favorites` / `SessionTreePanel.persist_sessions()` 保存。
+- `MainWindow._register_files_panel` 注入 provider / manage handler（按 `tab_id` 取 `SSHSession.session_item`）。
 
 **状态隔离规则：**
 
@@ -205,6 +255,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 | 路径、排序、目录浏览 | 每 Tab 独立（各自 Table 实例） |
 | 本地/远端 splitter 比例 | 每 Tab 独立（首次显示时初始化 1:1，之后保留用户拖动结果） |
 | 列宽 | **全局共享**（表头右键「保存列宽」→ 写入 config + 同步所有 Tab 的对应 Table） |
+| 文件夹名称粗体、工具栏高度/字号 | **全局**（`file_panel.*`，见 §8.2） |
 
 **远程列表加载机制：**
 
@@ -213,6 +264,8 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 3. 异步完成后 emit `remote_list_updated(tab_id)` → 刷新当前 Tab 的 `RemoteFileTable`
 
 **SFTP 操作桥接：** `SftpUiHandler` 接收 Table 的 signal（upload/download/delete/rename/mkdir），内部 `asyncio.create_task` 调用 `sftp_service`，完成后 `on_refresh_ui` 刷新文件列表。
+
+**列表数据：** `sftp_service.listdir` 与本地 `listdir` 均跳过 `.` / `..`，由 Table 在非根目录时自行插入一行 `..`（`is_parent=True`），避免与服务器返回的条目重复。
 
 ### 6.4 终端 I/O 数据流
 
@@ -285,7 +338,7 @@ Tab 关闭
 
 | 文件 | 内容 | 是否含敏感信息 |
 |------|------|----------------|
-| `config/config.json` | 主题色、外观、语言、窗口尺寸、splitter 比例、文件 Table 列宽 | 否 |
+| `config/config.json` | 主题色、外观、语言、窗口尺寸、Session 树宽度、splitter 比例、文件面板布局 | 否 |
 | `config/sessions.json` | Session 树 JSON（无密码） | 否 |
 | `config/credentials.json` | Fernet 加密密码 `passwords[session_id]` | **是** |
 | `config/secret.key` | 解密 credentials 的密钥 | **是** |
@@ -317,19 +370,35 @@ Tab 关闭
   "window": {
     "width": 1400,
     "height": 900,
-    "main_splitter": 0.055,
+    "session_tree_width": 206,
     "vertical_splitter": 0.636,
     "border_width": 1,
-    "title_bar_height": 32
+    "title_bar_height": 32,
+    "tab_bar_height": 28
   },
   "file_panel": {
-    "local_column_widths": [240, 96, 144],
-    "remote_column_widths": [200, 96, 144, 72],
+    "local_column_widths": [500, 96, 144],
+    "remote_column_widths": [460, 96, 144, 72],
     "header_height_px": 24,
-    "row_height_px": 24
+    "row_height_px": 28,
+    "file_panel_toolbar_height": 30,
+    "file_panel_toolbar_font_size": 14,
+    "folder_name_bold": true,
+    "local_favorites": [
+      { "path": "D:\\\\Projects", "note": "work" }
+    ]
   }
 }
 ```
+
+| `file_panel` 字段 | 说明 |
+|-------------------|------|
+| `*_column_widths` | 本地/远端列宽（表头右键「保存列宽」写入） |
+| `header_height_px` / `row_height_px` | 表头 / 行高 |
+| `file_panel_toolbar_height` / `file_panel_toolbar_font_size` | 路径栏与导航按钮高度、字号 |
+| `folder_name_bold` | 文件夹名称是否粗体（默认 `true`；`..` 行也按目录粗体） |
+| `local_favorites` | 全局本地收藏路径列表（`path` + 可选 `note`） |
+| `local/remote_favorites_dialog_width/height` | 收藏管理对话框窗口尺寸 |
 
 `app_config.py` 在加载时对缺失字段做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` 默认值），保证向后兼容。
 
@@ -347,7 +416,7 @@ Tab 关闭
 
 | 文件 | 说明 |
 |------|------|
-| `config.json` | 主题、语言、终端/UI 字体、窗口尺寸与 splitter 比例 |
+| `config.json` | 主题、语言、终端/UI 字体、窗口尺寸、Session 树宽度与垂直 splitter 比例 |
 | `sessions.json` | Session 树（主机、端口、用户名、本地/远程路径等，无密码） |
 | `credentials.json` | Fernet 加密后的 Session 密码 |
 | `secret.key` | 解密密码所需的本地密钥 |
@@ -374,6 +443,8 @@ Tab 关闭
 - 运行时色板：`ui/theme.py` → `ThemePalette` dataclass
 - QSS 由 `build_stylesheet(palette)` 动态生成
 - Tab Bar 样式：`tab_background`（非激活）、`tab_selected_background`（激活）、`tab_hover_background`（悬停）
+- **动态垂直 padding（文字居中）：** Session 过滤框与文件面板路径 `QLineEdit` 按控件高度与 `QFontMetrics.lineSpacing` 计算 `filter_edit_pad_y` / `file_panel_toolbar_pad_y`，控件外框高度不变、仅调整内部 padding
+- 导航按钮样式：`#filePanelNavButton`（正方形 flat 按钮）
 - 终端配色尚未完全跟随 app theme（已知限制）
 
 修改主题色：同时更新 `ui/theme_defaults.py` 与用户 `config/config.json` 中的 `themes.*`。
@@ -392,13 +463,24 @@ Tab 关闭
 
 ## 11. 文件 Table 行为细节
 
-### 排序
+### 排序与 `..` 行
 
-- 文件夹优先于文件，`..` 始终最前
-- 默认按文件名列升序
-- 支持列头点击排序（名称不区分大小写）
+- 排序秩：`..`（parent，`SORT_RANK=0`）→ 文件夹（1）→ 文件（2）
+- **`..` 在升序与降序下都保持第一行**（`_FileSortItem.__lt__` 按当前排序方向特判 parent）
+- 根目录不显示 `..`：本地用 `_is_local_root`（Windows 为盘符根如 `D:\`；Unix 为 `/`）；远端用 `_is_remote_root`（`/`）
+- 默认按文件名列升序；列头点击排序（名称不区分大小写）
 - 刷新目录时 **保留当前排序**（`_begin_refresh` / `_end_refresh`）
 - 各 Tab 独立（各自 Table 实例）
+
+### 导航与交互
+
+- 双击目录 / `..`：进入子目录或上级
+- **表格空白区双击**（最后一行下方或最右列右侧）：非根目录时跳转上级（`_BaseFileTable.mouseDoubleClickEvent`）
+- 路径栏回车 / 导航工具栏按钮：`set_path` 跳转并刷新
+
+### 显示
+
+- `file_panel.folder_name_bold`：文件夹名（含 `..`）是否粗体
 
 ### 列宽
 
@@ -406,7 +488,7 @@ Tab 关闭
 
 ### 远程 Table 右键菜单
 
-刷新、新建目录、下载、重命名（单选）、删除。
+刷新、新建目录；有选中项时：复制文件名、复制路径名、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
 
 ---
 
@@ -457,6 +539,7 @@ sequenceDiagram
 |----|------|
 | Host key 校验 | `known_hosts=None`，生产环境需补充 |
 | 文件拖拽互传 | 尚未完整实现 |
+| 标题栏 Aero Snap | 手动 `window.move()` 拖动，无 Windows 贴边吸附（见 §5.1） |
 | 终端主题 | VT 配色未完全跟随 app theme |
 | 远程目录首次加载 | 可能需二次刷新（async 缓存时序） |
 | terminal_vt_widget.py | 从 nebula-shell 移植，可能有 PyQt5 兼容边角 |
@@ -505,6 +588,9 @@ python main.py
 3. 多 Tab 切换：路径、排序、splitter 比例互不影响
 4. 保存列宽后所有 Tab 同步
 5. Tab 关闭后 SSH 断开，面板销毁
+6. 文件面板导航：盘符/`/`/`~`/刷新可用；根目录无 `..`；空白区双击可返回上级
+7. 标题栏拖动后，最小化/最大化/关闭按钮 hover 仍正常
+8. 本地/远端 ★：菜单可跳转；管理对话框可增删路径与备注并持久化
 
 ---
 

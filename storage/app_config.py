@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from i18n.translator import DEFAULT_LOCALE, list_languages
 from log_util import logger
@@ -20,6 +20,7 @@ from ui.appearance_defaults import (
     _APPEARANCE_INT_DEFAULTS,
     default_appearance,
 )
+from models.favorite_path import FavoritePath, favorite_paths_from_raw, favorite_paths_to_raw
 from ui.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
@@ -95,6 +96,11 @@ class FilePanelConfig:
     file_panel_toolbar_height: int
     file_panel_toolbar_font_size: int
     folder_name_bold: bool
+    local_favorites: Tuple[FavoritePath, ...]
+    local_favorites_dialog_width: int
+    local_favorites_dialog_height: int
+    remote_favorites_dialog_width: int
+    remote_favorites_dialog_height: int
 
 
 @dataclass(frozen=True)
@@ -281,6 +287,10 @@ def _normalize_column_widths(value: Any, default: Tuple[int, ...]) -> Tuple[int,
     return tuple(widths)
 
 
+def _normalize_favorite_entries(raw: Any) -> list[dict[str, str]]:
+    return favorite_paths_to_raw(favorite_paths_from_raw(raw))
+
+
 def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     normalized: Dict[str, Any] = {
@@ -290,6 +300,7 @@ def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
         'remote_column_widths': list(
             _normalize_column_widths(raw.get('remote_column_widths'), DEFAULT_REMOTE_COLUMN_WIDTHS)
         ),
+        'local_favorites': _normalize_favorite_entries(raw.get('local_favorites')),
     }
     for key, default in _FILE_PANEL_INT_DEFAULTS.items():
         minimum, maximum = _FILE_PANEL_INT_BOUNDS[key]
@@ -308,6 +319,11 @@ def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
         file_panel_toolbar_height=file_panel['file_panel_toolbar_height'],
         file_panel_toolbar_font_size=file_panel['file_panel_toolbar_font_size'],
         folder_name_bold=file_panel['folder_name_bold'],
+        local_favorites=tuple(favorite_paths_from_raw(file_panel.get('local_favorites'))),
+        local_favorites_dialog_width=file_panel['local_favorites_dialog_width'],
+        local_favorites_dialog_height=file_panel['local_favorites_dialog_height'],
+        remote_favorites_dialog_width=file_panel['remote_favorites_dialog_width'],
+        remote_favorites_dialog_height=file_panel['remote_favorites_dialog_height'],
     )
 
 
@@ -572,6 +588,52 @@ def save_file_panel_column_widths(
         file_panel['remote_column_widths'] = list(
             _normalize_column_widths(list(remote_column_widths), DEFAULT_REMOTE_COLUMN_WIDTHS)
         )
+    file_panel = _normalize_file_panel(file_panel)
+    data = dict(_raw_config_cache)
+    data['file_panel'] = file_panel
+    _save_config(path, data)
+    _raw_config_cache = data
+    _config_cache = _to_app_config(data)
+    return _config_cache
+
+
+def save_file_panel_local_favorites(
+    favorites: Sequence[FavoritePath],
+    path: Path = CONFIG_FILE,
+) -> AppConfig:
+    """Persist global local favorite paths under file_panel.local_favorites."""
+    global _config_cache, _raw_config_cache
+    if _raw_config_cache is None:
+        _raw_config_cache = _normalize_config(_default_config())
+    file_panel = dict(_raw_config_cache.get('file_panel', _normalize_file_panel({})))
+    file_panel['local_favorites'] = favorite_paths_to_raw(favorites)
+    file_panel = _normalize_file_panel(file_panel)
+    data = dict(_raw_config_cache)
+    data['file_panel'] = file_panel
+    _save_config(path, data)
+    _raw_config_cache = data
+    _config_cache = _to_app_config(data)
+    return _config_cache
+
+
+def save_favorites_dialog_size(
+    *,
+    local: bool,
+    width: int,
+    height: int,
+    path: Path = CONFIG_FILE,
+) -> AppConfig:
+    """Persist favorites manage dialog size under file_panel.*_favorites_dialog_*."""
+    global _config_cache, _raw_config_cache
+    if _raw_config_cache is None:
+        _raw_config_cache = _normalize_config(_default_config())
+    file_panel = dict(_raw_config_cache.get('file_panel', _normalize_file_panel({})))
+    if local:
+        file_panel['local_favorites_dialog_width'] = width
+        file_panel['local_favorites_dialog_height'] = height
+    else:
+        file_panel['remote_favorites_dialog_width'] = width
+        file_panel['remote_favorites_dialog_height'] = height
     file_panel = _normalize_file_panel(file_panel)
     data = dict(_raw_config_cache)
     data['file_panel'] = file_panel

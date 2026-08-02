@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from typing import List, Optional, Sequence
 
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent
 from PyQt5.QtGui import QCloseEvent, QMouseEvent, QResizeEvent, QKeySequence
@@ -22,16 +22,24 @@ from core.connection_manager import ConnectionManager
 from core.path_resolver import resolve_local_path
 from core.sftp_ui_handler import SftpUiHandler
 from i18n import register_retranslator, set_language, tr
+from models.favorite_path import FavoritePath
 from models.session_item import SessionItem
 from storage.app_config import (
     DEFAULT_SESSION_TREE_WIDTH,
     get_app_config,
     save_app_preferences,
+    save_file_panel_local_favorites,
     save_window_state,
 )
 from storage.keyring_store import KeyringStore
 from storage.session_profile_store import SessionProfileStore
 from ui.about_dialog import show_about_dialog
+from ui.favorites_dialog import (
+    LocalFavoritesDialog,
+    RemoteFavoritesDialog,
+    show_local_favorites_dialog,
+    show_remote_favorites_dialog,
+)
 from ui.settings_dialog import AppSettings, prompt_app_settings
 from ui.file_table_panel import FilePanelsContainer, FilesPanel
 from ui.session_tree_panel import SessionTreePanel
@@ -80,6 +88,8 @@ class MainWindow(QMainWindow):
         self._session_save_timer.timeout.connect(self._save_session)
         self._active_tab_id: Optional[str] = None
         self._sftp_handlers: dict[str, SftpUiHandler] = {}
+        self._local_favorites_dialogs: dict[str, LocalFavoritesDialog] = {}
+        self._remote_favorites_dialogs: dict[str, RemoteFavoritesDialog] = {}
         self.setWindowTitle(tr('main.window_title'))
         self._main_splitter: Optional[QSplitter] = None
         self._vertical_splitter: Optional[QSplitter] = None
@@ -273,6 +283,102 @@ class MainWindow(QMainWindow):
         panel.remote_file_panel.path_changed.connect(
             lambda path, tid=tab_id: self._on_remote_path_changed_for_tab(tid, path),
         )
+        panel.local_file_panel.set_favorites_provider(
+            lambda tid=tab_id: self._local_favorites_for_tab(tid),
+        )
+        panel.local_file_panel.set_manage_favorites_handler(
+            lambda tid=tab_id: self._open_local_favorites_dialog(tid),
+        )
+        panel.remote_file_panel.set_favorites_provider(
+            lambda tid=tab_id: self._remote_favorites_for_tab(tid),
+        )
+        panel.remote_file_panel.set_manage_favorites_handler(
+            lambda tid=tab_id: self._open_remote_favorites_dialog(tid),
+        )
+
+    def _session_item_for_tab(self, tab_id: str) -> Optional[SessionItem]:
+        ssh = self.connection_manager.get_session(tab_id)
+        if ssh is None:
+            return None
+        return ssh.session_item
+
+    def _local_favorites_for_tab(
+        self,
+        tab_id: str,
+    ) -> tuple[Sequence[FavoritePath], Sequence[FavoritePath]]:
+        global_entries = list(get_app_config().file_panel.local_favorites)
+        session = self._session_item_for_tab(tab_id)
+        session_entries = list(session.local_favorites) if session is not None else []
+        return global_entries, session_entries
+
+    def _remote_favorites_for_tab(self, tab_id: str) -> Sequence[FavoritePath]:
+        session = self._session_item_for_tab(tab_id)
+        if session is None:
+            return []
+        return list(session.remote_favorites)
+
+    def _open_local_favorites_dialog(self, tab_id: str) -> None:
+        existing = self._local_favorites_dialogs.get(tab_id)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
+        panel = self.file_panels.get_panel(tab_id)
+        global_entries, session_entries = self._local_favorites_for_tab(tab_id)
+        dialog = show_local_favorites_dialog(
+            self,
+            global_entries=global_entries,
+            session_entries=session_entries,
+            current_path_provider=(
+                panel.local_file_panel.current_path if panel is not None else None
+            ),
+            on_save=lambda global_list, session_list, tid=tab_id: self._save_local_favorites(
+                tid, global_list, session_list,
+            ),
+        )
+        self._local_favorites_dialogs[tab_id] = dialog
+        dialog.destroyed.connect(
+            lambda _obj=None, tid=tab_id: self._local_favorites_dialogs.pop(tid, None),
+        )
+
+    def _open_remote_favorites_dialog(self, tab_id: str) -> None:
+        existing = self._remote_favorites_dialogs.get(tab_id)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
+        panel = self.file_panels.get_panel(tab_id)
+        dialog = show_remote_favorites_dialog(
+            self,
+            session_entries=self._remote_favorites_for_tab(tab_id),
+            current_path_provider=(
+                panel.remote_file_panel.current_path if panel is not None else None
+            ),
+            on_save=lambda entries, tid=tab_id: self._save_remote_favorites(tid, entries),
+        )
+        self._remote_favorites_dialogs[tab_id] = dialog
+        dialog.destroyed.connect(
+            lambda _obj=None, tid=tab_id: self._remote_favorites_dialogs.pop(tid, None),
+        )
+
+    def _save_local_favorites(
+        self,
+        tab_id: str,
+        global_entries: List[FavoritePath],
+        session_entries: List[FavoritePath],
+    ) -> None:
+        save_file_panel_local_favorites(global_entries)
+        session = self._session_item_for_tab(tab_id)
+        if session is not None:
+            session.local_favorites = list(session_entries)
+            self.session_panel.persist_sessions()
+
+    def _save_remote_favorites(self, tab_id: str, entries: List[FavoritePath]) -> None:
+        session = self._session_item_for_tab(tab_id)
+        if session is None:
+            return
+        session.remote_favorites = list(entries)
+        self.session_panel.persist_sessions()
 
     def _on_remote_list_updated(self, tab_id: str) -> None:
         if self._active_tab_id != tab_id:
@@ -414,6 +520,12 @@ class MainWindow(QMainWindow):
     def _on_tab_closed(self, tab_id: str) -> None:
         asyncio.create_task(self.connection_manager.close_tab(tab_id))
         self._sftp_handlers.pop(tab_id, None)
+        local_dialog = self._local_favorites_dialogs.pop(tab_id, None)
+        if local_dialog is not None:
+            local_dialog.close()
+        remote_dialog = self._remote_favorites_dialogs.pop(tab_id, None)
+        if remote_dialog is not None:
+            remote_dialog.close()
         self.file_panels.remove_panel(tab_id)
         if self._active_tab_id == tab_id:
             self._active_tab_id = None

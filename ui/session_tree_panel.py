@@ -121,6 +121,10 @@ class SessionTreePanel(QWidget):
         self._items = self.store.load()
         self._rebuild_tree()
 
+    def persist_sessions(self) -> None:
+        """Write current in-memory session tree (including favorites) to disk."""
+        self.store.save_items(self._items)
+
     def _rebuild_tree(self) -> None:
         self.tree.clear()
         for item in self._items:

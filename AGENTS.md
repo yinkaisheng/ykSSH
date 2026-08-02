@@ -18,6 +18,7 @@
 - 文件面板 SFTP 操作经 `SftpUiHandler` 桥接，不要在 `file_table_panel.py` 里直接调用 asyncssh。
 - Tab 关闭时 `ConnectionManager.close_tab()` 须 cancel 读任务并 `disconnect()`。
 - 不要提交 `config/` 下的运行时文件（含 `secret.key`、`credentials.json`）或含真实凭据的内容。
+- 若改动影响**架构、配置 schema、连接/文件面板/终端关键行为或已知限制**，同步更新 [IMPLEMENTATION.md](IMPLEMENTATION.md) 对应章节；纯样式微调、文案拼写、不改变对外行为的小修且文档未过时则可跳过。
 
 ## 代码约定
 
@@ -51,6 +52,7 @@ python main.py
 - [ ] Session 密码未写入 sessions.json
 - [ ] 未引入 PyQt6 或 paramiko（本项目统一 asyncssh）
 - [ ] 改动范围与任务相关，未无关重构
+- [ ] 若有架构/schema/关键行为变化，已同步更新 IMPLEMENTATION.md
 
 ## 延伸阅读
 

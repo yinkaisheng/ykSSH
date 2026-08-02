@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Iterable, List, Optional, Sequence
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, pyqtSignal
 from PyQt5.QtGui import QFont, QFontMetrics, QMouseEvent, QShowEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QAction,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -31,6 +33,7 @@ from PyQt5.QtWidgets import (
 )
 
 from i18n import tr
+from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
 from ui.dialog_i18n import ask_yes_no
 from ui.prompt_dialog import prompt_text
@@ -504,6 +507,9 @@ class RemoteFileTable(_BaseFileTable):
         selected = self._selected_entries()
         if selected:
             menu.addSeparator()
+            menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
+            menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected))
+            menu.addSeparator()
             menu.addAction(tr('file.download'), lambda: self._download_selected(selected))
             if len(selected) == 1:
                 menu.addAction(tr('file.rename'), self._rename)
@@ -523,6 +529,23 @@ class RemoteFileTable(_BaseFileTable):
         new_name = prompt_text(self, tr('file.rename'), tr('file.prompt_name'), initial=old_name)
         if new_name and new_name != old_name:
             self.rename_requested.emit(old_name, new_name)
+
+    def _copy_text(self, text: str) -> None:
+        clipboard = QApplication.clipboard()
+        if clipboard is not None and text:
+            clipboard.setText(text)
+
+    def _copy_selected_names(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+        selected = selected or self._selected_entries()
+        if not selected:
+            return
+        self._copy_text('\n'.join(name for name, _ in selected))
+
+    def _copy_selected_paths(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+        selected = selected or self._selected_entries()
+        if not selected:
+            return
+        self._copy_text('\n'.join(self._remote_full_path(name) for name, _ in selected))
 
     def _download_selected(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
         selected = selected or self._selected_entries()
@@ -636,6 +659,7 @@ class _FileNavToolbar(QWidget):
     """Square flat navigation buttons for local/remote file panel toolbars."""
 
     refresh_requested = pyqtSignal()
+    favorites_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget = None, *, local: bool = True) -> None:
         super().__init__(parent)
@@ -664,6 +688,7 @@ class _FileNavToolbar(QWidget):
         self._layout.addWidget(self._home_btn)
 
         self._favorites_btn = self._make_text_button(_FILE_NAV_FAVORITES_TEXT)
+        self._favorites_btn.clicked.connect(self.favorites_requested.emit)
         self._layout.addWidget(self._favorites_btn)
 
         self._refresh_btn = self._make_icon_button('SP_BrowserReload')
@@ -683,6 +708,9 @@ class _FileNavToolbar(QWidget):
 
     def set_navigate_handler(self, handler: Callable[[str], None]) -> None:
         self._navigate_handler = handler
+
+    def favorites_button(self) -> QToolButton:
+        return self._favorites_btn
 
     def _make_text_button(self, text: str) -> QToolButton:
         btn = QToolButton(self)
@@ -767,6 +795,40 @@ class _FileNavToolbar(QWidget):
             btn.setToolTip(tr('file.local_nav.drive', drive=drive))
 
 
+def _show_favorites_menu(
+    parent: QWidget,
+    anchor: QWidget,
+    *,
+    sections: Sequence[tuple[str, Sequence[FavoritePath]]],
+    on_manage: Optional[Callable[[], None]],
+    on_navigate: Optional[Callable[[str], None]],
+) -> None:
+    menu = QMenu(parent)
+    manage_action = menu.addAction(tr('file.favorites.manage'))
+    path_actions: list[tuple[QAction, str]] = []
+    for title, entries in sections:
+        if not entries:
+            continue
+        menu.addSeparator()
+        if title:
+            header = menu.addAction(title)
+            header.setEnabled(False)
+        for entry in entries:
+            action = menu.addAction(entry.display_text())
+            path_actions.append((action, entry.path))
+    chosen = menu.exec_(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+    if chosen is None:
+        return
+    if chosen == manage_action:
+        if on_manage is not None:
+            on_manage()
+        return
+    for action, path in path_actions:
+        if chosen == action and on_navigate is not None:
+            on_navigate(path)
+            return
+
+
 class LocalFilePanel(QWidget):
     """Local path bar + local file table."""
 
@@ -780,6 +842,10 @@ class LocalFilePanel(QWidget):
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
+        self._favorites_provider: Optional[
+            Callable[[], tuple[Sequence[FavoritePath], Sequence[FavoritePath]]]
+        ] = None
+        self._manage_favorites_handler: Optional[Callable[[], None]] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -817,9 +883,36 @@ class LocalFilePanel(QWidget):
         self.table.path_changed.connect(lambda _path: self._nav_toolbar.retranslate_ui())
         self.path_edit.returnPressed.connect(self._path_entered)
         self._nav_toolbar.refresh_requested.connect(self.table.refresh)
+        self._nav_toolbar.favorites_requested.connect(self._show_favorites_menu)
         self._setup_table_header_menu(is_local=True)
         self.table.refresh()
         self.path_edit.setText(self.table.current_path())
+
+    def set_favorites_provider(
+        self,
+        provider: Callable[[], tuple[Sequence[FavoritePath], Sequence[FavoritePath]]],
+    ) -> None:
+        """Provide (global_local_favorites, session_local_favorites)."""
+        self._favorites_provider = provider
+
+    def set_manage_favorites_handler(self, handler: Callable[[], None]) -> None:
+        self._manage_favorites_handler = handler
+
+    def _show_favorites_menu(self) -> None:
+        global_entries: Sequence[FavoritePath] = ()
+        session_entries: Sequence[FavoritePath] = ()
+        if self._favorites_provider is not None:
+            global_entries, session_entries = self._favorites_provider()
+        _show_favorites_menu(
+            self,
+            self._nav_toolbar.favorites_button(),
+            sections=(
+                (tr('file.favorites.global_local'), global_entries),
+                (tr('file.favorites.session_local'), session_entries),
+            ),
+            on_manage=self._manage_favorites_handler,
+            on_navigate=self.set_path,
+        )
 
     def _setup_table_header_menu(self, *, is_local: bool) -> None:
         header = self.table.horizontalHeader()
@@ -886,6 +979,8 @@ class RemoteFilePanel(QWidget):
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
         self._sftp_handler = None
+        self._favorites_provider: Optional[Callable[[], Sequence[FavoritePath]]] = None
+        self._manage_favorites_handler: Optional[Callable[[], None]] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -934,7 +1029,27 @@ class RemoteFilePanel(QWidget):
         self.table.path_changed.connect(lambda _path: self._nav_toolbar.retranslate_ui())
         self.path_edit.returnPressed.connect(self._path_entered)
         self._nav_toolbar.refresh_requested.connect(self._remote_refresh)
+        self._nav_toolbar.favorites_requested.connect(self._show_favorites_menu)
         self._setup_table_header_menu(is_local=False)
+
+    def set_favorites_provider(self, provider: Callable[[], Sequence[FavoritePath]]) -> None:
+        """Provide session remote favorites."""
+        self._favorites_provider = provider
+
+    def set_manage_favorites_handler(self, handler: Callable[[], None]) -> None:
+        self._manage_favorites_handler = handler
+
+    def _show_favorites_menu(self) -> None:
+        entries: Sequence[FavoritePath] = ()
+        if self._favorites_provider is not None:
+            entries = self._favorites_provider()
+        _show_favorites_menu(
+            self,
+            self._nav_toolbar.favorites_button(),
+            sections=((tr('file.favorites.session_remote'), entries),),
+            on_manage=self._manage_favorites_handler,
+            on_navigate=self.set_path,
+        )
 
     def _remote_home_path(self) -> str:
         if self._sftp_handler is not None:
