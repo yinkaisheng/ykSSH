@@ -377,13 +377,22 @@ Tab 关闭
     "tab_bar_height": 28
   },
   "file_panel": {
-    "local_column_widths": [500, 96, 144],
-    "remote_column_widths": [460, 96, 144, 72],
+    "local_column_widths": {
+      "Name": 460,
+      "Size": 96,
+      "Modified": 144,
+      "Permissions": 100
+    },
+    "remote_column_widths": {
+      "Name": 460,
+      "Size": 96,
+      "Modified": 144,
+      "Permissions": 100
+    },
     "header_height_px": 24,
     "row_height_px": 28,
     "file_panel_toolbar_height": 30,
     "file_panel_toolbar_font_size": 14,
-    "file_panel_nav_toolbar_font_size": 14,
     "file_panel_favorites_menu_font_size": 14,
     "folder_name_bold": true,
     "local_favorites": [
@@ -395,10 +404,9 @@ Tab 关闭
 
 | `file_panel` 字段 | 说明 |
 |-------------------|------|
-| `*_column_widths` | 本地/远端列宽（表头右键「保存列宽」写入） |
+| `*_column_widths` | 本地/远端列宽 dict（键为列名如 `Name`/`Size`/`Modified`/`Permissions`；表头右键「保存列宽」写入） |
 | `header_height_px` / `row_height_px` | 表头 / 行高 |
-| `file_panel_toolbar_height` / `file_panel_toolbar_font_size` | 路径栏高度、标签与路径输入框字号 |
-| `file_panel_nav_toolbar_font_size` | 导航按钮（盘符、`/`、`~`、收藏、刷新）字号 |
+| `file_panel_toolbar_height` / `file_panel_toolbar_font_size` | 路径栏高度、标签、路径输入框与导航按钮字号 |
 | `file_panel_favorites_menu_font_size` | 收藏弹出菜单字号 |
 | `folder_name_bold` | 文件夹名称是否粗体（默认 `true`；`..` 行也按目录粗体） |
 | `local_favorites` | 全局本地收藏路径列表（`path` + 可选 `note`） |

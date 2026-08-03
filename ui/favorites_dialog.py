@@ -10,7 +10,6 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -33,20 +32,6 @@ def _normalize_local_path(path: str) -> str:
     if not text:
         return ''
     return os.path.normpath(text)
-
-
-def _wrap_favorites_table(table: QTableWidget) -> QFrame:
-    """Host frame draws the rounded border so corners are not clipped by the viewport."""
-    host = QFrame()
-    host.setObjectName('fileTableHost')
-    host.setFrameShape(QFrame.NoFrame)
-    layout = QVBoxLayout(host)
-    # Keep the table inside the 1px border so corners stay filled.
-    layout.setContentsMargins(1, 1, 1, 1)
-    layout.setSpacing(0)
-    table.setObjectName('fileTableInner')
-    layout.addWidget(table)
-    return host
 
 
 class _FavoriteListEditor(QWidget):
@@ -89,7 +74,7 @@ class _FavoriteListEditor(QWidget):
             | QTableWidget.EditKeyPressed
             | QTableWidget.AnyKeyPressed,
         )
-        layout.addWidget(_wrap_favorites_table(self._table), 1)
+        layout.addWidget(self._table, 1)
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)

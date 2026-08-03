@@ -433,6 +433,7 @@ class MainWindow(QMainWindow):
             return
         self.file_panels.show_panel(tab_id)
         handler = self._ensure_sftp_handler(tab_id)
+        panel.local_file_panel.set_sftp_handler(handler)
         panel.remote_file_panel.set_sftp_handler(handler)
         callback = self.connection_manager.get_remote_list_callback(tab_id)
         if callback is not None:

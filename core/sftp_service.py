@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import asyncssh
 
+from core.file_permissions import format_unix_mode
 from log_util import logger
 
 
@@ -24,16 +25,17 @@ async def listdir(sftp: asyncssh.SFTPClient, path: str) -> List[Dict[str, Any]]:
             continue
         full = f'{path.rstrip("/")}/{name}' if path not in ('', '/') else f'/{name}'
         try:
-            attrs = await sftp.stat(full)
+            attrs = await sftp.lstat(full)
         except asyncssh.SFTPError:
             continue
-        is_dir = stat.S_ISDIR(attrs.permissions or 0)
+        mode = attrs.permissions or 0
+        is_dir = stat.S_ISDIR(mode)
         entries.append({
             'name': name,
             'is_dir': is_dir,
             'size': attrs.size or 0,
             'mtime': float(attrs.mtime or 0),
-            'perm': oct(attrs.permissions or 0)[-3:],
+            'perm': format_unix_mode(mode),
         })
     return entries
 

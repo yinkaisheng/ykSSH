@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import stat
 import sys
 from datetime import datetime
 from typing import Any, Callable, Iterable, List, Optional, Sequence
@@ -13,7 +15,6 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
     QApplication,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -32,11 +33,25 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from core.file_permissions import format_local_permission
 from i18n import tr
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
 from ui.dialog_i18n import ask_yes_no
+from ui.file_panel_defaults import (
+    DEFAULT_LOCAL_COLUMN_WIDTHS,
+    DEFAULT_REMOTE_COLUMN_WIDTHS,
+    FILE_TABLE_COLUMNS,
+    column_widths_from_table,
+)
 from ui.prompt_dialog import prompt_text
+
+_FILE_TABLE_COLUMN_LABEL_KEYS = {
+    'Name': 'file.name',
+    'Size': 'file.size',
+    'Modified': 'file.modified',
+    'Permissions': 'file.perm',
+}
 
 SORT_RANK = Qt.UserRole + 1
 SORT_NAME = Qt.UserRole + 2
@@ -73,20 +88,6 @@ class EqualSplitSplitter(QSplitter):
 
 
 _FILE_PANEL_TOOLBAR_TABLE_SPACING = 4
-
-
-def _wrap_file_table(table: QTableWidget) -> QFrame:
-    """Host frame draws the rounded border so corners are not clipped by the viewport."""
-    host = QFrame()
-    host.setObjectName('fileTableHost')
-    host.setFrameShape(QFrame.NoFrame)
-    layout = QVBoxLayout(host)
-    # Keep the table inside the 1px border so corners stay filled.
-    layout.setContentsMargins(1, 1, 1, 1)
-    layout.setSpacing(0)
-    table.setObjectName('fileTableInner')
-    layout.addWidget(table)
-    return host
 
 
 def _format_size(size: int) -> str:
@@ -233,21 +234,35 @@ def _apply_file_panel_toolbar_layout(
         widget.setFont(font)
     path_edit.setFixedHeight(toolbar_height)
     if nav_toolbar is not None and hasattr(nav_toolbar, 'apply_layout'):
-        nav_font = QFont()
-        nav_font.setPixelSize(cfg.file_panel_nav_toolbar_font_size)
-        nav_toolbar.apply_layout(toolbar_height, nav_font)
+        nav_toolbar.apply_layout(toolbar_height, font)
 
 
-def _apply_column_widths(table: QTableWidget, column_widths: tuple[int, ...]) -> None:
+def _file_table_header_labels(columns: tuple[str, ...] = FILE_TABLE_COLUMNS) -> list[str]:
+    return [tr(_FILE_TABLE_COLUMN_LABEL_KEYS[key]) for key in columns]
+
+
+def _apply_column_widths(
+    table: QTableWidget,
+    columns: tuple[str, ...],
+    widths: dict[str, int],
+    *,
+    defaults: dict[str, int],
+) -> None:
     header = table.horizontalHeader()
-    for index, width in enumerate(column_widths):
+    for index, column in enumerate(columns):
         if index >= table.columnCount():
             break
         header.setSectionResizeMode(index, QHeaderView.Interactive)
-        table.setColumnWidth(index, width)
+        table.setColumnWidth(index, widths.get(column, defaults.get(column, 100)))
 
 
-def _apply_file_table_layout(table: QTableWidget, column_widths: tuple[int, ...]) -> None:
+def _apply_file_table_layout(
+    table: QTableWidget,
+    columns: tuple[str, ...],
+    widths: dict[str, int],
+    *,
+    defaults: dict[str, int],
+) -> None:
     cfg = get_app_config().file_panel
     header = table.horizontalHeader()
     if not isinstance(header, _FileTableHeaderView):
@@ -264,7 +279,7 @@ def _apply_file_table_layout(table: QTableWidget, column_widths: tuple[int, ...]
 
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-    _apply_column_widths(table, column_widths)
+    _apply_column_widths(table, columns, widths, defaults=defaults)
 
 
 class _BaseFileTable(QTableWidget):
@@ -277,7 +292,7 @@ class _BaseFileTable(QTableWidget):
         super().__init__(parent)
         self.setHorizontalHeader(_FileTableHeaderView(self))
         self.setSelectionBehavior(QTableWidget.SelectRows)
-        self.setSelectionMode(QTableWidget.SingleSelection)
+        self.setSelectionMode(QTableWidget.ExtendedSelection)
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
@@ -400,18 +415,126 @@ class _BaseFileTable(QTableWidget):
 
 
 class LocalFileTable(_BaseFileTable):
+    upload_requested = pyqtSignal(list)
+
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
-        self.setColumnCount(3)
-        self.setHorizontalHeaderLabels([
-            tr('file.name'), tr('file.size'), tr('file.modified'),
-        ])
-        _apply_file_table_layout(self, get_app_config().file_panel.local_column_widths)
+        self.setColumnCount(len(FILE_TABLE_COLUMNS))
+        self.setHorizontalHeaderLabels(_file_table_header_labels())
+        _apply_file_table_layout(
+            self,
+            FILE_TABLE_COLUMNS,
+            get_app_config().file_panel.local_column_widths,
+            defaults=DEFAULT_LOCAL_COLUMN_WIDTHS,
+        )
         self._apply_default_sort()
         self._current_path = os.path.expanduser('~')
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
     def _is_at_root(self) -> bool:
         return _is_local_root(self._current_path)
+
+    def _selected_entries(self) -> list[tuple[str, str]]:
+        rows = sorted({idx.row() for idx in self.selectedIndexes()})
+        result: list[tuple[str, str]] = []
+        for row in rows:
+            item = self.item(row, 0)
+            if item is None or item.text() == '..':
+                continue
+            entry_type = item.data(Qt.UserRole) or 'file'
+            result.append((item.text(), entry_type))
+        return result
+
+    def _local_full_path(self, name: str) -> str:
+        return os.path.join(self._current_path, name)
+
+    def _show_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        menu.addAction(tr('file.refresh'), self.refresh)
+        menu.addAction(tr('file.mkdir'), self._mkdir)
+        selected = self._selected_entries()
+        if selected:
+            menu.addSeparator()
+            menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
+            menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected))
+            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
+            menu.addSeparator()
+            menu.addAction(tr('file.upload'), lambda: self._upload_selected(selected))
+            if len(selected) == 1:
+                menu.addAction(tr('file.rename'), self._rename)
+            menu.addAction(tr('file.delete'), self._delete_selected)
+        else:
+            menu.addSeparator()
+            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
+        menu.exec_(self.viewport().mapToGlobal(pos))
+
+    def _mkdir(self) -> None:
+        name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
+        if not name:
+            return
+        try:
+            os.mkdir(self._local_full_path(name))
+        except OSError:
+            return
+        self.refresh()
+
+    def _rename(self) -> None:
+        selected = self._selected_entries()
+        if len(selected) != 1:
+            return
+        old_name, _ = selected[0]
+        new_name = prompt_text(self, tr('file.rename'), tr('file.prompt_name'), initial=old_name)
+        if not new_name or new_name == old_name:
+            return
+        try:
+            os.rename(self._local_full_path(old_name), self._local_full_path(new_name))
+        except OSError:
+            return
+        self.refresh()
+
+    def _copy_text(self, text: str) -> None:
+        clipboard = QApplication.clipboard()
+        if clipboard is not None and text:
+            clipboard.setText(text)
+
+    def _copy_selected_names(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+        selected = selected or self._selected_entries()
+        if not selected:
+            return
+        self._copy_text('\n'.join(name for name, _ in selected))
+
+    def _copy_selected_paths(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+        selected = selected or self._selected_entries()
+        if not selected:
+            return
+        self._copy_text('\n'.join(self._local_full_path(name) for name, _ in selected))
+
+    def _copy_current_directory_path(self) -> None:
+        self._copy_text(self._current_path)
+
+    def _upload_selected(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+        selected = selected or self._selected_entries()
+        if not selected:
+            return
+        self.upload_requested.emit([self._local_full_path(name) for name, _ in selected])
+
+    def _delete_selected(self) -> None:
+        selected = self._selected_entries()
+        if not selected:
+            return
+        if not ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
+            return
+        for name, entry_type in selected:
+            path = self._local_full_path(name)
+            try:
+                if entry_type == 'dir':
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+            except OSError:
+                continue
+        self.refresh()
 
     def refresh(self) -> None:
         path = self._current_path
@@ -425,27 +548,28 @@ class LocalFileTable(_BaseFileTable):
             self._end_refresh(sort_column, sort_order)
             return
 
-        dirs: list[tuple[str, int, float]] = []
-        files: list[tuple[str, int, float]] = []
+        dirs: list[tuple[str, int, float, str]] = []
+        files: list[tuple[str, int, float, str]] = []
         for name in entries:
             if name in ('.', '..'):
                 continue
             full = os.path.join(path, name)
             try:
-                stat = os.stat(full)
+                st = os.lstat(full)
             except OSError:
                 continue
-            if os.path.isdir(full):
-                dirs.append((name, stat.st_size, stat.st_mtime))
+            perm = format_local_permission(full)
+            if stat.S_ISDIR(st.st_mode):
+                dirs.append((name, st.st_size, st.st_mtime, perm))
             else:
-                files.append((name, stat.st_size, stat.st_mtime))
+                files.append((name, st.st_size, st.st_mtime, perm))
 
         dirs.sort(key=lambda item: item[0].casefold())
         files.sort(key=lambda item: item[0].casefold())
-        for name, size, mtime in dirs:
-            self._append_entry_row(name, 'dir', size, mtime)
-        for name, size, mtime in files:
-            self._append_entry_row(name, 'file', size, mtime)
+        for name, size, mtime, perm in dirs:
+            self._append_entry_row(name, 'dir', size, mtime, perm)
+        for name, size, mtime, perm in files:
+            self._append_entry_row(name, 'file', size, mtime, perm)
         self._end_refresh(sort_column, sort_order)
 
     def _enter_directory(self, name: str) -> None:
@@ -473,11 +597,14 @@ class RemoteFileTable(_BaseFileTable):
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
-        self.setColumnCount(4)
-        self.setHorizontalHeaderLabels([
-            tr('file.name'), tr('file.size'), tr('file.modified'), tr('file.perm'),
-        ])
-        _apply_file_table_layout(self, get_app_config().file_panel.remote_column_widths)
+        self.setColumnCount(len(FILE_TABLE_COLUMNS))
+        self.setHorizontalHeaderLabels(_file_table_header_labels())
+        _apply_file_table_layout(
+            self,
+            FILE_TABLE_COLUMNS,
+            get_app_config().file_panel.remote_column_widths,
+            defaults=DEFAULT_REMOTE_COLUMN_WIDTHS,
+        )
         self._apply_default_sort()
         self._current_path = '/'
         self._list_callback: Optional[Callable[[str], Any]] = None
@@ -511,12 +638,15 @@ class RemoteFileTable(_BaseFileTable):
             menu.addSeparator()
             menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
             menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected))
-            menu.addAction(tr('file.copy_parent_dir'), self._copy_current_directory_path)
+            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
             menu.addSeparator()
             menu.addAction(tr('file.download'), lambda: self._download_selected(selected))
             if len(selected) == 1:
                 menu.addAction(tr('file.rename'), self._rename)
             menu.addAction(tr('file.delete'), self._delete_selected)
+        else:
+            menu.addSeparator()
+            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
         menu.exec_(self.viewport().mapToGlobal(pos))
 
     def _mkdir(self) -> None:
@@ -846,7 +976,7 @@ class LocalFilePanel(QWidget):
         self,
         parent: QWidget = None,
         *,
-        on_save_column_widths: Optional[Callable[[bool, tuple[int, ...]], None]] = None,
+        on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
@@ -854,6 +984,7 @@ class LocalFilePanel(QWidget):
             Callable[[], tuple[Sequence[FavoritePath], Sequence[FavoritePath]]]
         ] = None
         self._manage_favorites_handler: Optional[Callable[[], None]] = None
+        self._sftp_handler = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -883,8 +1014,7 @@ class LocalFilePanel(QWidget):
         )
         layout.addWidget(self._toolbar)
 
-        self._table_host = _wrap_file_table(self.table)
-        layout.addWidget(self._table_host, 1)
+        layout.addWidget(self.table, 1)
 
         self.table.path_changed.connect(self.path_edit.setText)
         self.table.path_changed.connect(self.path_changed.emit)
@@ -905,6 +1035,16 @@ class LocalFilePanel(QWidget):
 
     def set_manage_favorites_handler(self, handler: Callable[[], None]) -> None:
         self._manage_favorites_handler = handler
+
+    def set_sftp_handler(self, handler) -> None:
+        if self._sftp_handler is not None:
+            try:
+                self.table.upload_requested.disconnect()
+            except TypeError:
+                pass
+        self._sftp_handler = handler
+        if handler is not None:
+            self.table.upload_requested.connect(handler.upload_local_paths)
 
     def _show_favorites_menu(self) -> None:
         global_entries: Sequence[FavoritePath] = ()
@@ -935,7 +1075,9 @@ class LocalFilePanel(QWidget):
         chosen = menu.exec_(self.table.horizontalHeader().mapToGlobal(pos))
         if chosen != save_action:
             return
-        widths = tuple(self.table.columnWidth(index) for index in range(self.table.columnCount()))
+        widths = column_widths_from_table(
+            [self.table.columnWidth(index) for index in range(self.table.columnCount())]
+        )
         if self._on_save_column_widths is not None:
             self._on_save_column_widths(is_local, widths)
 
@@ -961,16 +1103,19 @@ class LocalFilePanel(QWidget):
             nav_toolbar=self._nav_toolbar,
         )
 
-    def apply_column_widths(self, widths: tuple[int, ...]) -> None:
-        _apply_column_widths(self.table, widths)
+    def apply_column_widths(self, widths: dict[str, int]) -> None:
+        _apply_column_widths(
+            self.table,
+            FILE_TABLE_COLUMNS,
+            widths,
+            defaults=DEFAULT_LOCAL_COLUMN_WIDTHS,
+        )
 
     def retranslate_ui(self) -> None:
         self._label.setText(tr('file.local'))
         self._nav_toolbar.retranslate_ui()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
-        self.table.setHorizontalHeaderLabels([
-            tr('file.name'), tr('file.size'), tr('file.modified'),
-        ])
+        self.table.setHorizontalHeaderLabels(_file_table_header_labels())
 
 
 class RemoteFilePanel(QWidget):
@@ -982,7 +1127,7 @@ class RemoteFilePanel(QWidget):
         self,
         parent: QWidget = None,
         *,
-        on_save_column_widths: Optional[Callable[[bool, tuple[int, ...]], None]] = None,
+        on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
@@ -1020,17 +1165,11 @@ class RemoteFilePanel(QWidget):
         layout.addWidget(self._toolbar)
 
         self.placeholder = QLabel(tr('file.not_connected'))
+        self.placeholder.setObjectName('filePanelPlaceholder')
         self.placeholder.setAlignment(Qt.AlignCenter)
-        self._placeholder_host = QFrame()
-        self._placeholder_host.setObjectName('fileTableHost')
-        self._placeholder_host.setFrameShape(QFrame.NoFrame)
-        placeholder_layout = QVBoxLayout(self._placeholder_host)
-        placeholder_layout.setContentsMargins(1, 1, 1, 1)
-        placeholder_layout.addWidget(self.placeholder)
-        self._table_host = _wrap_file_table(self.table)
-        layout.addWidget(self._placeholder_host, 1)
-        layout.addWidget(self._table_host, 1)
-        self._table_host.hide()
+        layout.addWidget(self.placeholder, 1)
+        layout.addWidget(self.table, 1)
+        self.table.hide()
 
         self.table.path_changed.connect(self.path_edit.setText)
         self.table.path_changed.connect(self.path_changed.emit)
@@ -1077,7 +1216,9 @@ class RemoteFilePanel(QWidget):
         chosen = menu.exec_(self.table.horizontalHeader().mapToGlobal(pos))
         if chosen != save_action:
             return
-        widths = tuple(self.table.columnWidth(index) for index in range(self.table.columnCount()))
+        widths = column_widths_from_table(
+            [self.table.columnWidth(index) for index in range(self.table.columnCount())]
+        )
         if self._on_save_column_widths is not None:
             self._on_save_column_widths(is_local, widths)
 
@@ -1109,19 +1250,24 @@ class RemoteFilePanel(QWidget):
             nav_toolbar=self._nav_toolbar,
         )
 
-    def apply_column_widths(self, widths: tuple[int, ...]) -> None:
-        _apply_column_widths(self.table, widths)
+    def apply_column_widths(self, widths: dict[str, int]) -> None:
+        _apply_column_widths(
+            self.table,
+            FILE_TABLE_COLUMNS,
+            widths,
+            defaults=DEFAULT_REMOTE_COLUMN_WIDTHS,
+        )
 
     def set_list_callback(self, callback: Callable[[str], List[dict]]) -> None:
         self.table.set_list_callback(callback)
-        self._placeholder_host.hide()
-        self._table_host.show()
+        self.placeholder.hide()
+        self.table.show()
         self._remote_refresh()
 
     def clear_remote(self) -> None:
         self.table.clear_remote()
-        self._table_host.hide()
-        self._placeholder_host.show()
+        self.table.hide()
+        self.placeholder.show()
         self.path_edit.clear()
 
     def set_sftp_handler(self, handler) -> None:
@@ -1152,9 +1298,7 @@ class RemoteFilePanel(QWidget):
         self._nav_toolbar.retranslate_ui()
         self.placeholder.setText(tr('file.not_connected'))
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
-        self.table.setHorizontalHeaderLabels([
-            tr('file.name'), tr('file.size'), tr('file.modified'), tr('file.perm'),
-        ])
+        self.table.setHorizontalHeaderLabels(_file_table_header_labels())
 
 
 class FilesPanel(QWidget):
@@ -1164,7 +1308,7 @@ class FilesPanel(QWidget):
         self,
         parent: QWidget = None,
         *,
-        on_save_column_widths: Optional[Callable[[bool, tuple[int, ...]], None]] = None,
+        on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
@@ -1179,7 +1323,7 @@ class FilesPanel(QWidget):
         self.file_splitter = EqualSplitSplitter(Qt.Horizontal)
         self.file_splitter.setObjectName('filePanelSplitter')
         self.file_splitter.setChildrenCollapsible(False)
-        self.file_splitter.setHandleWidth(6)
+        self.file_splitter.setHandleWidth(4)
 
         self.local_file_panel = LocalFilePanel(
             on_save_column_widths=self._on_save_column_widths,
@@ -1271,7 +1415,7 @@ class FilePanelsContainer(QWidget):
         if self._stack.currentWidget() is panel:
             self.show_empty()
 
-    def _on_save_column_widths(self, is_local: bool, widths: tuple[int, ...]) -> None:
+    def _on_save_column_widths(self, is_local: bool, widths: dict[str, int]) -> None:
         if is_local:
             save_file_panel_column_widths(local_column_widths=widths)
             for panel in self._panels.values():

@@ -4,11 +4,138 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt5.QtCore import Qt, QEvent, QPoint
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtCore import Qt, QEvent, QPoint, QRectF, QPointF
+from PyQt5.QtGui import QMouseEvent, QPainter, QPen, QPalette, QColor
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QMenuBar, QApplication, QSizePolicy, QToolButton, QWidget
 
 from i18n import tr
+from ui.theme import active_theme_palette
+
+_TITLE_GLYPH_LINE_PX = 2
+_CLOSE_HOVER_COLOR = QColor('#e81123')
+_CLOSE_PRESSED_COLOR = QColor('#c50f1f')
+
+
+class _WindowTitleButton(QToolButton):
+    """Title-bar control drawn with simple vector glyphs instead of platform icons."""
+
+    def __init__(
+        self,
+        parent: QWidget = None,
+        *,
+        kind: str,
+    ) -> None:
+        super().__init__(parent)
+        self._kind = kind
+        self._show_restore = False
+        self.setObjectName('WindowTitleButton')
+        self.setAutoRaise(False)
+        self.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def set_show_restore(self, show_restore: bool) -> None:
+        if self._kind != 'maximize':
+            return
+        if self._show_restore == show_restore:
+            return
+        self._show_restore = show_restore
+        self.update()
+
+    def _glyph_color(self) -> QColor:
+        if self.objectName() == 'WindowCloseButton' and (self.underMouse() or self.isDown()):
+            return QColor('#ffffff')
+        return self.palette().color(QPalette.WindowText)
+
+    def enterEvent(self, event) -> None:  # type: ignore[override]
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event) -> None:  # type: ignore[override]
+        super().leaveEvent(event)
+        self.update()
+
+    @staticmethod
+    def _glyph_pen(color: QColor) -> QPen:
+        pen = QPen(color)
+        pen.setWidth(_TITLE_GLYPH_LINE_PX)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.FlatCap)
+        pen.setJoinStyle(Qt.MiterJoin)
+        return pen
+
+    def _paint_minimize(self, painter: QPainter, rect: QRectF) -> None:
+        color = self._glyph_color()
+        margin_x = rect.width() * 0.30
+        y = rect.center().y()
+        painter.setPen(self._glyph_pen(color))
+        painter.drawLine(
+            QPointF(rect.left() + margin_x, y),
+            QPointF(rect.right() - margin_x, y),
+        )
+
+    def _paint_maximize(self, painter: QPainter, rect: QRectF) -> None:
+        color = self._glyph_color()
+        painter.setPen(self._glyph_pen(color))
+        painter.setBrush(Qt.NoBrush)
+        size = min(rect.width(), rect.height()) * 0.46
+        box = QRectF(0, 0, size, size * 0.82)
+        box.moveCenter(rect.center())
+        painter.drawRect(box)
+
+    def _paint_restore(self, painter: QPainter, rect: QRectF) -> None:
+        color = self._glyph_color()
+        painter.setPen(self._glyph_pen(color))
+        painter.setBrush(Qt.NoBrush)
+        size = min(rect.width(), rect.height()) * 0.40
+        offset = size * 0.24
+        back = QRectF(0, 0, size, size * 0.82)
+        back.moveCenter(QPointF(rect.center().x() - offset * 0.5, rect.center().y() - offset * 0.5))
+        front = QRectF(0, 0, size, size * 0.82)
+        front.moveCenter(QPointF(rect.center().x() + offset * 0.5, rect.center().y() + offset * 0.5))
+        painter.drawRect(back)
+        painter.drawRect(front)
+
+    def _paint_close(self, painter: QPainter, rect: QRectF) -> None:
+        color = self._glyph_color()
+        margin = rect.width() * 0.30
+        cx = rect.center().x()
+        cy = rect.center().y()
+        half = min((rect.width() - 2 * margin) / 2.0, (rect.height() - 2 * margin) / 2.0)
+        painter.setPen(self._glyph_pen(color))
+        painter.drawLine(QPointF(cx - half, cy - half), QPointF(cx + half, cy + half))
+        painter.drawLine(QPointF(cx + half, cy - half), QPointF(cx - half, cy + half))
+
+    def _paint_button_background(self, painter: QPainter) -> None:
+        rect = self.rect()
+        if self.objectName() == 'WindowCloseButton':
+            if self.isDown():
+                painter.fillRect(rect, _CLOSE_PRESSED_COLOR)
+            elif self.underMouse():
+                painter.fillRect(rect, _CLOSE_HOVER_COLOR)
+            return
+        palette = active_theme_palette()
+        if self.isDown():
+            painter.fillRect(rect, QColor(palette.border))
+        elif self.underMouse():
+            painter.fillRect(rect, QColor(palette.background_hover))
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, False)
+            self._paint_button_background(painter)
+            rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            if self._kind == 'minimize':
+                self._paint_minimize(painter, rect)
+            elif self._kind == 'maximize':
+                if self._show_restore:
+                    self._paint_restore(painter, rect)
+                else:
+                    self._paint_maximize(painter, rect)
+            elif self._kind == 'close':
+                self._paint_close(painter, rect)
+        finally:
+            painter.end()
 
 
 class WindowTitleBar(QWidget):
@@ -64,9 +191,9 @@ class WindowTitleBar(QWidget):
         self._controls_layout.setContentsMargins(0, 0, 0, 0)
         self._controls_layout.setSpacing(0)
 
-        self._min_btn = self._make_window_button('SP_TitleBarMinButton')
-        self._max_btn = self._make_window_button('SP_TitleBarMaxButton')
-        self._close_btn = self._make_window_button('SP_TitleBarCloseButton')
+        self._min_btn = _WindowTitleButton(self, kind='minimize')
+        self._max_btn = _WindowTitleButton(self, kind='maximize')
+        self._close_btn = _WindowTitleButton(self, kind='close')
         self._close_btn.setObjectName('WindowCloseButton')
         self._window_buttons = (self._min_btn, self._max_btn, self._close_btn)
         self._min_btn.clicked.connect(self._window.showMinimized)
@@ -77,6 +204,7 @@ class WindowTitleBar(QWidget):
         layout.addWidget(self._controls_box, 0)
 
         self._window.installEventFilter(self)
+        self._sync_maximize_button()
 
     def set_title(self, title: str) -> None:
         self._title_label.setText(title)
@@ -106,20 +234,15 @@ class WindowTitleBar(QWidget):
     def apply_height(self, height: int) -> None:
         self.apply_layout(height, border_width=self._border_width)
 
-    def _make_window_button(self, icon_name: str) -> QToolButton:
-        btn = QToolButton(self)
-        btn.setObjectName('WindowTitleButton')
-        btn.setAutoRaise(True)
-        btn.setFixedSize(16, 16)
-        icon = getattr(self.style().StandardPixmap, icon_name)
-        btn.setIcon(self.style().standardIcon(icon))
-        return btn
+    def _sync_maximize_button(self) -> None:
+        self._max_btn.set_show_restore(self._window.isMaximized())
 
     def _toggle_maximize(self) -> None:
         if self._window.isMaximized():
             self._window.showNormal()
         else:
             self._window.showMaximized()
+        self._sync_maximize_button()
 
     def _clear_title_drag(self) -> None:
         self._drag_press_global = None
@@ -153,9 +276,5 @@ class WindowTitleBar(QWidget):
                 self._clear_title_drag()
                 return False
         if watched is self._window and event.type() == QEvent.WindowStateChange:
-            if self._window.isMaximized():
-                icon = self.style().StandardPixmap.SP_TitleBarNormalButton
-            else:
-                icon = self.style().StandardPixmap.SP_TitleBarMaxButton
-            self._max_btn.setIcon(self.style().standardIcon(icon))
+            self._sync_maximize_button()
         return super().eventFilter(watched, event)

@@ -24,9 +24,11 @@ from models.favorite_path import FavoritePath, favorite_paths_from_raw, favorite
 from ui.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
+    FILE_TABLE_COLUMNS,
     _FILE_PANEL_BOOL_DEFAULTS,
     _FILE_PANEL_INT_BOUNDS,
     _FILE_PANEL_INT_DEFAULTS,
+    clamp_column_width,
     default_file_panel,
 )
 from ui.theme_defaults import DEFAULT_THEMES, DEFAULT_THEME_NAMES, merge_theme_colors
@@ -89,13 +91,12 @@ class WindowConfig:
 
 @dataclass(frozen=True)
 class FilePanelConfig:
-    local_column_widths: Tuple[int, ...]
-    remote_column_widths: Tuple[int, ...]
+    local_column_widths: Dict[str, int]
+    remote_column_widths: Dict[str, int]
     header_height_px: int
     row_height_px: int
     file_panel_toolbar_height: int
     file_panel_toolbar_font_size: int
-    file_panel_nav_toolbar_font_size: int
     file_panel_favorites_menu_font_size: int
     folder_name_bold: bool
     local_favorites: Tuple[FavoritePath, ...]
@@ -274,19 +275,25 @@ def _normalize_language(value: Any) -> str:
     return code if code in available else DEFAULT_LOCALE
 
 
-def _normalize_column_widths(value: Any, default: Tuple[int, ...]) -> Tuple[int, ...]:
-    if not isinstance(value, list):
-        return default
-    widths: list[int] = []
-    for item in value:
-        try:
-            width = int(item)
-        except (TypeError, ValueError):
-            continue
-        widths.append(max(40, min(2000, width)))
-    if len(widths) != len(default):
-        return default
-    return tuple(widths)
+def _normalize_column_widths(
+    value: Any,
+    *,
+    default: Dict[str, int],
+    columns: Tuple[str, ...] = FILE_TABLE_COLUMNS,
+) -> Dict[str, int]:
+    if isinstance(value, dict):
+        normalized: Dict[str, int] = {}
+        for key in columns:
+            if key in value:
+                normalized[key] = clamp_column_width(value[key], default.get(key, 100))
+            elif key in default:
+                normalized[key] = default[key]
+        for key, raw_width in value.items():
+            if key not in normalized:
+                normalized[key] = clamp_column_width(raw_width, default.get(key, 100))
+        return normalized
+
+    return dict(default)
 
 
 def _normalize_favorite_entries(raw: Any) -> list[dict[str, str]]:
@@ -296,11 +303,13 @@ def _normalize_favorite_entries(raw: Any) -> list[dict[str, str]]:
 def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     normalized: Dict[str, Any] = {
-        'local_column_widths': list(
-            _normalize_column_widths(raw.get('local_column_widths'), DEFAULT_LOCAL_COLUMN_WIDTHS)
+        'local_column_widths': _normalize_column_widths(
+            raw.get('local_column_widths'),
+            default=DEFAULT_LOCAL_COLUMN_WIDTHS,
         ),
-        'remote_column_widths': list(
-            _normalize_column_widths(raw.get('remote_column_widths'), DEFAULT_REMOTE_COLUMN_WIDTHS)
+        'remote_column_widths': _normalize_column_widths(
+            raw.get('remote_column_widths'),
+            default=DEFAULT_REMOTE_COLUMN_WIDTHS,
         ),
         'local_favorites': _normalize_favorite_entries(raw.get('local_favorites')),
     }
@@ -314,13 +323,12 @@ def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
 
 def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
     return FilePanelConfig(
-        local_column_widths=tuple(file_panel['local_column_widths']),
-        remote_column_widths=tuple(file_panel['remote_column_widths']),
+        local_column_widths=dict(file_panel['local_column_widths']),
+        remote_column_widths=dict(file_panel['remote_column_widths']),
         header_height_px=file_panel['header_height_px'],
         row_height_px=file_panel['row_height_px'],
         file_panel_toolbar_height=file_panel['file_panel_toolbar_height'],
         file_panel_toolbar_font_size=file_panel['file_panel_toolbar_font_size'],
-        file_panel_nav_toolbar_font_size=file_panel['file_panel_nav_toolbar_font_size'],
         file_panel_favorites_menu_font_size=file_panel['file_panel_favorites_menu_font_size'],
         folder_name_bold=file_panel['folder_name_bold'],
         local_favorites=tuple(favorite_paths_from_raw(file_panel.get('local_favorites'))),
@@ -576,8 +584,8 @@ def save_window_state(
 
 def save_file_panel_column_widths(
     *,
-    local_column_widths: Optional[Tuple[int, ...]] = None,
-    remote_column_widths: Optional[Tuple[int, ...]] = None,
+    local_column_widths: Optional[Dict[str, int]] = None,
+    remote_column_widths: Optional[Dict[str, int]] = None,
     path: Path = CONFIG_FILE,
 ) -> AppConfig:
     global _config_cache, _raw_config_cache
@@ -585,12 +593,14 @@ def save_file_panel_column_widths(
         _raw_config_cache = _normalize_config(_default_config())
     file_panel = dict(_raw_config_cache.get('file_panel', _normalize_file_panel({})))
     if local_column_widths is not None:
-        file_panel['local_column_widths'] = list(
-            _normalize_column_widths(list(local_column_widths), DEFAULT_LOCAL_COLUMN_WIDTHS)
+        file_panel['local_column_widths'] = _normalize_column_widths(
+            local_column_widths,
+            default=DEFAULT_LOCAL_COLUMN_WIDTHS,
         )
     if remote_column_widths is not None:
-        file_panel['remote_column_widths'] = list(
-            _normalize_column_widths(list(remote_column_widths), DEFAULT_REMOTE_COLUMN_WIDTHS)
+        file_panel['remote_column_widths'] = _normalize_column_widths(
+            remote_column_widths,
+            default=DEFAULT_REMOTE_COLUMN_WIDTHS,
         )
     file_panel = _normalize_file_panel(file_panel)
     data = dict(_raw_config_cache)
