@@ -96,6 +96,7 @@ file.mkdir=新建文件夹
 file.rename=重命名
 file.copy_name=复制文件名
 file.copy_path=复制路径名
+file.copy_parent_dir=复制所在目录路径
 file.path_placeholder=路径
 file.not_connected=请先连接会话以浏览远程文件。
 file.prompt_name=名称：

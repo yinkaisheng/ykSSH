@@ -454,6 +454,7 @@ class MainWindow(QMainWindow):
     async def _connect_session_async(self, session_item: SessionItem) -> None:
         tab_id, terminal = self.terminal_tabs.add_terminal_tab(session_item.name)
         self._active_tab_id = tab_id
+        terminal.setFocus(Qt.OtherFocusReason)
         panel = self.file_panels.create_panel(tab_id)
         self.file_panels.show_panel(tab_id)
         self._register_files_panel(tab_id, panel)

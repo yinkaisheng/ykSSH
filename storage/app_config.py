@@ -95,6 +95,8 @@ class FilePanelConfig:
     row_height_px: int
     file_panel_toolbar_height: int
     file_panel_toolbar_font_size: int
+    file_panel_nav_toolbar_font_size: int
+    file_panel_favorites_menu_font_size: int
     folder_name_bold: bool
     local_favorites: Tuple[FavoritePath, ...]
     local_favorites_dialog_width: int
@@ -318,6 +320,8 @@ def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
         row_height_px=file_panel['row_height_px'],
         file_panel_toolbar_height=file_panel['file_panel_toolbar_height'],
         file_panel_toolbar_font_size=file_panel['file_panel_toolbar_font_size'],
+        file_panel_nav_toolbar_font_size=file_panel['file_panel_nav_toolbar_font_size'],
+        file_panel_favorites_menu_font_size=file_panel['file_panel_favorites_menu_font_size'],
         folder_name_bold=file_panel['folder_name_bold'],
         local_favorites=tuple(favorite_paths_from_raw(file_panel.get('local_favorites'))),
         local_favorites_dialog_width=file_panel['local_favorites_dialog_width'],

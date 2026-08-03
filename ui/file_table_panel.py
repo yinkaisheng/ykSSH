@@ -233,7 +233,9 @@ def _apply_file_panel_toolbar_layout(
         widget.setFont(font)
     path_edit.setFixedHeight(toolbar_height)
     if nav_toolbar is not None and hasattr(nav_toolbar, 'apply_layout'):
-        nav_toolbar.apply_layout(toolbar_height, font)
+        nav_font = QFont()
+        nav_font.setPixelSize(cfg.file_panel_nav_toolbar_font_size)
+        nav_toolbar.apply_layout(toolbar_height, nav_font)
 
 
 def _apply_column_widths(table: QTableWidget, column_widths: tuple[int, ...]) -> None:
@@ -509,6 +511,7 @@ class RemoteFileTable(_BaseFileTable):
             menu.addSeparator()
             menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
             menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected))
+            menu.addAction(tr('file.copy_parent_dir'), self._copy_current_directory_path)
             menu.addSeparator()
             menu.addAction(tr('file.download'), lambda: self._download_selected(selected))
             if len(selected) == 1:
@@ -546,6 +549,10 @@ class RemoteFileTable(_BaseFileTable):
         if not selected:
             return
         self._copy_text('\n'.join(self._remote_full_path(name) for name, _ in selected))
+
+    def _copy_current_directory_path(self) -> None:
+        base = self._current_path.rstrip('/')
+        self._copy_text(base if base else '/')
 
     def _download_selected(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
         selected = selected or self._selected_entries()
@@ -652,9 +659,6 @@ def _is_remote_root(path: str) -> bool:
     return text in ('', '/') or text.rstrip('/') == ''
 
 
-_FILE_NAV_FAVORITES_TEXT = '★'
-
-
 class _FileNavToolbar(QWidget):
     """Square flat navigation buttons for local/remote file panel toolbars."""
 
@@ -687,11 +691,12 @@ class _FileNavToolbar(QWidget):
         self._home_btn.clicked.connect(self._navigate_home)
         self._layout.addWidget(self._home_btn)
 
-        self._favorites_btn = self._make_text_button(_FILE_NAV_FAVORITES_TEXT)
+        self._favorites_btn = self._make_text_button('⭐') # star emoji ⭐★
         self._favorites_btn.clicked.connect(self.favorites_requested.emit)
         self._layout.addWidget(self._favorites_btn)
 
-        self._refresh_btn = self._make_icon_button('SP_BrowserReload')
+        # self._refresh_btn = self._make_icon_button('SP_BrowserReload')
+        self._refresh_btn = self._make_text_button('🔄') # refresh emoji 🔃🔄
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
         self._layout.addWidget(self._refresh_btn)
 
@@ -804,6 +809,9 @@ def _show_favorites_menu(
     on_navigate: Optional[Callable[[str], None]],
 ) -> None:
     menu = QMenu(parent)
+    menu_font = QFont()
+    menu_font.setPixelSize(get_app_config().file_panel.file_panel_favorites_menu_font_size)
+    menu.setFont(menu_font)
     manage_action = menu.addAction(tr('file.favorites.manage'))
     path_actions: list[tuple[QAction, str]] = []
     for title, entries in sections:

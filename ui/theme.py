@@ -310,6 +310,7 @@ def _build_stylesheet(
         0, (filter_edit_height - 2 - _filter_edit_fm.lineSpacing()) // 2,
     )
     file_panel_toolbar_font_size = get_app_config().file_panel.file_panel_toolbar_font_size
+    file_panel_nav_toolbar_font_size = get_app_config().file_panel.file_panel_nav_toolbar_font_size
     file_panel_toolbar_height = get_app_config().file_panel.file_panel_toolbar_height
     _fp_toolbar_font = QFont()
     _fp_toolbar_font.setPixelSize(file_panel_toolbar_font_size)
@@ -471,6 +472,21 @@ QSplitter#filePanelSplitter::handle:horizontal {{
 }}
 
 QSplitter#filePanelSplitter::handle:horizontal:hover {{
+    background-color: {p.background_primary};
+}}
+
+QSplitter#favoritesDialogSplitter {{
+    background-color: {p.background_primary};
+}}
+
+QSplitter#favoritesDialogSplitter::handle:horizontal {{
+    background-color: {p.background_primary};
+    width: 4px;
+    margin: 0;
+    border: none;
+}}
+
+QSplitter#favoritesDialogSplitter::handle:horizontal:hover {{
     background-color: {p.background_primary};
 }}
 
@@ -711,6 +727,7 @@ QWidget#fileNavToolbar QToolButton#filePanelNavButton {{
     border-radius: 0px;
     padding: 0px;
     margin: 0px;
+    font-size: {file_panel_nav_toolbar_font_size}px;
 }}
 
 QWidget#fileNavToolbar QToolButton#filePanelNavButton:hover {{

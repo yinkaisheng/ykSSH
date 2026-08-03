@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
 )
 
 from i18n import tr
-from models.session_item import SessionItem
+from models.session_item import AUTH_PUBLIC_KEY, SessionItem
 from storage.app_config import get_app_config
 from storage.keyring_store import KeyringStore
 from storage.session_profile_store import SessionProfileStore
@@ -33,6 +33,31 @@ from ui.favorite_tree_widget import (
     ROLE_TYPE,
 )
 from ui.session_dialog import SessionDialog
+
+
+def _session_tooltip(session: SessionItem) -> str:
+    """Build a multi-line tooltip with connection details (never includes password)."""
+    if session.is_folder():
+        return ''
+    auth = (
+        tr('sessions.auth_publickey')
+        if session.auth_type == AUTH_PUBLIC_KEY
+        else tr('sessions.auth_password')
+    )
+    lines = [
+        f"{tr('sessions.name')}: {session.name}",
+        f"{tr('sessions.host')}: {session.host}",
+        f"{tr('sessions.port')}: {session.port}",
+        f"{tr('sessions.username')}: {session.username}",
+        f"{tr('sessions.auth_type')}: {auth}",
+    ]
+    if session.auth_type == AUTH_PUBLIC_KEY and session.key_path:
+        lines.append(f"{tr('sessions.key_path')}: {session.key_path}")
+    if session.local_path:
+        lines.append(f"{tr('sessions.local_path')}: {session.local_path}")
+    if session.remote_path:
+        lines.append(f"{tr('sessions.remote_path')}: {session.remote_path}")
+    return '\n'.join(lines)
 
 
 class SessionTreePanel(QWidget):
@@ -145,6 +170,7 @@ class SessionTreePanel(QWidget):
                 tree_item.addChild(self._session_to_tree(child))
         else:
             tree_item.setData(0, ROLE_TYPE, ITEM_TYPE_SESSION)
+            tree_item.setToolTip(0, _session_tooltip(session))
         return tree_item
 
     def _sync_data_model(self) -> None:
@@ -418,6 +444,7 @@ class SessionTreePanel(QWidget):
         if password:
             self.keyring.set_password(session.id, password)
         item.setText(0, session.name)
+        item.setToolTip(0, _session_tooltip(session))
         self.store.save_items(self._items)
         self.sessions_changed.emit()
 
@@ -434,6 +461,9 @@ class SessionTreePanel(QWidget):
             return
         item.setText(0, new_name)
         self._sync_data_model()
+        if not session.is_folder():
+            session.name = new_name
+            item.setToolTip(0, _session_tooltip(session))
         self.sessions_changed.emit()
 
     def _delete_item(self, item: QTreeWidgetItem, confirm: bool = False) -> None:
@@ -535,6 +565,20 @@ class SessionTreePanel(QWidget):
         self._filter_edit.setFont(filter_font)
         self._filter_edit.setFixedHeight(appearance.filter_edit_height)
 
+    def _refresh_tooltips(self, item: Optional[QTreeWidgetItem] = None) -> None:
+        if item is None:
+            for i in range(self.tree.topLevelItemCount()):
+                self._refresh_tooltips(self.tree.topLevelItem(i))
+            return
+        session = self._find_session_by_tree(item)
+        if session is not None and not session.is_folder():
+            item.setToolTip(0, _session_tooltip(session))
+        else:
+            item.setToolTip(0, '')
+        for i in range(item.childCount()):
+            self._refresh_tooltips(item.child(i))
+
     def retranslate_ui(self) -> None:
         self._title_label.setText(tr('sessions.title'))
         self._filter_edit.setPlaceholderText(tr('sessions.filter_placeholder'))
+        self._refresh_tooltips()

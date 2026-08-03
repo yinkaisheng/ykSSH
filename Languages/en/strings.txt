@@ -96,6 +96,7 @@ file.mkdir=New Folder
 file.rename=Rename
 file.copy_name=Copy Name
 file.copy_path=Copy Path
+file.copy_parent_dir=Copy Parent Directory
 file.path_placeholder=Path
 file.not_connected=Connect a session to browse remote files.
 file.prompt_name=Name:
