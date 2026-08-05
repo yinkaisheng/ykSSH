@@ -20,7 +20,7 @@ from PyQt5.QtGui import (
     QInputMethodEvent,
     QPixmap,
 )
-from PyQt5.QtWidgets import QWidget, QSizePolicy, QMenu
+from PyQt5.QtWidgets import QWidget, QSizePolicy
 
 try:
     from PyQt5 import sip
@@ -31,6 +31,7 @@ from i18n import tr as t
 from storage.app_config import get_app_config, get_setting
 from storage.paths import DATA_DIR
 from ui.dialog_i18n import ask_yes_no
+from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
 from ui.theme import (
     terminal_font_family_css,
     normalize_terminal_font_family,
@@ -111,6 +112,7 @@ class TerminalVTWidget(QWidget):
 
         # Modes negotiated by applications (vim uses these heavily)
         self._app_cursor_keys = False  # DECCKM: ESC[?1h / ESC[?1l
+        self._bracketed_paste_mode = False  # DECSET 2004: ESC[?2004h / ESC[?2004l
         # Mouse reporting
         self._mouse_track_1000 = False  # click tracking
         self._mouse_track_1002 = False  # button-event tracking (drag)
@@ -730,6 +732,8 @@ class TerminalVTWidget(QWidget):
             # Application cursor keys (vim uses this to switch arrow key sequences)
             if 1 in params:
                 self._app_cursor_keys = (action == "h")
+            if 2004 in params:
+                self._bracketed_paste_mode = (action == "h")
 
             # Mouse tracking modes
             if 1000 in params:
@@ -912,6 +916,7 @@ class TerminalVTWidget(QWidget):
 
         self._esc_pending = ""
         self._app_cursor_keys = False
+        self._bracketed_paste_mode = False
         self._mouse_track_1000 = False
         self._mouse_track_1002 = False
         self._mouse_track_1003 = False
@@ -1845,52 +1850,58 @@ class TerminalVTWidget(QWidget):
             pass
 
     def contextMenuEvent(self, event):  # type: ignore[override]
-        menu = QMenu(self)
+        menu = ShortcutMenu(self)
 
         has_sel = bool(self._selected_text())
         act_copy = menu.addAction(t("context.copy"))
+        add_menu_key(menu, act_copy, Qt.Key_C)
         act_copy.setEnabled(has_sel)
+        act_copy.triggered.connect(self.copy)
         act_paste = menu.addAction(t("context.paste"))
+        add_menu_key(menu, act_paste, Qt.Key_V)
+        act_paste.triggered.connect(self._paste_from_clipboard)
         menu.addSeparator()
         act_select_all = menu.addAction(t("context.select_all"))
+        add_menu_key(menu, act_select_all, Qt.Key_A)
+        act_select_all.triggered.connect(self._select_all_visible)
         act_clear = menu.addAction(t("context.clear"))
+        add_menu_key(menu, act_clear, Qt.Key_X)
+        act_clear.triggered.connect(self._clear_terminal_view)
         menu.addSeparator()
         act_follow = menu.addAction(t("context.follow_output"))
+        add_menu_key(menu, act_follow, Qt.Key_F)
+        act_follow.triggered.connect(self._follow_output)
 
-        chosen = menu.exec(event.globalPos())
-        if not chosen:
-            return
+        exec_menu(menu, event.globalPos())
 
-        if chosen == act_copy:
-            self.copy()
-        elif chosen == act_paste:
-            self._paste_from_clipboard()
-        elif chosen == act_select_all:
-            # Select everything visible; use our selection coords for consistent highlight.
+    def _select_all_visible(self) -> None:
+        # Select everything visible; use our selection coords for consistent highlight.
+        cols, rows = self._calc_cols_rows()
+        self._sel_anchor = (0, 0)
+        self._sel_head = (max(0, cols - 1), max(0, rows - 1))
+        self._mark_dirty()
+
+    def _clear_terminal_view(self) -> None:
+        # Clear locally and also clear remote view (Ctrl+L) for typical shells.
+        try:
             cols, rows = self._calc_cols_rows()
-            self._sel_anchor = (0, 0)
-            self._sel_head = (max(0, cols - 1), max(0, rows - 1))
-            self._mark_dirty()
-        elif chosen == act_clear:
-            # Clear locally and also clear remote view (Ctrl+L) for typical shells.
-            try:
-                cols, rows = self._calc_cols_rows()
-                self._reset_emulator_state(cols, rows)
-                self._raw_buffer = ""
-                self._raw_buffer_has_tui_control = False
-            except Exception:
-                pass
-            self.input_received.emit(b"\x0c")
-            self._mark_dirty()
-        elif chosen == act_follow:
-            # Return to bottom (new output follows)
-            self._scroll_lines = 0
-            try:
-                if hasattr(self.screen, "history") and hasattr(self.screen.history, "position"):
-                    self.screen.history.position = self.screen.history.size  # type: ignore[attr-defined]
-            except Exception:
-                pass
-            self._mark_dirty()
+            self._reset_emulator_state(cols, rows)
+            self._raw_buffer = ""
+            self._raw_buffer_has_tui_control = False
+        except Exception:
+            pass
+        self.input_received.emit(b"\x0c")
+        self._mark_dirty()
+
+    def _follow_output(self) -> None:
+        # Return to bottom (new output follows)
+        self._scroll_lines = 0
+        try:
+            if hasattr(self.screen, "history") and hasattr(self.screen.history, "position"):
+                self.screen.history.position = self.screen.history.size  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        self._mark_dirty()
 
     # -------------------------
     # Paste + keys
@@ -1899,6 +1910,16 @@ class TerminalVTWidget(QWidget):
         key = event.key()
         mods = event.modifiers()
         text = event.text()
+
+        if (mods & Qt.ShiftModifier) and not (mods & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)):
+            if key == Qt.Key_Delete:
+                self.copy()
+                event.accept()
+                return
+            if key == Qt.Key_Insert:
+                self._paste_from_clipboard()
+                event.accept()
+                return
 
         # Ctrl+Shift+C / Ctrl+Shift+V
         if (mods & Qt.ControlModifier) and (mods & Qt.ShiftModifier):
@@ -2097,7 +2118,7 @@ class TerminalVTWidget(QWidget):
 
     def _send_paste_text(self, text: str) -> None:
         confirm_multiline = bool(get_setting("terminal_paste_confirm_multiline", True))
-        bracketed = bool(get_setting("terminal_bracketed_paste", True))
+        bracketed = bool(get_setting("terminal_bracketed_paste", True)) and self._bracketed_paste_mode
 
         if confirm_multiline and ("\n" in text or "\r" in text):
             preview = text[:800] + ("\n…" if len(text) > 800 else "")

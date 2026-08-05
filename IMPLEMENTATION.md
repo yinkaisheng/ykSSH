@@ -292,6 +292,9 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 连接时创建 `xterm-256color` PTY，尺寸取自 `TerminalVTWidget._calc_cols_rows()`
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
+- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`T` 上传/下载传输、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
+- 粘贴时仅在配置允许且远端显式开启 `DECSET ?2004` bracketed paste 模式后才发送 `ESC[200~...ESC[201~` 包装；普通 shell 密码提示（如 `sudo`）不发送该包装，避免控制序列被当作密码字符。
 
 ### 6.5 连接生命周期
 

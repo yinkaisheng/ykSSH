@@ -12,7 +12,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QLabel,
     QLineEdit,
-    QMenu,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -24,6 +23,7 @@ from storage.app_config import get_app_config
 from storage.credential_store import CredentialStore
 from storage.session_profile_store import SessionProfileStore
 from ui.dialog_i18n import ask_yes_no
+from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
 from ui.prompt_dialog import prompt_text
 from ui.favorite_tree_widget import (
     FavoriteTreeWidget,
@@ -258,18 +258,22 @@ class SessionTreePanel(QWidget):
 
     def _show_context_menu(self, pos) -> None:
         item = self.tree.itemAt(pos)
-        menu = QMenu(self)
+        menu = ShortcutMenu(self)
 
         if item is None:
             add_folder = menu.addAction(tr('sessions.add_folder'))
+            add_menu_key(menu, add_folder, Qt.Key_F)
             add_session = menu.addAction(tr('sessions.add_session'))
+            add_menu_key(menu, add_session, Qt.Key_N)
             has_items = self.tree.topLevelItemCount() > 0
             if has_items:
                 menu.addSeparator()
                 expand_all_action = menu.addAction(tr('sessions.expand_all'))
+                add_menu_key(menu, expand_all_action, Qt.Key_A)
                 collapse_all_action = menu.addAction(tr('sessions.collapse_all'))
+                add_menu_key(menu, collapse_all_action, Qt.Key_L)
 
-            action = menu.exec_(self.tree.viewport().mapToGlobal(pos))
+            action = exec_menu(menu, self.tree.viewport().mapToGlobal(pos))
             if action == add_folder:
                 self._add_top_level_folder()
             elif action == add_session:
@@ -285,26 +289,35 @@ class SessionTreePanel(QWidget):
 
         if is_folder:
             add_folder_action = menu.addAction(tr('sessions.add_folder'))
+            add_menu_key(menu, add_folder_action, Qt.Key_F)
             add_session_action = menu.addAction(tr('sessions.add_session'))
+            add_menu_key(menu, add_session_action, Qt.Key_N)
             menu.addSeparator()
             expand_action = menu.addAction(tr('sessions.expand_all'))
+            add_menu_key(menu, expand_action, Qt.Key_A)
             collapse_action = menu.addAction(tr('sessions.collapse_all'))
+            add_menu_key(menu, collapse_action, Qt.Key_L)
             menu.addSeparator()
             connect_action = None
             edit_action = None
         else:
             connect_action = menu.addAction(tr('sessions.connect'))
+            add_menu_key(menu, connect_action, Qt.Key_C)
             edit_action = menu.addAction(tr('sessions.edit'))
+            add_menu_key(menu, edit_action, Qt.Key_E)
             add_folder_action = None
             add_session_action = None
             expand_action = None
             collapse_action = None
             menu.addSeparator()
         rename_action = menu.addAction(tr('sessions.rename'))
+        add_menu_key(menu, rename_action, Qt.Key_R)
         delete_action = menu.addAction(tr('sessions.delete'))
+        add_menu_key(menu, delete_action, Qt.Key_D)
         menu.addSeparator()
 
         cut_action = menu.addAction(tr('sessions.cut'))
+        add_menu_key(menu, cut_action, Qt.Key_X)
         paste_action = None
         clip_text = QApplication.clipboard().text()
         prefix = f'internal_move_tree_item_{self.tree.tree_id}='
@@ -313,12 +326,13 @@ class SessionTreePanel(QWidget):
                 source_path = json.loads(clip_text[len(prefix):])
                 source_item = self.tree.get_item_by_path(source_path)
                 paste_action = menu.addAction(tr('sessions.paste'))
+                add_menu_key(menu, paste_action, Qt.Key_V)
                 if source_item is None or source_item is item or self.tree._is_descendant_of(item, source_item):
                     paste_action.setEnabled(False)
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        action = menu.exec_(self.tree.viewport().mapToGlobal(pos))
+        action = exec_menu(menu, self.tree.viewport().mapToGlobal(pos))
         if action is None:
             return
 

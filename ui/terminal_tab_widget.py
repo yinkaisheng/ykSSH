@@ -6,9 +6,10 @@ import uuid
 from typing import Dict, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QMenu, QTabWidget, QWidget
+from PyQt5.QtWidgets import QTabWidget, QWidget
 
 from i18n import tr
+from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
 from ui.prompt_dialog import prompt_text
 from ui.terminal_vt_widget import TerminalVTWidget
 
@@ -88,9 +89,10 @@ class TerminalTabWidget(QTabWidget):
         index = self.tabBar().tabAt(pos)
         if index < 0:
             return
-        menu = QMenu(self)
+        menu = ShortcutMenu(self)
         rename_action = menu.addAction(tr('tab.rename'))
-        action = menu.exec_(self.tabBar().mapToGlobal(pos))
+        add_menu_key(menu, rename_action, Qt.Key_R)
+        action = exec_menu(menu, self.tabBar().mapToGlobal(pos))
         if action == rename_action:
             self._rename_tab_at_index(index)
 

@@ -20,7 +20,6 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMenu,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -41,6 +40,7 @@ from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
 from ui.theme import active_theme_palette
 from ui.dialog_i18n import ask_yes_no, message_warning
+from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
 from ui.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
@@ -738,34 +738,42 @@ class LocalFileTable(_BaseFileTable):
 
     def _show_context_menu(self, pos) -> None:
         has_context_row = self._sync_context_menu_selection(pos)
-        menu = QMenu(self)
-        menu.addAction(tr('file.refresh'), self.refresh)
-        menu.addAction(tr('file.mkdir'), self._mkdir)
+        menu = ShortcutMenu(self)
+        add_menu_key(menu, menu.addAction(tr('file.refresh'), self.refresh), Qt.Key_R)
+        add_menu_key(menu, menu.addAction(tr('file.mkdir'), self._mkdir), Qt.Key_N)
         selected = self._selected_entries() if has_context_row else []
         if selected:
             menu.addSeparator()
-            menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
-            menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected))
-            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
+            add_menu_key(menu, menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected)), Qt.Key_C)
+            add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_P)
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
             menu.addSeparator()
-            menu.addAction(tr('file.upload'), lambda: self._upload_selected(selected))
+            add_menu_key(menu, menu.addAction(tr('file.upload'), lambda: self._upload_selected(selected)), Qt.Key_T)
             if len(selected) == 1:
-                menu.addAction(tr('file.rename'), self._rename)
+                add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
             shift_held = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
             if shift_held:
-                menu.addAction(
-                    tr('file.delete_permanently'),
-                    lambda: self._delete_selected(permanent=True),
+                add_menu_key(
+                    menu,
+                    menu.addAction(
+                        tr('file.delete_permanently'),
+                        lambda: self._delete_selected(permanent=True),
+                    ),
+                    Qt.Key_D,
                 )
             else:
-                menu.addAction(
-                    tr('file.move_to_trash'),
-                    lambda: self._delete_selected(permanent=False),
+                add_menu_key(
+                    menu,
+                    menu.addAction(
+                        tr('file.move_to_trash'),
+                        lambda: self._delete_selected(permanent=False),
+                    ),
+                    Qt.Key_D,
                 )
         else:
             menu.addSeparator()
-            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
-        menu.exec_(self.viewport().mapToGlobal(pos))
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
+        exec_menu(menu, self.viewport().mapToGlobal(pos))
 
     def _mkdir(self) -> None:
         name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
@@ -983,24 +991,24 @@ class RemoteFileTable(_BaseFileTable):
 
     def _show_context_menu(self, pos) -> None:
         has_context_row = self._sync_context_menu_selection(pos)
-        menu = QMenu(self)
-        menu.addAction(tr('file.refresh'), self.refresh_requested.emit)
-        menu.addAction(tr('file.mkdir'), self._mkdir)
+        menu = ShortcutMenu(self)
+        add_menu_key(menu, menu.addAction(tr('file.refresh'), self.refresh_requested.emit), Qt.Key_R)
+        add_menu_key(menu, menu.addAction(tr('file.mkdir'), self._mkdir), Qt.Key_N)
         selected = self._selected_entries() if has_context_row else []
         if selected:
             menu.addSeparator()
-            menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
-            menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected))
-            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
+            add_menu_key(menu, menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected)), Qt.Key_C)
+            add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_P)
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
             menu.addSeparator()
-            menu.addAction(tr('file.download'), lambda: self._download_selected(selected))
+            add_menu_key(menu, menu.addAction(tr('file.download'), lambda: self._download_selected(selected)), Qt.Key_T)
             if len(selected) == 1:
-                menu.addAction(tr('file.rename'), self._rename)
-            menu.addAction(tr('file.delete'), self._delete_selected)
+                add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
+            add_menu_key(menu, menu.addAction(tr('file.delete'), self._delete_selected), Qt.Key_D)
         else:
             menu.addSeparator()
-            menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
-        menu.exec_(self.viewport().mapToGlobal(pos))
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
+        exec_menu(menu, self.viewport().mapToGlobal(pos))
 
     def _mkdir(self) -> None:
         name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
@@ -1547,6 +1555,7 @@ def _show_favorites_menu(
     menu_font.setPixelSize(get_app_config().file_panel.file_panel_favorites_menu_font_size)
     menu.setFont(menu_font)
     manage_action = menu.addAction(tr('file.favorites.manage'))
+    add_menu_key(menu, manage_action, Qt.Key_M)
     path_actions: list[tuple[QAction, FavoritePath]] = []
     for title, entries in sections:
         if not entries:
@@ -1561,7 +1570,7 @@ def _show_favorites_menu(
             action = menu.addAction(f'{prefix}{entry.display_text()}')
             path_actions.append((action, entry))
             menu.register_path_shortcut(shortcut_index, entry)
-    chosen = menu.exec_(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+    chosen = exec_menu(menu, anchor.mapToGlobal(anchor.rect().bottomLeft()))
     if chosen is None:
         return
     if chosen == manage_action:
@@ -1581,7 +1590,7 @@ def _favorite_menu_shortcut_prefix(index: int) -> str:
     return ''
 
 
-class _FavoriteMenu(QMenu):
+class _FavoriteMenu(ShortcutMenu):
     def __init__(
         self,
         parent: QWidget = None,
@@ -1734,9 +1743,10 @@ class LocalFilePanel(QWidget):
         )
 
     def _show_table_header_menu(self, is_local: bool, pos) -> None:
-        menu = QMenu(self)
+        menu = ShortcutMenu(self)
         save_action = menu.addAction(tr('file.save_column_widths'))
-        chosen = menu.exec_(self.table.horizontalHeader().mapToGlobal(pos))
+        add_menu_key(menu, save_action, Qt.Key_S)
+        chosen = exec_menu(menu, self.table.horizontalHeader().mapToGlobal(pos))
         if chosen != save_action:
             return
         widths = column_widths_from_table(
@@ -1903,9 +1913,10 @@ class RemoteFilePanel(QWidget):
         )
 
     def _show_table_header_menu(self, is_local: bool, pos) -> None:
-        menu = QMenu(self)
+        menu = ShortcutMenu(self)
         save_action = menu.addAction(tr('file.save_column_widths'))
-        chosen = menu.exec_(self.table.horizontalHeader().mapToGlobal(pos))
+        add_menu_key(menu, save_action, Qt.Key_S)
+        chosen = exec_menu(menu, self.table.horizontalHeader().mapToGlobal(pos))
         if chosen != save_action:
             return
         widths = column_widths_from_table(
