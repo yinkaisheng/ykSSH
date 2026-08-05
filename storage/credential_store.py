@@ -10,6 +10,7 @@ from typing import Dict, Optional
 from cryptography.fernet import Fernet, InvalidToken
 
 from log_util import logger
+from storage.json_io import atomic_write_json
 from storage.paths import CREDENTIALS_FILE
 from storage.secret_key import load_or_create_fernet
 
@@ -23,6 +24,7 @@ class CredentialStore:
         self.path = Path(path) if path is not None else CREDENTIALS_FILE
         self._fernet = fernet or load_or_create_fernet()
         self._passwords: Dict[str, str] = {}
+        self._save_blocked = False
         self._load()
 
     def _encrypt(self, plaintext: str) -> str:
@@ -55,6 +57,7 @@ class CredentialStore:
                 f'{data.get("version")!r} (expected {_CREDENTIALS_VERSION})'
             )
             self._passwords = {}
+            self._save_blocked = True
             return
         raw = data.get('passwords', {})
         if not isinstance(raw, dict):
@@ -88,8 +91,13 @@ class CredentialStore:
             },
         }
         try:
-            with open(self.path, 'w', encoding='utf-8') as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+            if self._save_blocked:
+                logger.warning(
+                    f'Skipped saving credentials because {self.path} was loaded from an '
+                    'unsupported version'
+                )
+                return
+            atomic_write_json(self.path, payload)
         except OSError as exc:
             logger.warning(f'Failed to save credentials to {self.path}: {exc}')
 

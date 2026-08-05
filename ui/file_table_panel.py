@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import stat
@@ -9,7 +10,7 @@ import sys
 from datetime import datetime
 from typing import Any, Callable, Iterable, List, Optional, Sequence
 
-from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -47,6 +48,13 @@ from ui.file_panel_defaults import (
     column_widths_from_table,
 )
 from ui.prompt_dialog import prompt_text
+
+try:
+    from pypinyin import Style, lazy_pinyin, pinyin
+except ImportError:  # pragma: no cover - optional until requirements are installed
+    Style = None
+    lazy_pinyin = None
+    pinyin = None
 
 _FILE_TABLE_COLUMN_LABEL_KEYS = {
     'Name': 'file.name',
@@ -144,6 +152,51 @@ def _apply_entry_name_font(name_item: QTableWidgetItem, entry_type: str) -> None
     font = QFont(name_item.font())
     font.setBold(get_app_config().file_panel.folder_name_bold and entry_type == 'dir')
     name_item.setFont(font)
+
+
+def _is_cjk(char: str) -> bool:
+    return '\u4e00' <= char <= '\u9fff'
+
+
+def _wildcard_filter_match(pattern: str, target: str) -> bool:
+    parts = [part for part in pattern.split('*') if part]
+    if not parts:
+        return True
+    pos = 0
+    if not pattern.startswith('*'):
+        first = parts[0]
+        if not target.startswith(first):
+            return False
+        pos = len(first)
+        parts = parts[1:]
+    for part in parts:
+        found = target.find(part, pos)
+        if found < 0:
+            return False
+        pos = found + len(part)
+    return True
+
+
+def _pinyin_initial_filter_targets(name: str) -> list[str]:
+    if lazy_pinyin is None or pinyin is None or Style is None:
+        return []
+    base = ''.join(lazy_pinyin(
+        name,
+        style=Style.FIRST_LETTER,
+        errors=lambda chars: list(chars),
+    )).casefold()
+    targets = [base]
+    if not name or not _is_cjk(name[0]):
+        return targets
+    if len(name) > 1 and _is_cjk(name[1]):
+        return targets
+    first_variants = pinyin(name[0], style=Style.FIRST_LETTER, heteronym=True)
+    initials = sorted({item.casefold() for group in first_variants for item in group if item})
+    for initial in initials:
+        candidate = f'{initial}{base[1:]}'
+        if candidate not in targets:
+            targets.append(candidate)
+    return targets
 
 
 class _FileSortItem(QTableWidgetItem):
@@ -310,6 +363,7 @@ class _BaseFileTable(QTableWidget):
         self._current_path = ''
         self._filter_text = ''
         self._filter_edit_focused = False
+        self._pending_select_name = ''
         self.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.itemSelectionChanged.connect(self._emit_status_counts)
 
@@ -318,10 +372,12 @@ class _BaseFileTable(QTableWidget):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_F and event.modifiers() & Qt.ControlModifier:
+            # Ctrl + F
             self.filter_focus_requested.emit()
             event.accept()
             return
         if event.key() == Qt.Key_D and event.modifiers() & Qt.ControlModifier:
+            # Ctrl + D
             self.favorites_menu_requested.emit()
             event.accept()
             return
@@ -331,6 +387,10 @@ class _BaseFileTable(QTableWidget):
                 return
         if event.key() == Qt.Key_Delete and event.modifiers() in (Qt.NoModifier, Qt.ShiftModifier):
             if self._handle_delete_key(permanent=bool(event.modifiers() & Qt.ShiftModifier)):
+                event.accept()
+                return
+        if event.key() in (Qt.Key_Home, Qt.Key_End) and not event.modifiers():
+            if self._jump_to_visible_edge(last=event.key() == Qt.Key_End):
                 event.accept()
                 return
         if event.key() == Qt.Key_Escape and self._filter_text:
@@ -351,6 +411,71 @@ class _BaseFileTable(QTableWidget):
 
     def _is_at_root(self) -> bool:
         raise NotImplementedError
+
+    def _jump_to_visible_edge(self, *, last: bool) -> bool:
+        rows = range(self.rowCount() - 1, -1, -1) if last else range(self.rowCount())
+        for row in rows:
+            if self.isRowHidden(row):
+                continue
+            item = self.item(row, 0)
+            if item is None:
+                continue
+            self.setCurrentCell(row, 0)
+            self.selectRow(row)
+            hint = QAbstractItemView.PositionAtBottom if last else QAbstractItemView.PositionAtTop
+            self.scrollToItem(item, hint)
+            return True
+        return False
+
+    def _select_entry_by_name(self, name: str) -> bool:
+        target = (name or '').casefold()
+        if not target:
+            return False
+        for row in range(self.rowCount()):
+            item = self.item(row, 0)
+            if item is None or item.text().casefold() != target:
+                continue
+            self.setCurrentCell(row, 0)
+            self.selectRow(row)
+            self.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+            return True
+        return False
+
+    def _select_pending_entry(self) -> None:
+        if self._pending_select_name and self._select_entry_by_name(self._pending_select_name):
+            self._pending_select_name = ''
+
+    def _context_menu_row_at(self, pos) -> Optional[int]:
+        index = self.indexAt(pos)
+        if index.isValid():
+            row = index.row()
+            return row if not self.isRowHidden(row) else None
+
+        row = self._visible_row_at_y(pos.y())
+        if row is not None and self._pos_within_row_cells(row, pos.x()):
+            return row
+
+        viewport_pos = self.viewport().mapFrom(self, pos)
+        if viewport_pos != pos:
+            index = self.indexAt(viewport_pos)
+            if index.isValid():
+                row = index.row()
+                return row if not self.isRowHidden(row) else None
+            row = self._visible_row_at_y(viewport_pos.y())
+            if row is not None and self._pos_within_row_cells(row, viewport_pos.x()):
+                return row
+        return None
+
+    def _sync_context_menu_selection(self, pos) -> bool:
+        row = self._context_menu_row_at(pos)
+        if row is None:
+            return False
+        if any(selected.row() == row for selected in self.selectedIndexes()):
+            return True
+        first_index = self.model().index(row, 0)
+        self.setCurrentIndex(first_index)
+        self.selectionModel().select(first_index, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        return True
 
     def _can_go_to_parent(self) -> bool:
         return not self._is_at_root()
@@ -395,12 +520,23 @@ class _BaseFileTable(QTableWidget):
                 return
         super().mouseDoubleClickEvent(event)
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.RightButton:
+            self._sync_context_menu_selection(event.pos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        self._sync_context_menu_selection(event.pos())
+        super().contextMenuEvent(event)
+
     def _pos_within_row_cells(self, row: int, x: int) -> bool:
         last_col = self.columnCount() - 1
         if last_col < 0:
             return False
         rect = self.visualRect(self.model().index(row, last_col))
-        return x <= rect.right()
+        return 0 <= x <= rect.right()
 
     def _apply_default_sort(self) -> None:
         self.apply_sort(self.DEFAULT_SORT_COLUMN, self.DEFAULT_SORT_ORDER)
@@ -498,22 +634,12 @@ class _BaseFileTable(QTableWidget):
         if not pattern or name == '..':
             return True
         target = name.casefold()
-        parts = [part for part in pattern.split('*') if part]
-        if not parts:
+        if _wildcard_filter_match(pattern, target):
             return True
-        pos = 0
-        if not pattern.startswith('*'):
-            first = parts[0]
-            if not target.startswith(first):
-                return False
-            pos = len(first)
-            parts = parts[1:]
-        for part in parts:
-            found = target.find(part, pos)
-            if found < 0:
-                return False
-            pos = found + len(part)
-        return True
+        return any(
+            _wildcard_filter_match(pattern, pinyin_target)
+            for pinyin_target in _pinyin_initial_filter_targets(name)
+        )
 
     def _apply_filter_to_rows(self) -> None:
         for row in range(self.rowCount()):
@@ -578,7 +704,7 @@ class _BaseFileTable(QTableWidget):
 class LocalFileTable(_BaseFileTable):
     upload_requested = pyqtSignal(list)
 
-    def __init__(self, parent: QWidget = None) -> None:
+    def __init__(self, parent: QWidget = None, *, initial_path: str = '') -> None:
         super().__init__(parent)
         self.setColumnCount(len(FILE_TABLE_COLUMNS))
         self.setHorizontalHeaderLabels(_file_table_header_labels())
@@ -589,7 +715,7 @@ class LocalFileTable(_BaseFileTable):
             defaults=DEFAULT_LOCAL_COLUMN_WIDTHS,
         )
         self._apply_default_sort()
-        self._current_path = os.path.expanduser('~')
+        self._current_path = initial_path or os.path.expanduser('~')
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -611,10 +737,11 @@ class LocalFileTable(_BaseFileTable):
         return os.path.join(self._current_path, name)
 
     def _show_context_menu(self, pos) -> None:
+        has_context_row = self._sync_context_menu_selection(pos)
         menu = QMenu(self)
         menu.addAction(tr('file.refresh'), self.refresh)
         menu.addAction(tr('file.mkdir'), self._mkdir)
-        selected = self._selected_entries()
+        selected = self._selected_entries() if has_context_row else []
         if selected:
             menu.addSeparator()
             menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
@@ -787,6 +914,7 @@ class LocalFileTable(_BaseFileTable):
         for name, size, mtime, perm in files:
             self._append_entry_row(name, 'file', size, mtime, perm)
         self._end_refresh(sort_column, sort_order)
+        self._select_pending_entry()
 
     def _enter_directory(self, name: str) -> None:
         if name == '..':
@@ -799,9 +927,15 @@ class LocalFileTable(_BaseFileTable):
         self.refresh()
 
     def set_path(self, path: str) -> None:
-        self._current_path = path
+        candidate = os.path.normpath(os.path.expanduser((path or '').strip()))
+        select_name = ''
+        if candidate and os.path.isfile(candidate):
+            select_name = os.path.basename(candidate)
+            candidate = os.path.dirname(candidate) or self._current_path
+        self._current_path = candidate or os.path.expanduser('~')
+        self._pending_select_name = select_name
         self.clear_filter()
-        self.path_changed.emit(path)
+        self.path_changed.emit(self._current_path)
         self.refresh()
 
 
@@ -848,10 +982,11 @@ class RemoteFileTable(_BaseFileTable):
         return f'{base}/{name}' if base else f'/{name}'
 
     def _show_context_menu(self, pos) -> None:
+        has_context_row = self._sync_context_menu_selection(pos)
         menu = QMenu(self)
         menu.addAction(tr('file.refresh'), self.refresh_requested.emit)
         menu.addAction(tr('file.mkdir'), self._mkdir)
-        selected = self._selected_entries()
+        selected = self._selected_entries() if has_context_row else []
         if selected:
             menu.addSeparator()
             menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected))
@@ -973,6 +1108,7 @@ class RemoteFileTable(_BaseFileTable):
             entry_type = 'dir' if entry.get('is_dir') else 'file'
             self._append_entry_row(name, entry_type, size, mtime, perm)
         self._end_refresh(sort_column, sort_order)
+        self._select_pending_entry()
 
     def _enter_directory(self, name: str) -> None:
         if name == '..':
@@ -985,11 +1121,33 @@ class RemoteFileTable(_BaseFileTable):
         self.path_changed.emit(self._current_path)
         self.refresh_requested.emit()
 
-    def set_path(self, path: str) -> None:
-        self._current_path = path or '/'
+    def set_path(self, path: str, *, select_name: str = '') -> None:
+        path = path or '/'
+        if select_name:
+            self._current_path = path
+            self._pending_select_name = select_name
+        else:
+            parent, name = _remote_parent_and_name(path)
+            if name and self._remote_entry_is_file(parent, name):
+                self._current_path = parent
+                self._pending_select_name = name
+            else:
+                self._current_path = path
+                self._pending_select_name = ''
         self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh_requested.emit()
+
+    def _remote_entry_is_file(self, parent: str, name: str) -> bool:
+        if self._list_callback is None:
+            return False
+        entries = self._list_callback(parent) or []
+        target = name.casefold()
+        for entry in entries:
+            entry_name = str(entry.get('name', '') or '')
+            if entry_name.casefold() == target:
+                return not bool(entry.get('is_dir'))
+        return False
 
     def clear_remote(self) -> None:
         self._list_callback = None
@@ -1031,6 +1189,17 @@ def _is_local_root(path: str) -> bool:
 def _is_remote_root(path: str) -> bool:
     text = (path or '/').strip()
     return text in ('', '/') or text.rstrip('/') == ''
+
+
+def _remote_parent_and_name(path: str) -> tuple[str, str]:
+    text = (path or '').strip()
+    if not text or text == '/':
+        return '/', ''
+    text = text.rstrip('/')
+    parent, _, name = text.rpartition('/')
+    if not parent:
+        parent = '/'
+    return parent, name
 
 
 class _FileNavToolbar(QWidget):
@@ -1371,14 +1540,14 @@ def _show_favorites_menu(
     *,
     sections: Sequence[tuple[str, Sequence[FavoritePath]]],
     on_manage: Optional[Callable[[], None]],
-    on_navigate: Optional[Callable[[str], None]],
+    on_navigate: Optional[Callable[[FavoritePath], None]],
 ) -> None:
     menu = _FavoriteMenu(parent, on_navigate=on_navigate)
     menu_font = QFont()
     menu_font.setPixelSize(get_app_config().file_panel.file_panel_favorites_menu_font_size)
     menu.setFont(menu_font)
     manage_action = menu.addAction(tr('file.favorites.manage'))
-    path_actions: list[tuple[QAction, str]] = []
+    path_actions: list[tuple[QAction, FavoritePath]] = []
     for title, entries in sections:
         if not entries:
             continue
@@ -1390,8 +1559,8 @@ def _show_favorites_menu(
             shortcut_index = len(path_actions)
             prefix = _favorite_menu_shortcut_prefix(shortcut_index)
             action = menu.addAction(f'{prefix}{entry.display_text()}')
-            path_actions.append((action, entry.path))
-            menu.register_path_shortcut(shortcut_index, entry.path)
+            path_actions.append((action, entry))
+            menu.register_path_shortcut(shortcut_index, entry)
     chosen = menu.exec_(anchor.mapToGlobal(anchor.rect().bottomLeft()))
     if chosen is None:
         return
@@ -1399,9 +1568,9 @@ def _show_favorites_menu(
         if on_manage is not None:
             on_manage()
         return
-    for action, path in path_actions:
+    for action, entry in path_actions:
         if chosen == action and on_navigate is not None:
-            on_navigate(path)
+            on_navigate(entry)
             return
 
 
@@ -1417,22 +1586,22 @@ class _FavoriteMenu(QMenu):
         self,
         parent: QWidget = None,
         *,
-        on_navigate: Optional[Callable[[str], None]],
+        on_navigate: Optional[Callable[[FavoritePath], None]],
     ) -> None:
         super().__init__(parent)
         self._on_navigate = on_navigate
-        self._shortcut_paths: dict[int, str] = {}
+        self._shortcut_paths: dict[int, FavoritePath] = {}
 
-    def register_path_shortcut(self, index: int, path: str) -> None:
+    def register_path_shortcut(self, index: int, entry: FavoritePath) -> None:
         if 0 <= index < 10:
             key = Qt.Key_0 if index == 9 else Qt.Key_1 + index
-            self._shortcut_paths[key] = path
+            self._shortcut_paths[key] = entry
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        path = self._shortcut_paths.get(event.key())
-        if path is not None:
+        entry = self._shortcut_paths.get(event.key())
+        if entry is not None:
             if self._on_navigate is not None:
-                self._on_navigate(path)
+                self._on_navigate(entry)
             self.close()
             event.accept()
             return
@@ -1449,13 +1618,16 @@ class LocalFilePanel(QWidget):
         parent: QWidget = None,
         *,
         on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
+        initial_path: str = '',
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
+        self._initial_path = initial_path
         self._favorites_provider: Optional[
             Callable[[], tuple[Sequence[FavoritePath], Sequence[FavoritePath]]]
         ] = None
         self._manage_favorites_handler: Optional[Callable[[], None]] = None
+        self._favorites_changed_handler: Optional[Callable[[], None]] = None
         self._sftp_handler = None
         self._build_ui()
 
@@ -1473,7 +1645,7 @@ class LocalFilePanel(QWidget):
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         header.addWidget(self.path_edit, 1)
 
-        self.table = LocalFileTable()
+        self.table = LocalFileTable(initial_path=self._initial_path)
         self._nav_toolbar = _FileNavToolbar(self, local=True)
         self._nav_toolbar.set_path_provider(self.table.current_path)
         self._nav_toolbar.set_navigate_handler(self.table.set_path)
@@ -1511,6 +1683,9 @@ class LocalFilePanel(QWidget):
     def set_manage_favorites_handler(self, handler: Callable[[], None]) -> None:
         self._manage_favorites_handler = handler
 
+    def set_favorites_changed_handler(self, handler: Callable[[], None]) -> None:
+        self._favorites_changed_handler = handler
+
     def set_sftp_handler(self, handler) -> None:
         if self._sftp_handler is not None:
             try:
@@ -1538,8 +1713,18 @@ class LocalFilePanel(QWidget):
                 (tr('file.favorites.session_local'), session_entries),
             ),
             on_manage=self._manage_favorites_handler,
-            on_navigate=self.set_path,
+            on_navigate=self._navigate_favorite,
         )
+
+    def _navigate_favorite(self, entry: FavoritePath) -> None:
+        path = entry.path
+        if os.path.exists(path):
+            is_file = os.path.isfile(path)
+            if entry.is_file != is_file:
+                entry.is_file = is_file
+                if self._favorites_changed_handler is not None:
+                    self._favorites_changed_handler()
+        self.set_path(path)
 
     def _setup_table_header_menu(self, *, is_local: bool) -> None:
         header = self.table.horizontalHeader()
@@ -1615,6 +1800,7 @@ class RemoteFilePanel(QWidget):
         self._sftp_handler = None
         self._favorites_provider: Optional[Callable[[], Sequence[FavoritePath]]] = None
         self._manage_favorites_handler: Optional[Callable[[], None]] = None
+        self._favorites_changed_handler: Optional[Callable[[], None]] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -1670,6 +1856,9 @@ class RemoteFilePanel(QWidget):
     def set_manage_favorites_handler(self, handler: Callable[[], None]) -> None:
         self._manage_favorites_handler = handler
 
+    def set_favorites_changed_handler(self, handler: Callable[[], None]) -> None:
+        self._favorites_changed_handler = handler
+
     def _show_favorites_menu(self) -> None:
         entries: Sequence[FavoritePath] = ()
         if self._favorites_provider is not None:
@@ -1679,8 +1868,27 @@ class RemoteFilePanel(QWidget):
             self._nav_toolbar.favorites_button(),
             sections=((tr('file.favorites.session_remote'), entries),),
             on_manage=self._manage_favorites_handler,
-            on_navigate=self.set_path,
+            on_navigate=self._navigate_favorite,
         )
+
+    def _navigate_favorite(self, entry: FavoritePath) -> None:
+        if self._sftp_handler is None:
+            self.table.set_path(entry.path)
+            return
+        asyncio.create_task(self._navigate_favorite_async(entry))
+
+    async def _navigate_favorite_async(self, entry: FavoritePath) -> None:
+        try:
+            directory, select_name, is_file = await self._sftp_handler.resolve_remote_navigation_target(entry.path)
+        except Exception as exc:
+            logger.warning(f'Remote favorite path resolve failed: path={entry.path}, error={exc}')
+            self.table.set_path(entry.path)
+            return
+        if is_file is not None and entry.is_file != is_file:
+            entry.is_file = is_file
+            if self._favorites_changed_handler is not None:
+                self._favorites_changed_handler()
+        self.table.set_path(directory, select_name=select_name)
 
     def _remote_home_path(self) -> str:
         if self._sftp_handler is not None:
@@ -1721,7 +1929,19 @@ class RemoteFilePanel(QWidget):
         return self.table.current_path()
 
     def set_path(self, path: str) -> None:
-        self.table.set_path(path)
+        if self._sftp_handler is None:
+            self.table.set_path(path)
+            return
+        asyncio.create_task(self._set_path_resolved_async(path))
+
+    async def _set_path_resolved_async(self, path: str) -> None:
+        try:
+            directory, select_name, _is_file = await self._sftp_handler.resolve_remote_navigation_target(path)
+        except Exception as exc:
+            logger.warning(f'Remote favorite path resolve failed: path={path}, error={exc}')
+            self.table.set_path(path)
+            return
+        self.table.set_path(directory, select_name=select_name)
 
     def refresh(self) -> None:
         self.table.refresh()
@@ -1799,9 +2019,11 @@ class FilesPanel(QWidget):
         parent: QWidget = None,
         *,
         on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
+        initial_local_path: str = '',
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
+        self._initial_local_path = initial_local_path
         self._splitter_layout_initialized = False
         self._build_ui()
 
@@ -1817,6 +2039,7 @@ class FilesPanel(QWidget):
 
         self.local_file_panel = LocalFilePanel(
             on_save_column_widths=self._on_save_column_widths,
+            initial_path=self._initial_local_path,
         )
         self.remote_file_panel = RemoteFilePanel(
             on_save_column_widths=self._on_save_column_widths,
@@ -1875,11 +2098,14 @@ class FilePanelsContainer(QWidget):
         self._stack.addWidget(self._empty)
         self._stack.setCurrentWidget(self._empty)
 
-    def create_panel(self, tab_id: str) -> FilesPanel:
+    def create_panel(self, tab_id: str, *, initial_local_path: str = '') -> FilesPanel:
         panel = self._panels.get(tab_id)
         if panel is not None:
             return panel
-        panel = FilesPanel(on_save_column_widths=self._on_save_column_widths)
+        panel = FilesPanel(
+            on_save_column_widths=self._on_save_column_widths,
+            initial_local_path=initial_local_path,
+        )
         self._panels[tab_id] = panel
         self._stack.addWidget(panel)
         return panel

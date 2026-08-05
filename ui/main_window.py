@@ -86,10 +86,15 @@ class MainWindow(QMainWindow):
         self.connection_manager = ConnectionManager(self.credential_store, self)
         self._closing_after_transfer_confirm = False
         self._close_in_progress = False
+        self._connect_tasks: dict[str, asyncio.Task] = {}
         self._session_save_timer = QTimer(self)
         self._session_save_timer.setSingleShot(True)
         self._session_save_timer.setInterval(500)
         self._session_save_timer.timeout.connect(self._save_session)
+        self._terminal_resize_timer = QTimer(self)
+        self._terminal_resize_timer.setSingleShot(True)
+        self._terminal_resize_timer.setInterval(80)
+        self._terminal_resize_timer.timeout.connect(self._resize_active_terminal)
         self._active_tab_id: Optional[str] = None
         self._sftp_handlers: dict[str, SftpUiHandler] = {}
         self._local_favorites_dialogs: dict[str, LocalFavoritesDialog] = {}
@@ -308,11 +313,17 @@ class MainWindow(QMainWindow):
         panel.local_file_panel.set_manage_favorites_handler(
             lambda tid=tab_id: self._open_local_favorites_dialog(tid),
         )
+        panel.local_file_panel.set_favorites_changed_handler(
+            lambda tid=tab_id: self._persist_local_favorites_for_tab(tid),
+        )
         panel.remote_file_panel.set_favorites_provider(
             lambda tid=tab_id: self._remote_favorites_for_tab(tid),
         )
         panel.remote_file_panel.set_manage_favorites_handler(
             lambda tid=tab_id: self._open_remote_favorites_dialog(tid),
+        )
+        panel.remote_file_panel.set_favorites_changed_handler(
+            lambda tid=tab_id: self._persist_remote_favorites_for_tab(tid),
         )
 
     def _session_item_for_tab(self, tab_id: str) -> Optional[SessionItem]:
@@ -392,12 +403,22 @@ class MainWindow(QMainWindow):
             session.local_favorites = list(session_entries)
             self.session_panel.persist_sessions()
 
+    def _persist_local_favorites_for_tab(self, tab_id: str) -> None:
+        panel = self.file_panels.get_panel(tab_id)
+        if panel is None:
+            return
+        global_entries, session_entries = self._local_favorites_for_tab(tab_id)
+        self._save_local_favorites(tab_id, list(global_entries), list(session_entries))
+
     def _save_remote_favorites(self, tab_id: str, entries: List[FavoritePath]) -> None:
         session = self._session_item_for_tab(tab_id)
         if session is None:
             return
         session.remote_favorites = list(entries)
         self.session_panel.persist_sessions()
+
+    def _persist_remote_favorites_for_tab(self, tab_id: str) -> None:
+        self._save_remote_favorites(tab_id, list(self._remote_favorites_for_tab(tab_id)))
 
     def _on_remote_list_updated(self, tab_id: str) -> None:
         if self._active_tab_id != tab_id:
@@ -519,7 +540,8 @@ class MainWindow(QMainWindow):
         tab_id, terminal = self.terminal_tabs.add_terminal_tab(session_item.name)
         self._active_tab_id = tab_id
         terminal.setFocus(Qt.OtherFocusReason)
-        panel = self.file_panels.create_panel(tab_id)
+        local_path = resolve_local_path(session_item.local_path)
+        panel = self.file_panels.create_panel(tab_id, initial_local_path=local_path)
         self.file_panels.show_panel(tab_id)
         self._register_files_panel(tab_id, panel)
         terminal.write_text(tr('terminal.connecting') + '\r\n')
@@ -533,12 +555,18 @@ class MainWindow(QMainWindow):
         def _on_disconnected() -> None:
             if not self._terminal_is_alive(terminal):
                 return
+            handler = self._sftp_handlers.get(tab_id)
+            if handler is not None:
+                handler.cancel_transfers()
             terminal.write_text('\r\n' + tr('terminal.disconnected') + '\r\n')
             if self._active_tab_id == tab_id:
                 panel = self.file_panels.get_panel(tab_id)
                 if panel is not None:
                     panel.remote_file_panel.clear_remote()
 
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._connect_tasks[tab_id] = current_task
         try:
             await self.connection_manager.open_tab(
                 tab_id,
@@ -561,6 +589,9 @@ class MainWindow(QMainWindow):
             )
             if self._terminal_is_alive(terminal):
                 terminal.write_text(tr('terminal.connection_error', error=str(exc)) + '\r\n')
+        finally:
+            if self._connect_tasks.get(tab_id) is current_task:
+                self._connect_tasks.pop(tab_id, None)
 
     @staticmethod
     def _terminal_is_alive(terminal: TerminalVTWidget) -> bool:
@@ -626,7 +657,14 @@ class MainWindow(QMainWindow):
     ) -> None:
         if handler is not None:
             handler.cancel_transfers()
-            await handler.wait_transfers_closed()
+            try:
+                await handler.wait_transfers_closed()
+            finally:
+                handler.deleteLater()
+        connect_task = self._connect_tasks.pop(tab_id, None)
+        if connect_task is not None and not connect_task.done():
+            connect_task.cancel()
+            await asyncio.gather(connect_task, return_exceptions=True)
         await self.connection_manager.close_tab(tab_id)
 
     def _on_tab_close_requested(self, tab_id: str) -> None:
@@ -812,5 +850,9 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_session_tree_width()
+        if self._active_tab_id is not None:
+            self._terminal_resize_timer.start()
+
+    def _resize_active_terminal(self) -> None:
         if self._active_tab_id is not None:
             asyncio.create_task(self.connection_manager.resize_terminal(self._active_tab_id))

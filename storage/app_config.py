@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 from i18n.translator import DEFAULT_LOCALE, list_languages
 from log_util import logger
 from storage.paths import CONFIG_FILE
+from storage.json_io import atomic_write_json
 from ui.appearance_defaults import (
     DEFAULT_TERMINAL_FONT_FAMILIES,
     DEFAULT_TERMINAL_FONT_FAMILY,
@@ -430,10 +431,8 @@ def _to_app_config(data: Dict[str, Any]) -> AppConfig:
 
 
 def _save_config(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(path, data)
     except OSError:
         logger.warning(f'Failed to save app config to {path}')
 

@@ -5,3 +5,4 @@ qasync>=0.27
 cryptography>=42.0
 colorama
 loguru
+pypinyin

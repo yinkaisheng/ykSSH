@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from log_util import logger
 from models.session_item import SessionItem
+from storage.json_io import atomic_write_json
 from storage.paths import SESSIONS_FILE
 
 SESSIONS_VERSION = 1
@@ -56,8 +57,7 @@ class SessionProfileStore:
             'items': [item.to_dict() for item in items],
         }
         try:
-            with open(self.path, 'w', encoding='utf-8') as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.path, payload)
             self._cache = items
         except OSError:
             logger.warning(f'Failed to save sessions to {self.path}')

@@ -91,7 +91,14 @@ async def download(
     attrs = await sftp.lstat(remote_path)
     if await _remote_entry_is_dir(sftp, remote_path, attrs):
         logger.info(f'SFTP download directory start: remote={remote_path}, local={local_path}')
-        await _download_dir(sftp, remote_path, local_path, progress_handler, conflict_handler)
+        await _download_dir(
+            sftp,
+            remote_path,
+            local_path,
+            progress_handler,
+            conflict_handler,
+            visited_dirs=set(),
+        )
         logger.info(f'SFTP download directory done: remote={remote_path}, local={local_path}')
         return
     logger.info(f'SFTP download file start: remote={remote_path}, local={local_path}')
@@ -164,14 +171,27 @@ async def _download_dir(
     local_dir: str,
     progress_handler: Optional[ProgressHandler],
     conflict_handler: Optional[ConflictHandler],
+    visited_dirs: set[str],
 ) -> None:
+    canonical_dir = await _remote_realpath(sftp, remote_dir)
+    if canonical_dir in visited_dirs:
+        logger.warning(f'SFTP download skipped recursive symlink directory: remote={remote_dir}')
+        return
+    visited_dirs.add(canonical_dir)
     if not await _ensure_local_dir(sftp, remote_dir, local_dir, conflict_handler):
         return
     for entry in await _remote_entries(sftp, remote_dir):
         name = entry.path.rsplit('/', 1)[-1]
         local_child = os.path.join(local_dir, name)
         if entry.is_dir:
-            await _download_dir(sftp, entry.path, local_child, progress_handler, conflict_handler)
+            await _download_dir(
+                sftp,
+                entry.path,
+                local_child,
+                progress_handler,
+                conflict_handler,
+                visited_dirs,
+            )
         else:
             await _download_file(sftp, entry.path, local_child, progress_handler, conflict_handler)
     attrs = await sftp.lstat(remote_dir)
@@ -390,6 +410,13 @@ async def _remote_entry_is_dir(
     except asyncssh.SFTPError:
         return False
     return stat.S_ISDIR(target_attrs.permissions or 0)
+
+
+async def _remote_realpath(sftp: asyncssh.SFTPClient, path: str) -> str:
+    try:
+        return await sftp.realpath(path)
+    except asyncssh.SFTPError:
+        return path
 
 
 async def _remote_target_attrs(sftp: asyncssh.SFTPClient, path: str) -> asyncssh.SFTPAttrs:

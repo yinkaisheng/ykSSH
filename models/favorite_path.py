@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 
 @dataclass
 class FavoritePath:
     path: str
     note: str = ''
+    is_file: Optional[bool] = None
 
     def display_text(self) -> str:
         path = self.path.strip()
@@ -19,10 +20,12 @@ class FavoritePath:
             return f'{path} ({note})'
         return path
 
-    def to_dict(self) -> Dict[str, str]:
-        data = {'path': self.path}
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {'path': self.path}
         if self.note.strip():
             data['note'] = self.note.strip()
+        if self.is_file is not None:
+            data['is_file'] = bool(self.is_file)
         return data
 
     @classmethod
@@ -33,7 +36,9 @@ class FavoritePath:
         if not path:
             return None
         note = str(data.get('note', '') or '').strip()
-        return cls(path=path, note=note)
+        raw_is_file = data.get('is_file')
+        is_file = raw_is_file if isinstance(raw_is_file, bool) else None
+        return cls(path=path, note=note, is_file=is_file)
 
 
 def favorite_paths_from_raw(value: Any) -> List[FavoritePath]:
@@ -47,5 +52,5 @@ def favorite_paths_from_raw(value: Any) -> List[FavoritePath]:
     return entries
 
 
-def favorite_paths_to_raw(entries: Sequence[FavoritePath]) -> List[Dict[str, str]]:
+def favorite_paths_to_raw(entries: Sequence[FavoritePath]) -> List[Dict[str, Any]]:
     return [entry.to_dict() for entry in entries if entry.path.strip()]

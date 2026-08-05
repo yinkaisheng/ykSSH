@@ -168,6 +168,31 @@ def message_warning(parent: QWidget, title: str, text: str) -> None:
     box.exec_()
 
 
+async def message_warning_async(parent: QWidget, title: str, text: str) -> None:
+    """Non-blocking warning dialog that can be closed by task cancellation."""
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[None] = loop.create_future()
+    box = QMessageBox(QMessageBox.Warning, title, text, QMessageBox.Ok, parent)
+    _translate_message_box_buttons(box)
+
+    def _finish() -> None:
+        if not future.done():
+            future.set_result(None)
+
+    box.finished.connect(_finish)
+    box.open()
+    try:
+        await future
+    finally:
+        try:
+            box.finished.disconnect(_finish)
+        except TypeError:
+            pass
+        if box.isVisible():
+            box.close()
+        box.deleteLater()
+
+
 def message_info(parent: QWidget, title: str, text: str) -> None:
     box = QMessageBox(QMessageBox.Information, title, text, QMessageBox.Ok, parent)
     _translate_message_box_buttons(box)

@@ -237,11 +237,11 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 远端 `~` 使用 `SftpUiHandler.remote_home`（连接时由 Session `remote_path` 初始化，缺省 `/`）。
 - 本地 `~` 为 `os.path.expanduser('~')`；Windows 下 `/` 跳转到当前路径所在盘根（如 `D:\`）。
 - 工具栏与 Table 间距：`_FILE_PANEL_TOOLBAR_TABLE_SPACING`（4px）。
-- 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；ESC 或路径变化清除过滤。
+- 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；中文名称额外支持按拼音首字母过滤（如 `zw` 匹配“中文测试”），首字符为单个多音汉字或后接非汉字时允许首字母多音变体（如“长”和“长abc.txt”可用 `c`/`z`，而“长度”按默认读音 `cd`）；ESC 或路径变化清除过滤。
 - 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。当前行单选且为文件夹时，Enter 进入该目录。
 - 本地文件 table：**Delete** → 回收站（无确认）；**Shift+Delete** → 永久删除（无确认）。右键菜单默认「移到回收站」；按住 **Shift** 再右键则显示「永久删除」并弹确认（对齐资源管理器习惯）。远端 Delete 弹确认后删除，Shift+Delete 直接删除。
 - **上传/下载仅通过右键菜单发起**（不支持文件面板拖拽互传）。默认上传到远端当前路径、下载到本地当前路径；活动传输期间 statusbar 显示速度、百分比与方向图标，底部约 4px 进度条，空闲时隐藏。上传与下载独立统计，可双向同时显示；tooltip 显示已传/总大小。
-- SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。冲突对话框经非阻塞 `ask_transfer_conflict_async` 弹出（不卡住 qasync）。选项：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime。冲突取消中止剩余项目，不回滚已写入内容。远端列表与下载会 follow 指向目录的 symlink，使其可进入/递归下载；远端删除对 symlink 使用 `lstat`，只删链接本身不跟随目标。关闭 Tab 或退出程序时若仍有传输/远端改名/删除/新建等后台任务，会提示是否中断；确认后 cancel 并 **await 任务结束** 再 disconnect，保留已写入内容。
+- SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。冲突对话框经非阻塞 `ask_transfer_conflict_async` 弹出（不卡住 qasync）；传输/远端操作失败 warning 同样为非阻塞 async dialog，关闭/取消任务时会自动收起。选项：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime。冲突取消中止剩余项目，不回滚已写入内容。远端列表与下载会 follow 指向目录的 symlink，使其可进入/递归下载；目录下载与下载前体积统计使用 `realpath` 记录已访问目录，遇到环路会跳过递归分支；远端删除对 symlink 使用 `lstat`，只删链接本身不跟随目标。关闭 Tab 或退出程序时若仍有传输/远端改名/删除/新建等后台任务，会提示是否中断；确认后 cancel 并 **await 任务结束** 再 disconnect，保留已写入内容。
 
 **收藏（★）：**
 
@@ -251,10 +251,12 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 | Session 本地 | `sessions.json` → Session `local_favorites` | 本地 ★ 菜单中列出 |
 | Session 远端 | `sessions.json` → Session `remote_favorites` | 远端 ★ 菜单中列出 |
 
-- 条目结构：`{"path": "...", "note": "..."}`（`models/favorite_path.py` → `FavoritePath`）；菜单显示 `路径` 或 `路径 (备注)`。
+- 条目结构：`{"path": "...", "note": "...", "is_file": true|false}`（`models/favorite_path.py` → `FavoritePath`）；`is_file` 可省略表示未知，点击收藏成功判断当前远端/本地路径类型后会写回。菜单显示 `路径` 或 `路径 (备注)`。
 - 点击 ★：弹出菜单「管理收藏」+ 对应列表；点路径跳转；点「管理收藏」打开**非模态**对话框（`ui/favorites_dialog.py`）。
 - 本地管理对话框：左全局 / 右 Session；路径可粘贴、手动输入或浏览选择（浏览结果经 `os.path.normpath`，Windows 下 `D:/x` → `D:\x`）。
 - 远端管理对话框：仅 Session 列表；路径仅粘贴或手动输入（无浏览）。
+- 管理对话框支持添加、删除、上移、下移收藏；浏览选择本地路径添加后保持普通选中状态，不自动进入单元格编辑。
+- 点击收藏路径时若路径指向文件，会进入该文件所在目录并选中文件；远端路径通过 SFTP `lstat/stat` 判断文件/目录，类型变化会更新 `is_file`；路径不存在时逐级尝试父目录，直到可进入的父目录或 `/`。
 - 关闭管理对话框时写入窗口尺寸（`file_panel.local/remote_favorites_dialog_width/height`），下次打开恢复。
 - 不自动去重；收藏内容经 `save_file_panel_local_favorites` / `SessionTreePanel.persist_sessions()` 保存。
 - `MainWindow._register_files_panel` 注入 provider / manage handler（按 `tab_id` 取 `SSHSession.session_item`）。
@@ -315,7 +317,9 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
   → 若有后台 SFTP 任务：确认 → cancel → await wait_transfers_closed
   → force_close_tab
   → pop handler / 关收藏对话框 / remove_panel
+  → cancel 连接中 task（若 connect 尚未完成）
   → await close_tab（abort 连接中会话、cancel 读任务、disconnect、deleteLater）
+  → handler.deleteLater()
 ```
 
 **关键映射表（MainWindow）：**
@@ -335,11 +339,11 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 `SSHSession`（`core/ssh_session.py`）：
 
-- 使用 `asyncssh.connect()`，`known_hosts=None`（**未校验 host key**，生产环境待完善）
+- 使用 `asyncssh.connect()`，`known_hosts=None`（**未校验 host key**，生产环境待完善）；`connect_timeout` / `login_timeout` 当前为 15 秒
 - 认证：`AUTH_PASSWORD`（密码来自 CredentialStore）或 `AUTH_PUBLIC_KEY`（`key_path`）
 - 同时打开 Shell process 与 SFTP client
 - Signal：`connected` / `disconnected` / `data_received` / `error`
-- 若远端主动断开或读循环结束，`ConnectionManager` 会移除对应 `_sessions` / 远端缓存并断开 Qt signal，UI 清空远端文件面板；用户需要关闭当前 Tab 后重新连接。
+- 若远端主动断开或读循环结束，`ConnectionManager` 会移除对应 `_sessions` / 远端缓存并断开 Qt signal，MainWindow 会取消该 Tab 的 SFTP 任务并清空远端文件面板；用户需要关闭当前 Tab 后重新连接。
 
 `ConnectionManager.cd_shell()`：向交互式 Shell 写入 `cd <path>\r`（延迟 150ms 等待 banner），使终端工作目录与文件面板远端路径一致。
 
@@ -446,10 +450,11 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 ### 8.3 密码存储
 
-- `CredentialStore`：Fernet 加密，当前只接受 version 1；version/解密失败会打 warning 并丢弃无法解密的条目
+- `CredentialStore`：Fernet 加密，当前只接受 version 1；解密失败会打 warning 并丢弃无法解密的条目；version 不匹配会拒绝加载整份凭据并阻止后续保存覆盖原文件
 - `secret.key` 与 `credentials.json` **必须配对迁移**
 - 若已有 `secret.key` 但内容无效：**不会**静默覆盖生成新钥，启动失败并提示修复（`InvalidSecretKeyError`）
 - 删除 Session 树节点（含文件夹）会递归清理对应 `credentials.json` 条目
+- `config.json` / `sessions.json` / `credentials.json` 保存时使用同目录临时文件 + `os.replace()` 原子替换，降低进程中断导致 JSON 截断的风险。
 
 ### 8.4 配置目录迁移（WindTerm 风格）
 
@@ -533,6 +538,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - 双击目录 / `..`：进入子目录或上级
 - **表格空白区双击**（最后一行下方或最右列右侧）：非根目录时跳转上级（`_BaseFileTable.mouseDoubleClickEvent`）
 - 路径栏回车 / 导航工具栏按钮：`set_path` 跳转并刷新
+- Home / End：跳转并滚动到当前可见行的第一行 / 最后一行（过滤后只在可见行范围内跳转）
 
 ### 显示
 
@@ -543,6 +549,8 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - 表头右键「保存列宽」→ `save_file_panel_column_widths()` → 写入 config + 所有 Tab 同步
 
 ### 远程 / 本地 Table 右键菜单
+
+- 在未选中行上右键会先清空旧选择并选中鼠标所在行；在已选中行上右键保留当前多选；空白区右键不改变选择。
 
 - **远程：** 刷新、新建目录；有选中项时：复制文件名、复制路径、复制父路径、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
 - **本地：** 刷新、新建目录；有选中项时：复制、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
@@ -605,7 +613,9 @@ sequenceDiagram
 | 收藏按钮图标 | 当前使用 Unicode 星标，后续可改为 QStyle/icon font 以提升跨平台一致性 |
 | 远端列表性能 | 大目录仍是 `listdir` + 逐项 `lstat`，待改为 attrs readdir 或有界并发 |
 | 下载前体积扫描 | 下载目录前会递归统计大小，大目录开始前可能等待较久 |
-| 本地传输 IO | 上传读文件、目录遍历和本地大小统计仍有同步 IO，待 `asyncio.to_thread` 或分片让出事件循环 |
+| 本地文件 IO | 上传读文件、目录遍历、本地大小统计、本地删除/重命名/新建目录仍有同步 IO，待 `asyncio.to_thread` 或分片让出事件循环 |
+| Tab 重命名 | 右键 Tab 重命名仅修改当前运行时显示标题，不持久化到 `sessions.json` |
+| 密码为空 | 密码认证 Session 若未保存密码，不会弹窗补录；连接时按无密码参数尝试并由 SSH 认证失败返回错误 |
 
 ---
 

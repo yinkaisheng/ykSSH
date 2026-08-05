@@ -26,6 +26,9 @@ from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_favorites_dialog_size
 from ui.dialog_i18n import translate_button_box
 
+_ROLE_FAVORITE_IS_FILE = Qt.UserRole + 1
+_ROLE_FAVORITE_ORIGINAL_PATH = Qt.UserRole + 2
+
 
 def _normalize_local_path(path: str) -> str:
     text = (path or '').strip()
@@ -81,15 +84,21 @@ class _FavoriteListEditor(QWidget):
         self._add_btn = QPushButton(tr('file.favorites.add'))
         self._browse_btn = QPushButton(tr('file.favorites.browse'))
         self._remove_btn = QPushButton(tr('file.favorites.remove'))
+        self._move_up_btn = QPushButton(tr('file.favorites.move_up'))
+        self._move_down_btn = QPushButton(tr('file.favorites.move_down'))
         self._add_btn.clicked.connect(self._add_empty_row)
         self._browse_btn.clicked.connect(self._browse_and_add)
         self._remove_btn.clicked.connect(self._remove_selected)
+        self._move_up_btn.clicked.connect(lambda: self._move_selected(-1))
+        self._move_down_btn.clicked.connect(lambda: self._move_selected(1))
         buttons.addWidget(self._add_btn)
         if allow_browse:
             buttons.addWidget(self._browse_btn)
         else:
             self._browse_btn.hide()
         buttons.addWidget(self._remove_btn)
+        buttons.addWidget(self._move_up_btn)
+        buttons.addWidget(self._move_down_btn)
         buttons.addStretch(1)
         layout.addLayout(buttons)
 
@@ -100,7 +109,7 @@ class _FavoriteListEditor(QWidget):
     def set_entries(self, entries: Sequence[FavoritePath]) -> None:
         self._table.setRowCount(0)
         for entry in entries:
-            self._append_row(entry.path, entry.note, start_edit=False)
+            self._append_row(entry.path, entry.note, is_file=entry.is_file, start_edit=False)
 
     def entries(self) -> List[FavoritePath]:
         result: List[FavoritePath] = []
@@ -110,7 +119,15 @@ class _FavoriteListEditor(QWidget):
             path = path_item.text().strip() if path_item else ''
             note = note_item.text().strip() if note_item else ''
             if path:
-                result.append(FavoritePath(path=path, note=note))
+                is_file = path_item.data(_ROLE_FAVORITE_IS_FILE) if path_item is not None else None
+                original_path = path_item.data(_ROLE_FAVORITE_ORIGINAL_PATH) if path_item is not None else None
+                if original_path != path:
+                    is_file = None
+                result.append(FavoritePath(
+                    path=path,
+                    note=note,
+                    is_file=is_file if isinstance(is_file, bool) else None,
+                ))
         return result
 
     def retranslate_ui(self) -> None:
@@ -122,11 +139,23 @@ class _FavoriteListEditor(QWidget):
         self._add_btn.setText(tr('file.favorites.add'))
         self._browse_btn.setText(tr('file.favorites.browse'))
         self._remove_btn.setText(tr('file.favorites.remove'))
+        self._move_up_btn.setText(tr('file.favorites.move_up'))
+        self._move_down_btn.setText(tr('file.favorites.move_down'))
 
-    def _append_row(self, path: str = '', note: str = '', *, start_edit: bool = True) -> None:
+    def _append_row(
+        self,
+        path: str = '',
+        note: str = '',
+        *,
+        is_file: Optional[bool] = None,
+        start_edit: bool = True,
+    ) -> None:
         row = self._table.rowCount()
         self._table.insertRow(row)
-        self._table.setItem(row, 0, QTableWidgetItem(path))
+        path_item = QTableWidgetItem(path)
+        path_item.setData(_ROLE_FAVORITE_IS_FILE, is_file)
+        path_item.setData(_ROLE_FAVORITE_ORIGINAL_PATH, path)
+        self._table.setItem(row, 0, path_item)
         self._table.setItem(row, 1, QTableWidgetItem(note))
         self._table.setCurrentCell(row, 0)
         if start_edit:
@@ -145,12 +174,34 @@ class _FavoriteListEditor(QWidget):
             start,
         )
         if path:
-            self._append_row(_normalize_local_path(path))
+            self._append_row(_normalize_local_path(path), is_file=False, start_edit=False)
 
     def _remove_selected(self) -> None:
         row = self._table.currentRow()
         if row >= 0:
             self._table.removeRow(row)
+
+    def _move_selected(self, delta: int) -> None:
+        row = self._table.currentRow()
+        target = row + delta
+        if row < 0 or target < 0 or target >= self._table.rowCount():
+            return
+        values = [
+            self._table.item(row, column).text() if self._table.item(row, column) else ''
+            for column in range(self._table.columnCount())
+        ]
+        is_file = self._table.item(row, 0).data(_ROLE_FAVORITE_IS_FILE) if self._table.item(row, 0) else None
+        original_path = self._table.item(row, 0).data(_ROLE_FAVORITE_ORIGINAL_PATH) if self._table.item(row, 0) else None
+        self._table.removeRow(row)
+        self._table.insertRow(target)
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            if column == 0:
+                item.setData(_ROLE_FAVORITE_IS_FILE, is_file)
+                item.setData(_ROLE_FAVORITE_ORIGINAL_PATH, original_path)
+            self._table.setItem(target, column, item)
+        self._table.setCurrentCell(target, 0)
+        self._table.selectRow(target)
 
 
 class LocalFavoritesDialog(QWidget):

@@ -23,7 +23,18 @@ from core.sftp_service import (
 from core.connection_manager import ConnectionManager
 from i18n import tr
 from log_util import logger
-from ui.dialog_i18n import ask_transfer_conflict_async, message_warning
+from ui.dialog_i18n import ask_transfer_conflict_async, message_warning_async
+
+
+def _remote_parent_and_name(path: str) -> tuple[str, str]:
+    text = (path or '').strip()
+    if not text or text == '/':
+        return '/', ''
+    text = text.rstrip('/')
+    parent, _, name = text.rpartition('/')
+    if not parent:
+        parent = '/'
+    return parent, name
 
 
 class SftpUiHandler(QObject):
@@ -62,6 +73,37 @@ class SftpUiHandler(QObject):
     @property
     def remote_home(self) -> str:
         return self._remote_home
+
+    async def resolve_remote_navigation_target(self, path: str) -> tuple[str, str, Optional[bool]]:
+        """Return (directory, filename_to_select, is_file) for a remote favorite/path."""
+        text = (path or '').strip() or '/'
+        ssh = self._cm.get_session(self.tab_id)
+        if ssh is None:
+            return text, '', None
+        sftp = ssh.get_sftp()
+        if sftp is None:
+            return text, '', None
+
+        probe = text
+        while True:
+            try:
+                attrs = await sftp.lstat(probe)
+            except Exception:
+                if probe == '/':
+                    return '/', '', None
+                probe, _name = _remote_parent_and_name(probe)
+                continue
+            mode = attrs.permissions or 0
+            if stat.S_ISLNK(mode):
+                try:
+                    attrs = await sftp.stat(probe)
+                    mode = attrs.permissions or 0
+                except Exception:
+                    pass
+            if stat.S_ISDIR(mode):
+                return probe, '', False if probe == text else None
+            parent, name = _remote_parent_and_name(probe)
+            return parent, name, True if probe == text else None
 
     def try_init_session_paths(self, local_path: str, remote_path: str) -> bool:
         if self._paths_initialized:
@@ -135,7 +177,14 @@ class SftpUiHandler(QObject):
         except OSError:
             return 0
 
-    async def _remote_path_size(self, sftp, path: str) -> int:
+    async def _remote_path_size(
+        self,
+        sftp,
+        path: str,
+        visited_dirs: Optional[set[str]] = None,
+    ) -> int:
+        if visited_dirs is None:
+            visited_dirs = set()
         try:
             attrs = await sftp.lstat(path)
         except Exception:
@@ -151,6 +200,14 @@ class SftpUiHandler(QObject):
                 return int(target_attrs.size or 0)
         if not stat.S_ISDIR(mode):
             return int(attrs.size or 0)
+        try:
+            canonical = await sftp.realpath(path)
+        except Exception:
+            canonical = path
+        if canonical in visited_dirs:
+            logger.warning(f'Remote size skipped recursive symlink directory: tab_id={self.tab_id}, path={path}')
+            return 0
+        visited_dirs.add(canonical)
         total = 0
         try:
             names = await sftp.listdir(path)
@@ -160,7 +217,7 @@ class SftpUiHandler(QObject):
             if name in ('.', '..'):
                 continue
             child = f'{path.rstrip("/")}/{name}' if path not in ('', '/') else f'/{name}'
-            total += await self._remote_path_size(sftp, child)
+            total += await self._remote_path_size(sftp, child, visited_dirs)
         return total
 
     def _begin_transfer_status(self, kind: str, total_bytes: int) -> None:
@@ -252,8 +309,8 @@ class SftpUiHandler(QObject):
 
         return _on_conflict
 
-    def _warn(self, message: str) -> None:
-        message_warning(self._dialog_parent(), tr('file.operation_failed'), message)
+    async def _warn(self, message: str) -> None:
+        await message_warning_async(self._dialog_parent(), tr('file.operation_failed'), message)
 
     async def _upload_async(self, local_paths: List[str]) -> None:
         ssh = self._cm.get_session(self.tab_id)
@@ -294,7 +351,7 @@ class SftpUiHandler(QObject):
                     raise
                 except Exception as exc:
                     logger.warning(f'upload failed: {exc}')
-                    self._warn(str(exc))
+                    await self._warn(str(exc))
             self._cm.invalidate_remote_cache(self.tab_id)
             await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
             self._on_refresh_ui()
@@ -329,8 +386,9 @@ class SftpUiHandler(QObject):
         if sftp is None:
             return
         total_bytes = 0
+        visited_dirs: set[str] = set()
         for remote in remote_paths:
-            total_bytes += await self._remote_path_size(sftp, remote)
+            total_bytes += await self._remote_path_size(sftp, remote, visited_dirs)
         self._transfer_conflict_policy['download'] = None
         self._begin_transfer_status('download', total_bytes)
         logger.info(
@@ -361,7 +419,7 @@ class SftpUiHandler(QObject):
                     raise
                 except Exception as exc:
                     logger.warning(f'download failed: {exc}')
-                    self._warn(str(exc))
+                    await self._warn(str(exc))
             self._on_refresh_ui()
             if user_cancelled:
                 logger.info(
@@ -400,7 +458,7 @@ class SftpUiHandler(QObject):
                     raise
                 except Exception as exc:
                     logger.warning(f'delete failed: {exc}')
-                    self._warn(str(exc))
+                    await self._warn(str(exc))
             self._cm.invalidate_remote_cache(self.tab_id)
             await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
             self._on_refresh_ui()
@@ -432,7 +490,7 @@ class SftpUiHandler(QObject):
             raise
         except Exception as exc:
             logger.warning(f'rename failed: old={old_path}, new={new_path}, error={exc}')
-            self._warn(str(exc))
+            await self._warn(str(exc))
             return
         self._cm.invalidate_remote_cache(self.tab_id)
         await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
@@ -458,7 +516,7 @@ class SftpUiHandler(QObject):
             raise
         except Exception as exc:
             logger.warning(f'mkdir failed: remote={path}, error={exc}')
-            self._warn(str(exc))
+            await self._warn(str(exc))
             return
         self._cm.invalidate_remote_cache(self.tab_id)
         await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)

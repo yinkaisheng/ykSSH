@@ -12,6 +12,8 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from log_util import logger
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
 
+_SSH_CONNECT_TIMEOUT_SECONDS = 15.0
+
 
 class SSHSession(QObject):
     """Async SSH shell session with Qt signals."""
@@ -70,6 +72,8 @@ class SSHSession(QObject):
             'port': session_item.port,
             'username': session_item.username,
             'known_hosts': None,
+            'connect_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
+            'login_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
         }
 
         if session_item.auth_type == AUTH_PUBLIC_KEY and session_item.key_path:
@@ -138,7 +142,8 @@ class SSHSession(QObject):
                 f'session_id={session_item.id}, host={session_item.host}, port={session_item.port}'
             )
         try:
-            if self._read_task is not None:
+            current_task = asyncio.current_task()
+            if self._read_task is not None and self._read_task is not current_task:
                 self._read_task.cancel()
                 try:
                     await self._read_task
@@ -196,6 +201,8 @@ class SSHSession(QObject):
         finally:
             if self._conn is not None and not self._disconnecting:
                 await self.disconnect()
+            if self._read_task is asyncio.current_task():
+                self._read_task = None
 
     def write(self, data: bytes) -> None:
         if self._process is None or self._process.stdin is None:
