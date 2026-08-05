@@ -9,8 +9,8 @@ import sys
 from datetime import datetime
 from typing import Any, Callable, Iterable, List, Optional, Sequence
 
-from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, pyqtSignal
-from PyQt5.QtGui import QFont, QFontMetrics, QMouseEvent, QShowEvent
+from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
@@ -37,7 +37,8 @@ from core.file_permissions import format_local_permission
 from i18n import tr
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
-from ui.dialog_i18n import ask_yes_no
+from ui.theme import active_theme_palette
+from ui.dialog_i18n import ask_yes_no, message_warning
 from ui.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
@@ -284,6 +285,11 @@ def _apply_file_table_layout(
 
 class _BaseFileTable(QTableWidget):
     path_changed = pyqtSignal(str)
+    status_counts_changed = pyqtSignal(int, int, int, int)
+    filter_text_changed = pyqtSignal(str)
+    filter_focus_requested = pyqtSignal()
+    filter_cancelled = pyqtSignal()
+    favorites_menu_requested = pyqtSignal()
 
     DEFAULT_SORT_COLUMN = 0
     DEFAULT_SORT_ORDER = Qt.AscendingOrder
@@ -301,7 +307,46 @@ class _BaseFileTable(QTableWidget):
         header.setSortIndicatorShown(True)
         header.setSectionsClickable(True)
         self._current_path = ''
+        self._filter_text = ''
+        self._filter_edit_focused = False
         self.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.itemSelectionChanged.connect(self._emit_status_counts)
+
+    def set_filter_edit_focused(self, focused: bool) -> None:
+        self._filter_edit_focused = focused
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_F and event.modifiers() & Qt.ControlModifier:
+            self.filter_focus_requested.emit()
+            event.accept()
+            return
+        if event.key() == Qt.Key_D and event.modifiers() & Qt.ControlModifier:
+            self.favorites_menu_requested.emit()
+            event.accept()
+            return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
+            if self._activate_current_directory():
+                event.accept()
+                return
+        if event.key() == Qt.Key_Delete and event.modifiers() in (Qt.NoModifier, Qt.ShiftModifier):
+            if self._handle_delete_key(permanent=bool(event.modifiers() & Qt.ShiftModifier)):
+                event.accept()
+                return
+        if event.key() == Qt.Key_Escape and self._filter_text:
+            self.clear_filter()
+            event.accept()
+            return
+        text = event.text()
+        if text and text.isprintable() and not event.modifiers() & (
+            Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier
+        ):
+            if self._filter_text and not self._filter_edit_focused:
+                self.set_filter_text(text)
+            else:
+                self.set_filter_text(self._filter_text + text)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _is_at_root(self) -> bool:
         raise NotImplementedError
@@ -324,15 +369,37 @@ class _BaseFileTable(QTableWidget):
             return True
         last_cell = self.model().index(last_row, last_col)
         last_rect = self.visualRect(last_cell)
-        return pos.y() > last_rect.bottom() or pos.x() > last_rect.right()
+        return self._visible_row_at_y(pos.y()) is None or pos.x() > last_rect.right()
+
+    def _visible_row_at_y(self, y: int) -> Optional[int]:
+        for row in range(self.rowCount()):
+            if self.isRowHidden(row):
+                continue
+            top = self.rowViewportPosition(row)
+            bottom = top + self.rowHeight(row)
+            if top <= y < bottom:
+                return row
+        return None
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.LeftButton and self._is_blank_area_at(event.pos()):
-            if self._can_go_to_parent():
+        if event.button() == Qt.LeftButton:
+            row = self._visible_row_at_y(event.pos().y())
+            if row is not None and self._pos_within_row_cells(row, event.pos().x()):
+                if self._activate_directory_row(row):
+                    event.accept()
+                    return
+            elif self._can_go_to_parent():
                 self._go_to_parent()
                 event.accept()
                 return
         super().mouseDoubleClickEvent(event)
+
+    def _pos_within_row_cells(self, row: int, x: int) -> bool:
+        last_col = self.columnCount() - 1
+        if last_col < 0:
+            return False
+        rect = self.visualRect(self.model().index(row, last_col))
+        return x <= rect.right()
 
     def _apply_default_sort(self) -> None:
         self.apply_sort(self.DEFAULT_SORT_COLUMN, self.DEFAULT_SORT_ORDER)
@@ -368,6 +435,8 @@ class _BaseFileTable(QTableWidget):
         self.setSortingEnabled(True)
         header.setSortIndicator(sort_column, sort_order)
         self.sortItems(sort_column, sort_order)
+        self._apply_filter_to_rows()
+        self._emit_status_counts()
 
     def _append_entry_row(
         self,
@@ -401,17 +470,108 @@ class _BaseFileTable(QTableWidget):
     def current_path(self) -> str:
         return self._current_path
 
+    def filter_text(self) -> str:
+        return self._filter_text
+
+    def set_filter_text(self, text: str) -> None:
+        if self._filter_text == text:
+            return
+        self._filter_text = text
+        self._apply_filter_to_rows()
+        self._emit_status_counts()
+        self.filter_text_changed.emit(self._filter_text)
+
+    def clear_filter(self) -> None:
+        if not self._filter_text:
+            self.filter_text_changed.emit('')
+            self.filter_cancelled.emit()
+            return
+        self._filter_text = ''
+        self._apply_filter_to_rows()
+        self._emit_status_counts()
+        self.filter_text_changed.emit('')
+        self.filter_cancelled.emit()
+
+    def _entry_matches_filter(self, name: str) -> bool:
+        pattern = self._filter_text.casefold()
+        if not pattern or name == '..':
+            return True
+        target = name.casefold()
+        parts = [part for part in pattern.split('*') if part]
+        if not parts:
+            return True
+        pos = 0
+        if not pattern.startswith('*'):
+            first = parts[0]
+            if not target.startswith(first):
+                return False
+            pos = len(first)
+            parts = parts[1:]
+        for part in parts:
+            found = target.find(part, pos)
+            if found < 0:
+                return False
+            pos = found + len(part)
+        return True
+
+    def _apply_filter_to_rows(self) -> None:
+        for row in range(self.rowCount()):
+            item = self.item(row, 0)
+            if item is None:
+                continue
+            self.setRowHidden(row, not self._entry_matches_filter(item.text()))
+
+    def _emit_status_counts(self) -> None:
+        selected_rows = {idx.row() for idx in self.selectedIndexes()}
+        selected_files = 0
+        selected_dirs = 0
+        total_files = 0
+        total_dirs = 0
+        for row in range(self.rowCount()):
+            if self.isRowHidden(row):
+                continue
+            item = self.item(row, 0)
+            if item is None or item.text() == '..':
+                continue
+            entry_type = item.data(Qt.UserRole) or 'file'
+            if entry_type == 'dir':
+                total_dirs += 1
+                if row in selected_rows:
+                    selected_dirs += 1
+            else:
+                total_files += 1
+                if row in selected_rows:
+                    selected_files += 1
+        self.status_counts_changed.emit(selected_files, total_files, selected_dirs, total_dirs)
+
     def _on_cell_double_clicked(self, row: int, _column: int) -> None:
+        self._activate_directory_row(row)
+
+    def _activate_directory_row(self, row: int) -> bool:
         item = self.item(row, 0)
         if item is None:
-            return
+            return False
         entry_type = item.data(Qt.UserRole)
         name = item.text()
         if entry_type == 'dir':
             self._enter_directory(name)
+            return True
+        return False
+
+    def _activate_current_directory(self) -> bool:
+        selected_rows = sorted({idx.row() for idx in self.selectedIndexes()})
+        if len(selected_rows) != 1:
+            return False
+        row = selected_rows[0]
+        if row != self.currentRow():
+            return False
+        return self._activate_directory_row(row)
 
     def _enter_directory(self, name: str) -> None:
         raise NotImplementedError
+
+    def _handle_delete_key(self, *, permanent: bool) -> bool:
+        return False
 
 
 class LocalFileTable(_BaseFileTable):
@@ -525,10 +685,23 @@ class LocalFileTable(_BaseFileTable):
             return
         if not ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
             return
+        self._delete_entries(selected, permanent=True)
+
+    def _handle_delete_key(self, *, permanent: bool) -> bool:
+        selected = self._selected_entries()
+        if not selected:
+            return False
+        self._delete_entries(selected, permanent=permanent)
+        return True
+
+    def _delete_entries(self, selected: list[tuple[str, str]], *, permanent: bool) -> None:
         for name, entry_type in selected:
             path = self._local_full_path(name)
             try:
-                if entry_type == 'dir':
+                if not permanent:
+                    if not QFile.moveToTrash(path):
+                        message_warning(self, tr('file.delete'), tr('file.move_to_trash_failed', path=path))
+                elif entry_type == 'dir':
                     shutil.rmtree(path)
                 else:
                     os.remove(path)
@@ -578,11 +751,13 @@ class LocalFileTable(_BaseFileTable):
             self._current_path = parent or self._current_path
         else:
             self._current_path = os.path.join(self._current_path, name)
+        self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh()
 
     def set_path(self, path: str) -> None:
         self._current_path = path
+        self.clear_filter()
         self.path_changed.emit(path)
         self.refresh()
 
@@ -697,6 +872,14 @@ class RemoteFileTable(_BaseFileTable):
         if ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
             self.delete_requested.emit([self._remote_full_path(name) for name, _ in selected])
 
+    def _handle_delete_key(self, *, permanent: bool) -> bool:
+        selected = self._selected_entries()
+        if not selected:
+            return False
+        if permanent or ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
+            self.delete_requested.emit([self._remote_full_path(name) for name, _ in selected])
+        return True
+
     def set_list_callback(self, callback: Callable[[str], Any]) -> None:
         self._list_callback = callback
 
@@ -741,17 +924,21 @@ class RemoteFileTable(_BaseFileTable):
         else:
             base = self._current_path.rstrip('/')
             self._current_path = f'{base}/{name}' if base else f'/{name}'
+        self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh_requested.emit()
 
     def set_path(self, path: str) -> None:
         self._current_path = path or '/'
+        self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh_requested.emit()
 
     def clear_remote(self) -> None:
         self._list_callback = None
         self.setRowCount(0)
+        self.clear_filter()
+        self._emit_status_counts()
 
 
 def _list_windows_drives() -> List[str]:
@@ -930,6 +1117,197 @@ class _FileNavToolbar(QWidget):
             btn.setToolTip(tr('file.local_nav.drive', drive=drive))
 
 
+class _FilePanelStatusBar(QWidget):
+    """Bottom status bar with incremental file filter and transfer hint."""
+
+    def __init__(self, table: _BaseFileTable, *, transfer_kind: str, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self._table = table
+        self._transfer_kind = transfer_kind
+        self._transfer_active = False
+        self._transfer_progress = 0.0
+        self.setObjectName('filePanelStatusBar')
+        self._progress_bar = _FileTransferProgressBar(self, transfer_kind=transfer_kind)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self.file_filter_edit = QLineEdit()
+        self.file_filter_edit.setObjectName('fileFilterEdit')
+        self.file_filter_edit.hide()
+        layout.addWidget(self.file_filter_edit)
+
+        self._summary_label = QLabel()
+        self._summary_label.setObjectName('filePanelStatusText')
+        self._summary_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self._summary_label, 1)
+
+        self._speed_label = QLabel()
+        self._speed_label.setObjectName('filePanelTransferSpeed')
+        self._speed_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._speed_label.hide()
+        layout.addWidget(self._speed_label)
+
+        self._transfer_button = QToolButton()
+        self._transfer_button.setObjectName('filePanelStatusButton')
+        self._transfer_button.setAutoRaise(True)
+        self._transfer_button.setEnabled(False)
+        self._transfer_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._transfer_button.setText('↑' if transfer_kind == 'upload' else '↓')
+        self._transfer_button.hide()
+        layout.addWidget(self._transfer_button)
+
+        table.status_counts_changed.connect(self._update_counts)
+        table.filter_text_changed.connect(self._sync_filter_text)
+        table.filter_focus_requested.connect(self.focus_filter)
+        table.filter_cancelled.connect(self.hide_filter)
+        self.file_filter_edit.textChanged.connect(table.set_filter_text)
+        self.file_filter_edit.installEventFilter(self)
+        table.status_counts_changed.emit(0, 0, 0, 0)
+        self.apply_layout()
+
+    def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
+        if obj is self.file_filter_edit and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self._table.clear_filter()
+                self._table.setFocus(Qt.OtherFocusReason)
+                return True
+        if obj is self.file_filter_edit and event.type() in (QEvent.FocusIn, QEvent.FocusOut):
+            self._table.set_filter_edit_focused(event.type() == QEvent.FocusIn)
+        return super().eventFilter(obj, event)
+
+    def _sync_filter_text(self, text: str) -> None:
+        if self.file_filter_edit.text() != text:
+            self.file_filter_edit.blockSignals(True)
+            self.file_filter_edit.setText(text)
+            self.file_filter_edit.blockSignals(False)
+        if text:
+            self.focus_filter()
+
+    def focus_filter(self) -> None:
+        self.file_filter_edit.show()
+        self.file_filter_edit.setFocus(Qt.OtherFocusReason)
+        text = self.file_filter_edit.text()
+        if text:
+            self.file_filter_edit.setCursorPosition(len(text))
+        QTimer.singleShot(0, self._update_progress_bar_geometry)
+
+    def hide_filter(self) -> None:
+        self.file_filter_edit.hide()
+        self._update_progress_bar_geometry()
+
+    def _update_counts(
+        self,
+        selected_files: int,
+        total_files: int,
+        selected_dirs: int,
+        total_dirs: int,
+    ) -> None:
+        self._summary_label.setText(
+            tr(
+                'file.status_counts',
+                selected_files=selected_files,
+                total_files=total_files,
+                selected_dirs=selected_dirs,
+                total_dirs=total_dirs,
+            ),
+        )
+
+    def set_transfer_status(
+        self,
+        kind: str,
+        speed_text: str,
+        active: bool,
+        progress: float,
+        transferred_bytes: int,
+        total_bytes: int,
+    ) -> None:
+        if kind != self._transfer_kind:
+            return
+        self._transfer_active = active
+        self._transfer_progress = max(0.0, min(1.0, float(progress)))
+        percent = f'{self._transfer_progress * 100:.0f}%'
+        self._speed_label.setText(f'{speed_text}  {percent}' if speed_text else percent)
+        self._speed_label.setToolTip(
+            tr(
+                'file.transfer_tooltip',
+                transferred=_format_size(max(0, int(transferred_bytes))),
+                total=_format_size(max(0, int(total_bytes))),
+            ) if active else ''
+        )
+        self._speed_label.setVisible(active)
+        self._transfer_button.setVisible(active)
+        self._update_progress_bar_geometry()
+        self._progress_bar.set_progress(self._transfer_progress if active else 0.0, active)
+
+    def apply_layout(self) -> None:
+        cfg = get_app_config().file_panel
+        font = QFont()
+        font.setPixelSize(cfg.file_panel_statusbar_font_size)
+        for widget in (
+            self.file_filter_edit,
+            self._summary_label,
+            self._speed_label,
+            self._transfer_button,
+        ):
+            widget.setFont(font)
+        height = max(20, cfg.file_panel_statusbar_font_size + 8)
+        self.setFixedHeight(height)
+        self.file_filter_edit.setFixedHeight(height)
+        square = QSize(height, height)
+        self._transfer_button.setFixedSize(square)
+        self._update_progress_bar_geometry()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._update_progress_bar_geometry()
+
+    def _update_progress_bar_geometry(self) -> None:
+        x = 0
+        if not self.file_filter_edit.isHidden():
+            x = self.file_filter_edit.geometry().right() + 1
+        self._progress_bar.setGeometry(
+            x,
+            max(0, self.height() - 4),
+            max(0, self.width() - x),
+            4,
+        )
+
+
+class _FileTransferProgressBar(QWidget):
+    def __init__(self, parent: QWidget, *, transfer_kind: str) -> None:
+        super().__init__(parent)
+        self._transfer_kind = transfer_kind
+        self._active = False
+        self._progress = 0.0
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.hide()
+
+    def set_progress(self, progress: float, active: bool) -> None:
+        self._active = active
+        self._progress = max(0.0, min(1.0, float(progress)))
+        self.setVisible(active)
+        if active:
+            self.raise_()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        if not self._active:
+            return
+        palette = active_theme_palette()
+        painter = QPainter(self)
+        try:
+            track = QColor(palette.background_secondary)
+            fill = QColor(palette.highlight if self._transfer_kind == 'upload' else palette.status_success)
+            painter.fillRect(QRect(0, 0, self.width(), self.height()), track)
+            progress_width = int(self.width() * self._progress)
+            if progress_width > 0:
+                painter.fillRect(QRect(0, 0, progress_width, self.height()), fill)
+        finally:
+            painter.end()
+
+
 def _show_favorites_menu(
     parent: QWidget,
     anchor: QWidget,
@@ -938,7 +1316,7 @@ def _show_favorites_menu(
     on_manage: Optional[Callable[[], None]],
     on_navigate: Optional[Callable[[str], None]],
 ) -> None:
-    menu = QMenu(parent)
+    menu = _FavoriteMenu(parent, on_navigate=on_navigate)
     menu_font = QFont()
     menu_font.setPixelSize(get_app_config().file_panel.file_panel_favorites_menu_font_size)
     menu.setFont(menu_font)
@@ -952,8 +1330,11 @@ def _show_favorites_menu(
             header = menu.addAction(title)
             header.setEnabled(False)
         for entry in entries:
-            action = menu.addAction(entry.display_text())
+            shortcut_index = len(path_actions)
+            prefix = _favorite_menu_shortcut_prefix(shortcut_index)
+            action = menu.addAction(f'{prefix}{entry.display_text()}')
             path_actions.append((action, entry.path))
+            menu.register_path_shortcut(shortcut_index, entry.path)
     chosen = menu.exec_(anchor.mapToGlobal(anchor.rect().bottomLeft()))
     if chosen is None:
         return
@@ -965,6 +1346,40 @@ def _show_favorites_menu(
         if chosen == action and on_navigate is not None:
             on_navigate(path)
             return
+
+
+def _favorite_menu_shortcut_prefix(index: int) -> str:
+    keys = ('1', '2', '3', '4', '5', '6', '7', '8', '9', '0')
+    if 0 <= index < len(keys):
+        return f'{keys[index]}  '
+    return ''
+
+
+class _FavoriteMenu(QMenu):
+    def __init__(
+        self,
+        parent: QWidget = None,
+        *,
+        on_navigate: Optional[Callable[[str], None]],
+    ) -> None:
+        super().__init__(parent)
+        self._on_navigate = on_navigate
+        self._shortcut_paths: dict[int, str] = {}
+
+    def register_path_shortcut(self, index: int, path: str) -> None:
+        if 0 <= index < 10:
+            key = Qt.Key_0 if index == 9 else Qt.Key_1 + index
+            self._shortcut_paths[key] = path
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        path = self._shortcut_paths.get(event.key())
+        if path is not None:
+            if self._on_navigate is not None:
+                self._on_navigate(path)
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class LocalFilePanel(QWidget):
@@ -1015,6 +1430,8 @@ class LocalFilePanel(QWidget):
         layout.addWidget(self._toolbar)
 
         layout.addWidget(self.table, 1)
+        self.statusbar = _FilePanelStatusBar(self.table, transfer_kind='upload')
+        layout.addWidget(self.statusbar)
 
         self.table.path_changed.connect(self.path_edit.setText)
         self.table.path_changed.connect(self.path_changed.emit)
@@ -1022,6 +1439,7 @@ class LocalFilePanel(QWidget):
         self.path_edit.returnPressed.connect(self._path_entered)
         self._nav_toolbar.refresh_requested.connect(self.table.refresh)
         self._nav_toolbar.favorites_requested.connect(self._show_favorites_menu)
+        self.table.favorites_menu_requested.connect(self._show_favorites_menu)
         self._setup_table_header_menu(is_local=True)
         self.table.refresh()
         self.path_edit.setText(self.table.current_path())
@@ -1040,11 +1458,15 @@ class LocalFilePanel(QWidget):
         if self._sftp_handler is not None:
             try:
                 self.table.upload_requested.disconnect()
+                self._sftp_handler.transfer_status_changed.disconnect(
+                    self.statusbar.set_transfer_status,
+                )
             except TypeError:
                 pass
         self._sftp_handler = handler
         if handler is not None:
             self.table.upload_requested.connect(handler.upload_local_paths)
+            handler.transfer_status_changed.connect(self.statusbar.set_transfer_status)
 
     def _show_favorites_menu(self) -> None:
         global_entries: Sequence[FavoritePath] = ()
@@ -1102,6 +1524,7 @@ class LocalFilePanel(QWidget):
             path_edit=self.path_edit,
             nav_toolbar=self._nav_toolbar,
         )
+        self.statusbar.apply_layout()
 
     def apply_column_widths(self, widths: dict[str, int]) -> None:
         _apply_column_widths(
@@ -1116,6 +1539,7 @@ class LocalFilePanel(QWidget):
         self._nav_toolbar.retranslate_ui()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         self.table.setHorizontalHeaderLabels(_file_table_header_labels())
+        self.table._emit_status_counts()
 
 
 class RemoteFilePanel(QWidget):
@@ -1170,6 +1594,8 @@ class RemoteFilePanel(QWidget):
         layout.addWidget(self.placeholder, 1)
         layout.addWidget(self.table, 1)
         self.table.hide()
+        self.statusbar = _FilePanelStatusBar(self.table, transfer_kind='download')
+        layout.addWidget(self.statusbar)
 
         self.table.path_changed.connect(self.path_edit.setText)
         self.table.path_changed.connect(self.path_changed.emit)
@@ -1177,6 +1603,7 @@ class RemoteFilePanel(QWidget):
         self.path_edit.returnPressed.connect(self._path_entered)
         self._nav_toolbar.refresh_requested.connect(self._remote_refresh)
         self._nav_toolbar.favorites_requested.connect(self._show_favorites_menu)
+        self.table.favorites_menu_requested.connect(self._show_favorites_menu)
         self._setup_table_header_menu(is_local=False)
 
     def set_favorites_provider(self, provider: Callable[[], Sequence[FavoritePath]]) -> None:
@@ -1249,6 +1676,7 @@ class RemoteFilePanel(QWidget):
             path_edit=self.path_edit,
             nav_toolbar=self._nav_toolbar,
         )
+        self.statusbar.apply_layout()
 
     def apply_column_widths(self, widths: dict[str, int]) -> None:
         _apply_column_widths(
@@ -1279,6 +1707,9 @@ class RemoteFilePanel(QWidget):
                 self.table.rename_requested.disconnect()
                 self.table.mkdir_requested.disconnect()
                 self.table.refresh_requested.disconnect()
+                self._sftp_handler.transfer_status_changed.disconnect(
+                    self.statusbar.set_transfer_status,
+                )
             except TypeError:
                 pass
         self._sftp_handler = handler
@@ -1289,6 +1720,7 @@ class RemoteFilePanel(QWidget):
         self.table.delete_requested.connect(handler.delete_remote_paths)
         self.table.rename_requested.connect(handler.rename_remote)
         self.table.mkdir_requested.connect(handler.mkdir_remote)
+        handler.transfer_status_changed.connect(self.statusbar.set_transfer_status)
         self.table.refresh_requested.connect(
             lambda: handler.refresh_remote(self.table.current_path()),
         )
@@ -1299,6 +1731,7 @@ class RemoteFilePanel(QWidget):
         self.placeholder.setText(tr('file.not_connected'))
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         self.table.setHorizontalHeaderLabels(_file_table_header_labels())
+        self.table._emit_status_counts()
 
 
 class FilesPanel(QWidget):

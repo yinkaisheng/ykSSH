@@ -13,7 +13,7 @@ from core.sftp_service import listdir
 from core.ssh_session import SSHSession
 from log_util import logger
 from models.session_item import SessionItem
-from storage.keyring_store import KeyringStore
+from storage.credential_store import CredentialStore
 from ui.terminal_vt_widget import TerminalVTWidget
 
 
@@ -24,11 +24,11 @@ class ConnectionManager(QObject):
 
     def __init__(
         self,
-        keyring_store: Optional[KeyringStore] = None,
+        credential_store: Optional[CredentialStore] = None,
         parent: QObject = None,
     ) -> None:
         super().__init__(parent)
-        self.keyring = keyring_store or KeyringStore()
+        self.keyring = credential_store or CredentialStore()
         self._sessions: Dict[str, SSHSession] = {}
         self._terminals: Dict[str, TerminalVTWidget] = {}
         self._tab_titles: Dict[str, str] = {}

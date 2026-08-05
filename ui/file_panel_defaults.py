@@ -30,6 +30,7 @@ DEFAULT_FILE_TABLE_HEADER_HEIGHT_PX = 22
 DEFAULT_FILE_TABLE_ROW_HEIGHT_PX = 24
 DEFAULT_FILE_PANEL_TOOLBAR_HEIGHT = 26
 DEFAULT_FILE_PANEL_TOOLBAR_FONT_SIZE = 14
+DEFAULT_FILE_PANEL_STATUSBAR_FONT_SIZE = 13
 DEFAULT_FILE_PANEL_FAVORITES_MENU_FONT_SIZE = 14
 DEFAULT_FOLDER_NAME_BOLD = True
 DEFAULT_LOCAL_FAVORITES_DIALOG_WIDTH = 820
@@ -42,6 +43,7 @@ _FILE_PANEL_INT_BOUNDS: Dict[str, Tuple[int, int]] = {
     'row_height_px': (18, 48),
     'file_panel_toolbar_height': (18, 48),
     'file_panel_toolbar_font_size': (8, 32),
+    'file_panel_statusbar_font_size': (8, 32),
     'file_panel_favorites_menu_font_size': (8, 32),
     'local_favorites_dialog_width': (480, 4000),
     'local_favorites_dialog_height': (280, 3000),
@@ -54,6 +56,7 @@ _FILE_PANEL_INT_DEFAULTS: Dict[str, int] = {
     'row_height_px': DEFAULT_FILE_TABLE_ROW_HEIGHT_PX,
     'file_panel_toolbar_height': DEFAULT_FILE_PANEL_TOOLBAR_HEIGHT,
     'file_panel_toolbar_font_size': DEFAULT_FILE_PANEL_TOOLBAR_FONT_SIZE,
+    'file_panel_statusbar_font_size': DEFAULT_FILE_PANEL_STATUSBAR_FONT_SIZE,
     'file_panel_favorites_menu_font_size': DEFAULT_FILE_PANEL_FAVORITES_MENU_FONT_SIZE,
     'local_favorites_dialog_width': DEFAULT_LOCAL_FAVORITES_DIALOG_WIDTH,
     'local_favorites_dialog_height': DEFAULT_LOCAL_FAVORITES_DIALOG_HEIGHT,

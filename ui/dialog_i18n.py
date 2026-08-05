@@ -201,6 +201,30 @@ def ask_yes_no_cancel(
     return box.exec_()
 
 
+def ask_transfer_conflict(parent: QWidget, title: str, text: str) -> str:
+    box = QMessageBox(QMessageBox.Question, title, text, QMessageBox.NoButton, parent)
+    choices = (
+        ('overwrite', 'dialog.overwrite'),
+        ('resume', 'dialog.resume'),
+        ('overwrite_all', 'dialog.overwrite_all'),
+        ('resume_all', 'dialog.resume_all'),
+        ('cancel', 'dialog.cancel'),
+    )
+    buttons: dict[QPushButton, str] = {}
+    for value, key in choices:
+        role = QMessageBox.RejectRole if value == 'cancel' else QMessageBox.ActionRole
+        button = box.addButton(tr(key), role)
+        buttons[button] = value
+        if value == 'resume':
+            box.setDefaultButton(button)
+    result = box.exec_()
+    del result
+    clicked = box.clickedButton()
+    if clicked is None:
+        return 'cancel'
+    return buttons.get(clicked, 'cancel')
+
+
 def get_open_file_name(
     parent: QWidget,
     title: str,

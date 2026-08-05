@@ -97,6 +97,7 @@ class FilePanelConfig:
     row_height_px: int
     file_panel_toolbar_height: int
     file_panel_toolbar_font_size: int
+    file_panel_statusbar_font_size: int
     file_panel_favorites_menu_font_size: int
     folder_name_bold: bool
     local_favorites: Tuple[FavoritePath, ...]
@@ -329,6 +330,7 @@ def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
         row_height_px=file_panel['row_height_px'],
         file_panel_toolbar_height=file_panel['file_panel_toolbar_height'],
         file_panel_toolbar_font_size=file_panel['file_panel_toolbar_font_size'],
+        file_panel_statusbar_font_size=file_panel['file_panel_statusbar_font_size'],
         file_panel_favorites_menu_font_size=file_panel['file_panel_favorites_menu_font_size'],
         folder_name_bold=file_panel['folder_name_bold'],
         local_favorites=tuple(favorite_paths_from_raw(file_panel.get('local_favorites'))),
@@ -368,14 +370,8 @@ def _normalize_window(raw: Any) -> Dict[str, Any]:
         normalized['width'] = width
     if isinstance(height, int) and height > 0:
         normalized['height'] = height
-    session_tree_width = raw.get('session_tree_width')
-    if session_tree_width is None and isinstance(raw.get('main_splitter'), (int, float)):
-        legacy = float(raw['main_splitter'])
-        if 0.0 < legacy <= 1.0:
-            base_width = width if isinstance(width, int) and width > 0 else DEFAULT_SESSION_TREE_WIDTH * 4
-            session_tree_width = int(base_width * legacy)
     normalized['session_tree_width'] = _clamp_int(
-        session_tree_width,
+        raw.get('session_tree_width'),
         DEFAULT_SESSION_TREE_WIDTH,
         _MIN_SESSION_TREE_WIDTH,
         _MAX_SESSION_TREE_WIDTH,
@@ -534,6 +530,8 @@ def save_app_preferences(
         'status_font_size_px': current.status_font_size_px,
         'session_tree_font_size_px': current.session_tree_font_size_px,
         'session_tree_row_height_px': current.session_tree_row_height_px,
+        'filter_edit_height': current.filter_edit_height,
+        'filter_edit_font_size': current.filter_edit_font_size,
         'ui_font_families_win': list(current.ui_font_families_win),
         'terminal_font_family': terminal_font_family,
         'terminal_font_size_px': terminal_font_size_px,

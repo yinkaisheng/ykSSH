@@ -31,7 +31,7 @@ from storage.app_config import (
     save_file_panel_local_favorites,
     save_window_state,
 )
-from storage.keyring_store import KeyringStore
+from storage.credential_store import CredentialStore
 from storage.session_profile_store import SessionProfileStore
 from ui.about_dialog import show_about_dialog
 from ui.favorites_dialog import (
@@ -55,6 +55,7 @@ from ui.theme import (
     normalize_terminal_font_size,
     normalize_theme_name,
 )
+from ui.dialog_i18n import ask_yes_no
 
 
 def splitter_ratio_to_sizes(total: int, ratio: float) -> list[int]:
@@ -80,8 +81,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.profile_store = SessionProfileStore()
-        self.keyring_store = KeyringStore()
-        self.connection_manager = ConnectionManager(self.keyring_store, self)
+        self.credential_store = CredentialStore()
+        self.connection_manager = ConnectionManager(self.credential_store, self)
+        self._closing_after_transfer_confirm = False
+        self._close_in_progress = False
         self._session_save_timer = QTimer(self)
         self._session_save_timer.setSingleShot(True)
         self._session_save_timer.setInterval(500)
@@ -116,7 +119,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._title_bar, 0)
         self._setup_menus()
 
-        self.session_panel = SessionTreePanel(self.profile_store, self.keyring_store)
+        self.session_panel = SessionTreePanel(self.profile_store, self.credential_store)
         self.terminal_tabs = TerminalTabWidget()
         self.file_panels = FilePanelsContainer()
 
@@ -169,6 +172,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.session_panel.session_connect_requested.connect(self._connect_session)
         self.session_panel.sessions_changed.connect(self._schedule_session_save)
+        self.terminal_tabs.tab_close_requested.connect(self._on_tab_close_requested)
         self.terminal_tabs.tab_closed.connect(self._on_tab_closed)
         self.terminal_tabs.currentChanged.connect(self._on_current_tab_changed)
         self.connection_manager.remote_list_updated.connect(self._on_remote_list_updated)
@@ -258,9 +262,21 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._save_session()
-        asyncio.create_task(self.connection_manager.close_all())
-        super().closeEvent(event)
+        if self._closing_after_transfer_confirm:
+            self._save_session()
+            super().closeEvent(event)
+            return
+        if self._close_in_progress:
+            event.ignore()
+            return
+        if self._has_running_transfers():
+            if not self._confirm_interrupt_transfers():
+                event.ignore()
+                return
+            self._cancel_all_transfers()
+        event.ignore()
+        self._close_in_progress = True
+        asyncio.create_task(self._finish_close_async())
 
     def retranslate_ui(self) -> None:
         self.setWindowTitle(tr('main.window_title'))
@@ -409,6 +425,37 @@ class MainWindow(QMainWindow):
             self._sftp_handlers[tab_id] = handler
         return handler
 
+    def _has_running_transfers(self, tab_id: Optional[str] = None) -> bool:
+        if tab_id is not None:
+            handler = self._sftp_handlers.get(tab_id)
+            return handler.has_running_transfers() if handler is not None else False
+        return any(handler.has_running_transfers() for handler in self._sftp_handlers.values())
+
+    def _confirm_interrupt_transfers(self) -> bool:
+        return ask_yes_no(
+            self,
+            tr('file.transfer_running_title'),
+            tr('file.transfer_running_body'),
+        )
+
+    def _cancel_all_transfers(self) -> None:
+        for handler in self._sftp_handlers.values():
+            handler.cancel_transfers()
+
+    async def _close_all_async(self) -> None:
+        await asyncio.gather(
+            *(handler.wait_transfers_closed() for handler in list(self._sftp_handlers.values())),
+            return_exceptions=True,
+        )
+        await self.connection_manager.close_all()
+
+    async def _finish_close_async(self) -> None:
+        self._save_session()
+        await self._close_all_async()
+        self._closing_after_transfer_confirm = True
+        self._close_in_progress = False
+        self.close()
+
     def _refresh_file_panels(self) -> None:
         panel = self._active_files_panel()
         if panel is None:
@@ -520,6 +567,7 @@ class MainWindow(QMainWindow):
         panel.remote_file_panel.refresh()
 
     def _on_tab_closed(self, tab_id: str) -> None:
+        was_active = self._active_tab_id == tab_id
         asyncio.create_task(self.connection_manager.close_tab(tab_id))
         self._sftp_handlers.pop(tab_id, None)
         local_dialog = self._local_favorites_dialogs.pop(tab_id, None)
@@ -529,7 +577,7 @@ class MainWindow(QMainWindow):
         if remote_dialog is not None:
             remote_dialog.close()
         self.file_panels.remove_panel(tab_id)
-        if self._active_tab_id == tab_id:
+        if was_active:
             self._active_tab_id = None
             index = self.terminal_tabs.currentIndex()
             if index >= 0:
@@ -539,6 +587,15 @@ class MainWindow(QMainWindow):
                     self._attach_file_panel(new_tab_id)
             else:
                 self.file_panels.show_empty()
+
+    def _on_tab_close_requested(self, tab_id: str) -> None:
+        if self._has_running_transfers(tab_id):
+            if not self._confirm_interrupt_transfers():
+                return
+            handler = self._sftp_handlers.get(tab_id)
+            if handler is not None:
+                handler.cancel_transfers()
+        self.terminal_tabs.force_close_tab(tab_id)
 
     def _on_current_tab_changed(self, index: int) -> None:
         if index < 0:

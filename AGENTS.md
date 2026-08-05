@@ -19,12 +19,13 @@
 - Tab 关闭时 `ConnectionManager.close_tab()` 须 cancel 读任务并 `disconnect()`。
 - 不要提交 `config/` 下的运行时文件（含 `secret.key`、`credentials.json`）或含真实凭据的内容。
 - 若改动影响**架构、配置 schema、连接/文件面板/终端关键行为或已知限制**，同步更新 [IMPLEMENTATION.md](IMPLEMENTATION.md) 对应章节；纯样式微调、文案拼写、不改变对外行为的小修且文档未过时则可跳过。
+- 当前处于开发阶段，修改配置 schema、API、配置格式或行为时直接按新设计落地；不保留旧配置、旧字段、旧路径或旧行为的兼容分支。稳定版发布后再按发布策略补充兼容/迁移规则。
 
 ## 代码约定
 
 - Python 3.10+，`from __future__ import annotations`，UTF-8，`# -*- coding: utf-8 -*-`。
 - 新代码匹配现有风格：类型标注、简短 docstring、分层清晰（models → core → storage → ui）。
-- 修改配置 schema 时保持向后兼容，或在 `app_config.py` / store 中做 normalize。
+- 修改配置 schema 时直接采用新结构，不保留旧字段兼容层。
 - 移植或对齐参考项目（`../http-requester`、`../nebula-shell`）时保持 PyQt5，改 import 路径为 MyPyShell 包结构。
 
 ## 改动后验证
@@ -52,6 +53,7 @@ python main.py
 - [ ] Session 密码未写入 sessions.json
 - [ ] 未引入 PyQt6 或 paramiko（本项目统一 asyncssh）
 - [ ] 改动范围与任务相关，未无关重构
+- [ ] 未为旧格式/旧字段保留向后兼容分支
 - [ ] 若有架构/schema/关键行为变化，已同步更新 IMPLEMENTATION.md
 
 ## 延伸阅读

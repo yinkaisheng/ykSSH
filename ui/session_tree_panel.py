@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 from i18n import tr
 from models.session_item import AUTH_PUBLIC_KEY, SessionItem
 from storage.app_config import get_app_config
-from storage.keyring_store import KeyringStore
+from storage.credential_store import CredentialStore
 from storage.session_profile_store import SessionProfileStore
 from ui.dialog_i18n import ask_yes_no
 from ui.prompt_dialog import prompt_text
@@ -69,12 +69,12 @@ class SessionTreePanel(QWidget):
     def __init__(
         self,
         session_store: SessionProfileStore,
-        keyring_store: Optional[KeyringStore] = None,
+        credential_store: Optional[CredentialStore] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.store = session_store
-        self.keyring = keyring_store or KeyringStore()
+        self.keyring = credential_store or CredentialStore()
         self._items: List[SessionItem] = []
         self._init_ui()
         self.reload()

@@ -98,7 +98,6 @@ MyPyShell/
 │   ├── session_profile_store.py # sessions.json（Session 树）
 │   ├── credential_store.py      # credentials.json（Fernet 加密密码）
 │   ├── secret_key.py            # secret.key 生成/加载
-│   └── keyring_store.py         # CredentialStore 别名（兼容旧名）
 │
 ├── i18n/
 │   ├── translator.py            # tr() 引擎
@@ -156,7 +155,7 @@ MyPyShell/
 | `window.vertical_splitter` | 终端|文件面板垂直比例（0~1） |
 | `window.tab_bar_height` / `window.title_bar_height` / `window.border_width` | Tab 栏 / 标题栏 / 边框高度 |
 
-拖动 splitter 后 500ms 防抖保存（`MainWindow._schedule_session_save`）。旧版 `window.main_splitter`（0~1 比例）在 `app_config` normalize 时会换算为 `session_tree_width`。
+拖动 splitter 后 500ms 防抖保存（`MainWindow._schedule_session_save`）。当前处于开发阶段，配置字段以当前 schema 为准，不为旧字段保留兼容分支。
 
 ### 5.1 无边框标题栏拖动（Windows）
 
@@ -201,11 +200,13 @@ asyncio.set_event_loop(loop)
 ```
 FilePanelsContainer                    # 主窗口底部，QStackedWidget
 ├── FilesPanel（tab_id = A）
-│   ├── LocalFilePanel                 # 工具栏 + LocalFileTable
-│   │     └── toolbar: 标签 | 路径框 | _FileNavToolbar
+│   ├── LocalFilePanel                 # 工具栏 + LocalFileTable + statusbar
+│   │     ├── toolbar: 标签 | 路径框 | _FileNavToolbar
+│   │     └── statusbar: file_filter_edit | 选中统计 | 上传速度/图标
 │   ├── EqualSplitSplitter             # 本地|远端分割，比例各 Tab 独立
-│   └── RemoteFilePanel                # 工具栏 + RemoteFileTable / 未连接占位
-│         └── toolbar: 标签 | 路径框 | _FileNavToolbar
+│   └── RemoteFilePanel                # 工具栏 + RemoteFileTable / 未连接占位 + statusbar
+│         ├── toolbar: 标签 | 路径框 | _FileNavToolbar
+│         └── statusbar: file_filter_edit | 选中统计 | 下载速度/图标
 ├── FilesPanel（tab_id = B）
 └── _empty                             # 无 Tab 时的空白页
 ```
@@ -216,6 +217,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 |----|------|
 | `LocalFileTable` / `RemoteFileTable` | 排序、目录浏览、双击进入子目录；空白区双击返回上级 |
 | `_FileNavToolbar` | 导航快捷按钮（见下）；`objectName: fileNavToolbar` |
+| `_FilePanelStatusBar` | 底部状态栏：按键触发的隐藏过滤框、文件/文件夹选中统计、传输速度与方向图标 |
 | `LocalFilePanel` / `RemoteFilePanel` | 路径编辑框 + 导航栏 + Table 容器 |
 | `FilesPanel` | 组合本地 + splitter + 远端 |
 | `FilePanelsContainer` | 按 `tab_id` 创建/销毁/切换 FilesPanel |
@@ -231,6 +233,11 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 远端 `~` 使用 `SftpUiHandler.remote_home`（连接时由 Session `remote_path` 初始化，缺省 `/`）。
 - 本地 `~` 为 `os.path.expanduser('~')`；Windows 下 `/` 跳转到当前路径所在盘根（如 `D:\`）。
 - 工具栏与 Table 间距：`_FILE_PANEL_TOOLBAR_TABLE_SPACING`（4px）。
+- 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；ESC 或路径变化清除过滤。
+- 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。当前行单选且为文件夹时，Enter 进入该目录。
+- 本地文件 table 获焦时，Delete 将所选文件/文件夹移入回收站，Shift+Delete 直接彻底删除，均不弹确认；远端文件 table Delete 弹确认后删除，Shift+Delete 直接删除。
+- 上传本地文件/文件夹时默认上传到远端面板当前路径，下载远端文件/文件夹时默认下载到本地面板当前路径；活动传输期间对应 statusbar 右侧显示速度、百分比与上传/下载图标，并在 statusbar 最底部绘制约 4px 高的进度条，空闲时隐藏。上传与下载使用独立速度/进度统计，可双向同时显示；速度/百分比文字 tooltip 显示已传大小/总大小。
+- SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。目标同名文件/文件夹存在时提示：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime 为源 mtime，异常退出后保留已写入内容供下次续传。冲突提示中选择取消时，会中止本次传输剩余项目，不回滚已经传完或已部分写入的内容。关闭 Tab 或退出程序时若仍有传输任务，会提示是否中断传输并关闭/退出；确认后取消传输任务并保留已写入内容。
 
 **收藏（★）：**
 
@@ -357,9 +364,15 @@ Tab 关闭
   },
   "appearance": {
     "theme": "solarized",
-    "body_text_font_family": "...",
-    "body_text_font_size_px": 26,
     "ui_font_size_px": 14,
+    "table_font_size_px": 13,
+    "status_font_size_px": 12,
+    "session_tree_font_size_px": 13,
+    "session_tree_row_height_px": 24,
+    "filter_edit_height": 26,
+    "filter_edit_font_size": 13,
+    "terminal_font_family": "Consolas",
+    "terminal_font_size_px": 14,
     ...
   },
   "language": "en",
@@ -393,6 +406,7 @@ Tab 关闭
     "row_height_px": 28,
     "file_panel_toolbar_height": 30,
     "file_panel_toolbar_font_size": 14,
+    "file_panel_statusbar_font_size": 13,
     "file_panel_favorites_menu_font_size": 14,
     "folder_name_bold": true,
     "local_favorites": [
@@ -407,17 +421,17 @@ Tab 关闭
 | `*_column_widths` | 本地/远端列宽 dict（键为列名如 `Name`/`Size`/`Modified`/`Permissions`；表头右键「保存列宽」写入） |
 | `header_height_px` / `row_height_px` | 表头 / 行高 |
 | `file_panel_toolbar_height` / `file_panel_toolbar_font_size` | 路径栏高度、标签、路径输入框与导航按钮字号 |
+| `file_panel_statusbar_font_size` | 文件面板底部 statusbar 字号 |
 | `file_panel_favorites_menu_font_size` | 收藏弹出菜单字号 |
 | `folder_name_bold` | 文件夹名称是否粗体（默认 `true`；`..` 行也按目录粗体） |
 | `local_favorites` | 全局本地收藏路径列表（`path` + 可选 `note`） |
 | `local/remote_favorites_dialog_width/height` | 收藏管理对话框窗口尺寸 |
 
-`app_config.py` 在加载时对缺失字段做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` 默认值），保证向后兼容。
+`app_config.py` 在加载时对当前 schema 做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` 默认值并校验范围）。当前处于开发阶段，不保留旧配置字段兼容；稳定版发布后再按发布策略补充迁移规则。
 
 ### 8.3 密码存储
 
-- `CredentialStore`：Fernet 加密，version 2
-- 首次从明文 version 1 启动时自动重新加密
+- `CredentialStore`：Fernet 加密，当前只接受 version 2
 - `secret.key` 与 `credentials.json` **必须配对迁移**
 
 ### 8.4 配置目录迁移（WindTerm 风格）
@@ -443,7 +457,7 @@ Tab 关闭
 **注意事项：**
 
 - `secret.key` 与 `credentials.json` 必须配对；只复制其中一个会导致密码无法解密。
-- 首次从旧版明文 `credentials.json`（version 1）启动时，程序会自动用 `secret.key` 重新加密并升级至 version 2。
+- 当前处于开发阶段，只接受 version 2 的加密 `credentials.json`；旧版明文凭据不会自动迁移。
 - 私钥文件本身不在 `config/` 内；若 Session 使用公钥认证，需确保目标机器上 `key_path` 指向的私钥文件存在（或使用 `~/.ssh/id_rsa` 等相对路径）。
 - `config/` 含敏感信息，请勿提交到 git 或分享给不可信方。
 
@@ -579,7 +593,7 @@ sequenceDiagram
 
 ### 修改配置 Schema
 
-在 `storage/app_config.py` 的 `_normalize_*` 中做默认值合并，保持旧 config 可读。
+在 `storage/app_config.py` 的 `_normalize_*` 中对当前 schema 做默认值合并与范围校验；开发阶段不保留旧 config 兼容分支。
 
 ---
 

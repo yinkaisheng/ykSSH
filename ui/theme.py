@@ -311,6 +311,7 @@ def _build_stylesheet(
     )
     file_panel_toolbar_font_size = get_app_config().file_panel.file_panel_toolbar_font_size
     file_panel_toolbar_height = get_app_config().file_panel.file_panel_toolbar_height
+    file_panel_statusbar_font_size = get_app_config().file_panel.file_panel_statusbar_font_size
     _fp_toolbar_font = QFont()
     _fp_toolbar_font.setPixelSize(file_panel_toolbar_font_size)
     _fp_toolbar_fm = QFontMetrics(_fp_toolbar_font)
@@ -754,6 +755,30 @@ QWidget#fileNavToolbar QToolButton#filePanelNavButton:hover {{
 
 QWidget#fileNavToolbar QToolButton#filePanelNavButton:pressed {{
     background-color: {p.border};
+}}
+
+QWidget#filePanelStatusBar {{
+    background-color: transparent;
+}}
+
+QWidget#filePanelStatusBar QLabel {{
+    color: {p.text_secondary};
+    font-size: {file_panel_statusbar_font_size}px;
+}}
+
+QWidget#filePanelStatusBar QLineEdit#fileFilterEdit {{
+    font-size: {file_panel_statusbar_font_size}px;
+    padding: 0px 6px;
+}}
+
+QWidget#filePanelStatusBar QToolButton#filePanelStatusButton {{
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+    margin: 0px;
+    color: {p.text_primary};
+    font-size: {file_panel_statusbar_font_size}px;
 }}
 
 QComboBox, QSpinBox {{

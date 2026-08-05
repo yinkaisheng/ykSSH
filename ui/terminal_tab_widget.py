@@ -16,6 +16,7 @@ from ui.terminal_vt_widget import TerminalVTWidget
 class TerminalTabWidget(QTabWidget):
     """Terminal tabs: draggable, double-click to close, right-click rename (in-memory only)."""
 
+    tab_close_requested = pyqtSignal(str)
     tab_closed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget = None) -> None:
@@ -62,13 +63,26 @@ class TerminalTabWidget(QTabWidget):
     def close_tab(self, tab_id: str) -> None:
         for index, stored_id in list(self._tab_ids.items()):
             if stored_id == tab_id:
+                self.request_close_tab(tab_id)
+                return
+
+    def request_close_tab(self, tab_id: str) -> None:
+        if tab_id in self._terminals:
+            self.tab_close_requested.emit(tab_id)
+            return
+
+    def force_close_tab(self, tab_id: str) -> None:
+        for index, stored_id in list(self._tab_ids.items()):
+            if stored_id == tab_id:
                 self._close_tab_at_index(index)
                 return
 
     def _on_tab_bar_double_clicked(self, index: int) -> None:
         if index < 0:
             return
-        self._close_tab_at_index(index)
+        tab_id = self._tab_ids.get(index)
+        if tab_id is not None:
+            self.request_close_tab(tab_id)
 
     def _on_tab_context_menu(self, pos) -> None:
         index = self.tabBar().tabAt(pos)
@@ -99,9 +113,9 @@ class TerminalTabWidget(QTabWidget):
 
     def _close_tab_at_index(self, index: int) -> None:
         tab_id = self._tab_ids.get(index)
+        self._remove_tab(index)
         if tab_id is not None:
             self.tab_closed.emit(tab_id)
-        self._remove_tab(index)
 
     def _remove_tab(self, index: int) -> None:
         tab_id = self._tab_ids.get(index)
