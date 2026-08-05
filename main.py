@@ -73,10 +73,7 @@ def run_qt_app() -> None:
 
 
 def main() -> None:
-    if sys.stdout is None:
-        config_logger(logger, log_dir='logs', log_file='mypyshell.log')
-    else:
-        config_logger(logger)
+    config_logger(logger, log_dir='logs', log_file='mypyshell.log', log_to_stdout=bool(sys.stdout))
 
     logger.info('========================================\n')
     logger.info(f'executable={exe_path}, pid={os.getpid()}, working_directory={os.getcwd()}')

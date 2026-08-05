@@ -67,9 +67,13 @@ async def upload(
 ) -> None:
     local_path = os.path.abspath(local_path)
     if os.path.isdir(local_path):
+        logger.info(f'SFTP upload directory start: local={local_path}, remote={remote_path}')
         await _upload_dir(sftp, local_path, remote_path, progress_handler, conflict_handler)
+        logger.info(f'SFTP upload directory done: local={local_path}, remote={remote_path}')
         return
+    logger.info(f'SFTP upload file start: local={local_path}, remote={remote_path}')
     await _upload_file(sftp, local_path, remote_path, progress_handler, conflict_handler)
+    logger.info(f'SFTP upload file done: local={local_path}, remote={remote_path}')
 
 
 async def download(
@@ -81,9 +85,13 @@ async def download(
 ) -> None:
     attrs = await sftp.lstat(remote_path)
     if stat.S_ISDIR(attrs.permissions or 0):
+        logger.info(f'SFTP download directory start: remote={remote_path}, local={local_path}')
         await _download_dir(sftp, remote_path, local_path, progress_handler, conflict_handler)
+        logger.info(f'SFTP download directory done: remote={remote_path}, local={local_path}')
         return
+    logger.info(f'SFTP download file start: remote={remote_path}, local={local_path}')
     await _download_file(sftp, remote_path, local_path, progress_handler, conflict_handler)
+    logger.info(f'SFTP download file done: remote={remote_path}, local={local_path}')
 
 
 async def _upload_dir(
@@ -263,6 +271,7 @@ async def _ensure_remote_dir(
     try:
         attrs = await sftp.lstat(remote_dir)
     except asyncssh.SFTPError:
+        logger.info(f'SFTP create remote directory: remote={remote_dir}')
         await sftp.makedirs(remote_dir, exist_ok=True)
         return True
     target_is_dir = stat.S_ISDIR(attrs.permissions or 0)
@@ -271,6 +280,7 @@ async def _ensure_remote_dir(
         if decision == 'cancel':
             raise asyncio.CancelledError()
         if decision == 'overwrite':
+            logger.info(f'SFTP overwrite remote directory: remote={remote_dir}, source={local_source}')
             await delete_path(sftp, remote_dir)
             await sftp.makedirs(remote_dir, exist_ok=True)
         return True
@@ -278,6 +288,7 @@ async def _ensure_remote_dir(
     if decision == 'cancel':
         raise asyncio.CancelledError()
     if decision == 'overwrite':
+        logger.info(f'SFTP overwrite remote path with directory: remote={remote_dir}, source={local_source}')
         await delete_path(sftp, remote_dir)
         await sftp.makedirs(remote_dir, exist_ok=True)
         return True
@@ -295,6 +306,7 @@ async def _ensure_local_dir(
     del sftp
     source_is_dir = True
     if not os.path.exists(local_dir):
+        logger.info(f'Create local directory for download: local={local_dir}')
         os.makedirs(local_dir, exist_ok=True)
         return True
     if os.path.isdir(local_dir):
@@ -302,6 +314,7 @@ async def _ensure_local_dir(
         if decision == 'cancel':
             raise asyncio.CancelledError()
         if decision == 'overwrite':
+            logger.info(f'Overwrite local directory for download: local={local_dir}, source={remote_source}')
             shutil.rmtree(local_dir)
             os.makedirs(local_dir, exist_ok=True)
         return True
@@ -309,6 +322,7 @@ async def _ensure_local_dir(
     if decision == 'cancel':
         raise asyncio.CancelledError()
     if decision == 'overwrite':
+        logger.info(f'Overwrite local path with directory for download: local={local_dir}, source={remote_source}')
         os.remove(local_dir)
         os.makedirs(local_dir, exist_ok=True)
         return True
@@ -372,18 +386,22 @@ async def delete(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
     except asyncssh.SFTPError as exc:
         raise exc
     if stat.S_ISDIR(attrs.permissions or 0):
+        logger.info(f'SFTP delete directory: remote={remote_path}')
         for entry in await _remote_entries(sftp, remote_path):
             await delete(sftp, entry.path)
         await sftp.rmdir(remote_path)
     else:
+        logger.info(f'SFTP delete file: remote={remote_path}')
         await sftp.remove(remote_path)
 
 
 async def rename(sftp: asyncssh.SFTPClient, old_path: str, new_path: str) -> None:
+    logger.info(f'SFTP rename: old={old_path}, new={new_path}')
     await sftp.rename(old_path, new_path)
 
 
 async def mkdir(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
+    logger.info(f'SFTP mkdir: remote={remote_path}')
     await sftp.mkdir(remote_path)
 
 

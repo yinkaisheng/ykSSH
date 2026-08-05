@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 
 from core.file_permissions import format_local_permission
 from i18n import tr
+from log_util import logger
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
 from ui.theme import active_theme_palette
@@ -633,9 +634,12 @@ class LocalFileTable(_BaseFileTable):
         name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
         if not name:
             return
+        path = self._local_full_path(name)
         try:
-            os.mkdir(self._local_full_path(name))
-        except OSError:
+            os.mkdir(path)
+            logger.info(f'Local mkdir done: path={path}')
+        except OSError as exc:
+            logger.warning(f'Local mkdir failed: path={path}, error={exc}')
             return
         self.refresh()
 
@@ -647,9 +651,13 @@ class LocalFileTable(_BaseFileTable):
         new_name = prompt_text(self, tr('file.rename'), tr('file.prompt_name'), initial=old_name)
         if not new_name or new_name == old_name:
             return
+        old_path = self._local_full_path(old_name)
+        new_path = self._local_full_path(new_name)
         try:
-            os.rename(self._local_full_path(old_name), self._local_full_path(new_name))
-        except OSError:
+            os.rename(old_path, new_path)
+            logger.info(f'Local rename done: old={old_path}, new={new_path}')
+        except OSError as exc:
+            logger.warning(f'Local rename failed: old={old_path}, new={new_path}, error={exc}')
             return
         self.refresh()
 
@@ -677,7 +685,9 @@ class LocalFileTable(_BaseFileTable):
         selected = selected or self._selected_entries()
         if not selected:
             return
-        self.upload_requested.emit([self._local_full_path(name) for name, _ in selected])
+        paths = [self._local_full_path(name) for name, _ in selected]
+        logger.info(f'Local upload selection: count={len(paths)}, paths={paths}')
+        self.upload_requested.emit(paths)
 
     def _delete_selected(self) -> None:
         selected = self._selected_entries()
@@ -695,19 +705,33 @@ class LocalFileTable(_BaseFileTable):
         return True
 
     def _delete_entries(self, selected: list[tuple[str, str]], *, permanent: bool) -> None:
+        logger.info(
+            'Local delete batch start: '
+            f'count={len(selected)}, permanent={permanent}, base={self._current_path}'
+        )
         for name, entry_type in selected:
             path = self._local_full_path(name)
             try:
                 if not permanent:
                     if not QFile.moveToTrash(path):
+                        logger.warning(f'Local move to trash failed: path={path}')
                         message_warning(self, tr('file.delete'), tr('file.move_to_trash_failed', path=path))
+                    else:
+                        logger.info(f'Local move to trash done: path={path}')
                 elif entry_type == 'dir':
                     shutil.rmtree(path)
+                    logger.info(f'Local delete directory done: path={path}')
                 else:
                     os.remove(path)
-            except OSError:
+                    logger.info(f'Local delete file done: path={path}')
+            except OSError as exc:
+                logger.warning(f'Local delete failed: path={path}, permanent={permanent}, error={exc}')
                 continue
         self.refresh()
+        logger.info(
+            'Local delete batch done: '
+            f'count={len(selected)}, permanent={permanent}, base={self._current_path}'
+        )
 
     def refresh(self) -> None:
         path = self._current_path
@@ -827,6 +851,7 @@ class RemoteFileTable(_BaseFileTable):
     def _mkdir(self) -> None:
         name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
         if name:
+            logger.info(f'Remote mkdir selection: current_path={self._current_path}, name={name}')
             self.mkdir_requested.emit(name)
 
     def _rename(self) -> None:
@@ -836,6 +861,10 @@ class RemoteFileTable(_BaseFileTable):
         old_name, _ = selected[0]
         new_name = prompt_text(self, tr('file.rename'), tr('file.prompt_name'), initial=old_name)
         if new_name and new_name != old_name:
+            logger.info(
+                'Remote rename selection: '
+                f'current_path={self._current_path}, old_name={old_name}, new_name={new_name}'
+            )
             self.rename_requested.emit(old_name, new_name)
 
     def _copy_text(self, text: str) -> None:
@@ -863,21 +892,30 @@ class RemoteFileTable(_BaseFileTable):
         selected = selected or self._selected_entries()
         if not selected:
             return
-        self.download_requested.emit([self._remote_full_path(name) for name, _ in selected])
+        paths = [self._remote_full_path(name) for name, _ in selected]
+        logger.info(f'Remote download selection: count={len(paths)}, paths={paths}')
+        self.download_requested.emit(paths)
 
     def _delete_selected(self) -> None:
         selected = self._selected_entries()
         if not selected:
             return
         if ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
-            self.delete_requested.emit([self._remote_full_path(name) for name, _ in selected])
+            paths = [self._remote_full_path(name) for name, _ in selected]
+            logger.info(f'Remote delete selection confirmed: count={len(paths)}, paths={paths}')
+            self.delete_requested.emit(paths)
 
     def _handle_delete_key(self, *, permanent: bool) -> bool:
         selected = self._selected_entries()
         if not selected:
             return False
         if permanent or ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
-            self.delete_requested.emit([self._remote_full_path(name) for name, _ in selected])
+            paths = [self._remote_full_path(name) for name, _ in selected]
+            logger.info(
+                'Remote delete key selection: '
+                f'count={len(paths)}, permanent={permanent}, paths={paths}'
+            )
+            self.delete_requested.emit(paths)
         return True
 
     def set_list_callback(self, callback: Callable[[str], Any]) -> None:

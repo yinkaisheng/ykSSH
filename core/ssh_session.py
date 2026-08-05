@@ -72,6 +72,12 @@ class SSHSession(QObject):
             options['password'] = password
 
         try:
+            logger.info(
+                'SSH connecting: '
+                f'session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, port={session_item.port}, '
+                f'username={session_item.username}, auth_type={session_item.auth_type}'
+            )
             self._conn = await asyncssh.connect(**options)
             self._process = await self._conn.create_process(
                 '',
@@ -81,9 +87,18 @@ class SSHSession(QObject):
             )
             self._sftp = await self._conn.start_sftp_client()
             self._read_task = asyncio.create_task(self._read_loop())
+            logger.info(
+                'SSH connected: '
+                f'session_id={session_item.id}, host={session_item.host}, '
+                f'port={session_item.port}, cols={cols}, rows={rows}'
+            )
             self.connected.emit()
         except Exception as exc:
-            logger.warning(f'SSH connect failed: {exc}')
+            logger.warning(
+                'SSH connect failed: '
+                f'session_id={session_item.id}, host={session_item.host}, '
+                f'port={session_item.port}, error={exc}'
+            )
             await self.disconnect()
             self.error.emit(str(exc))
             raise
@@ -92,6 +107,12 @@ class SSHSession(QObject):
         if self._disconnecting:
             return
         self._disconnecting = True
+        session_item = self._session_item
+        if session_item is not None:
+            logger.info(
+                'SSH disconnecting: '
+                f'session_id={session_item.id}, host={session_item.host}, port={session_item.port}'
+            )
         try:
             if self._read_task is not None:
                 self._read_task.cancel()
@@ -116,6 +137,11 @@ class SSHSession(QObject):
                 self._conn = None
 
             self.disconnected.emit()
+            if session_item is not None:
+                logger.info(
+                    'SSH disconnected: '
+                    f'session_id={session_item.id}, host={session_item.host}, port={session_item.port}'
+                )
         finally:
             self._disconnecting = False
 

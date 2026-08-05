@@ -22,6 +22,7 @@ from core.connection_manager import ConnectionManager
 from core.path_resolver import resolve_local_path
 from core.sftp_ui_handler import SftpUiHandler
 from i18n import register_retranslator, set_language, tr
+from log_util import logger
 from models.favorite_path import FavoritePath
 from models.session_item import SessionItem
 from storage.app_config import (
@@ -271,8 +272,10 @@ class MainWindow(QMainWindow):
             return
         if self._has_running_transfers():
             if not self._confirm_interrupt_transfers():
+                logger.info('Window close cancelled: transfer tasks are still running')
                 event.ignore()
                 return
+            logger.info('Window close confirmed: cancelling running transfer tasks')
             self._cancel_all_transfers()
         event.ignore()
         self._close_in_progress = True
@@ -450,8 +453,10 @@ class MainWindow(QMainWindow):
         await self.connection_manager.close_all()
 
     async def _finish_close_async(self) -> None:
+        logger.info('Application close sequence start')
         self._save_session()
         await self._close_all_async()
+        logger.info('Application close sequence done')
         self._closing_after_transfer_confirm = True
         self._close_in_progress = False
         self.close()
@@ -497,6 +502,11 @@ class MainWindow(QMainWindow):
             self._connect_session(session)
 
     def _connect_session(self, session_item: SessionItem) -> None:
+        logger.info(
+            'Connect session requested: '
+            f'session_id={session_item.id}, name={session_item.name}, '
+            f'host={session_item.host}, port={session_item.port}, username={session_item.username}'
+        )
         asyncio.create_task(self._connect_session_async(session_item))
 
     async def _connect_session_async(self, session_item: SessionItem) -> None:
@@ -532,6 +542,11 @@ class MainWindow(QMainWindow):
                 on_disconnected=_on_disconnected,
             )
         except Exception as exc:
+            logger.warning(
+                'Connect session failed: '
+                f'session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, error={exc}'
+            )
             if self._terminal_is_alive(terminal):
                 terminal.write_text(tr('terminal.connection_error', error=str(exc)) + '\r\n')
 
@@ -591,7 +606,9 @@ class MainWindow(QMainWindow):
     def _on_tab_close_requested(self, tab_id: str) -> None:
         if self._has_running_transfers(tab_id):
             if not self._confirm_interrupt_transfers():
+                logger.info(f'Tab close cancelled: tab_id={tab_id}, transfer tasks are still running')
                 return
+            logger.info(f'Tab close confirmed: tab_id={tab_id}, cancelling running transfer tasks')
             handler = self._sftp_handlers.get(tab_id)
             if handler is not None:
                 handler.cancel_transfers()

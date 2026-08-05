@@ -77,6 +77,11 @@ class SftpUiHandler(QObject):
         asyncio.create_task(self._cm.refresh_remote_list(self.tab_id, self._remote_dir))
 
     def upload_local_paths(self, local_paths: List[str]) -> None:
+        logger.info(
+            'Upload requested: '
+            f'tab_id={self.tab_id}, count={len(local_paths)}, remote_dir={self._remote_dir}, '
+            f'paths={local_paths}'
+        )
         self._track_transfer_task(asyncio.create_task(self._upload_async(local_paths)))
 
     def _track_transfer_task(self, task: asyncio.Task) -> None:
@@ -87,6 +92,7 @@ class SftpUiHandler(QObject):
         return any(not task.done() for task in self._transfer_tasks)
 
     def cancel_transfers(self) -> None:
+        logger.info(f'Cancel transfer tasks requested: tab_id={self.tab_id}, count={len(self._transfer_tasks)}')
         for task in list(self._transfer_tasks):
             if not task.done():
                 task.cancel()
@@ -209,6 +215,11 @@ class SftpUiHandler(QObject):
                     kind=tr('file.folder') if target_is_dir else tr('file.file'),
                 ),
             )
+            logger.info(
+                'Transfer conflict resolved: '
+                f'tab_id={self.tab_id}, kind={kind}, source={source_path}, '
+                f'target={target_path}, target_is_dir={target_is_dir}, choice={choice}'
+            )
             if choice == 'overwrite_all':
                 self._transfer_conflict_policy[kind] = 'overwrite'
                 return 'overwrite'
@@ -232,6 +243,11 @@ class SftpUiHandler(QObject):
         total_bytes = sum(self._local_path_size(path) for path in local_paths)
         self._transfer_conflict_policy['upload'] = None
         self._begin_transfer_status('upload', total_bytes)
+        logger.info(
+            'Upload batch start: '
+            f'tab_id={self.tab_id}, count={len(local_paths)}, total_bytes={total_bytes}, '
+            f'remote_dir={remote_dir}'
+        )
         try:
             for local in local_paths:
                 name = os.path.basename(local.rstrip(os.sep))
@@ -244,7 +260,9 @@ class SftpUiHandler(QObject):
                         self._make_progress_handler('upload'),
                         self._make_conflict_handler('upload'),
                     )
+                    logger.info(f'Upload item done: tab_id={self.tab_id}, local={local}, remote={remote}')
                 except asyncio.CancelledError:
+                    logger.info(f'Upload batch cancelled: tab_id={self.tab_id}, remote_dir={remote_dir}')
                     raise
                 except Exception as exc:
                     logger.warning(f'upload failed: {exc}')
@@ -252,10 +270,20 @@ class SftpUiHandler(QObject):
             self._cm.invalidate_remote_cache(self.tab_id, self._remote_dir)
             await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
             self._on_refresh_ui()
+            logger.info(
+                'Upload batch done: '
+                f'tab_id={self.tab_id}, count={len(local_paths)}, total_bytes={total_bytes}, '
+                f'remote_dir={remote_dir}'
+            )
         finally:
             self._end_transfer_status('upload')
 
     def download_remote_paths(self, remote_paths: List[str]) -> None:
+        logger.info(
+            'Download requested: '
+            f'tab_id={self.tab_id}, count={len(remote_paths)}, local_dir={self._local_dir}, '
+            f'paths={remote_paths}'
+        )
         self._track_transfer_task(asyncio.create_task(self._download_async(remote_paths)))
 
     async def _download_async(self, remote_paths: List[str]) -> None:
@@ -270,6 +298,11 @@ class SftpUiHandler(QObject):
             total_bytes += await self._remote_path_size(sftp, remote)
         self._transfer_conflict_policy['download'] = None
         self._begin_transfer_status('download', total_bytes)
+        logger.info(
+            'Download batch start: '
+            f'tab_id={self.tab_id}, count={len(remote_paths)}, total_bytes={total_bytes}, '
+            f'local_dir={self._local_dir}'
+        )
         try:
             for remote in remote_paths:
                 name = os.path.basename(remote.rstrip('/'))
@@ -282,16 +315,24 @@ class SftpUiHandler(QObject):
                         self._make_progress_handler('download'),
                         self._make_conflict_handler('download'),
                     )
+                    logger.info(f'Download item done: tab_id={self.tab_id}, remote={remote}, local={local}')
                 except asyncio.CancelledError:
+                    logger.info(f'Download batch cancelled: tab_id={self.tab_id}, local_dir={self._local_dir}')
                     raise
                 except Exception as exc:
                     logger.warning(f'download failed: {exc}')
                     message_warning(self._dialog_parent(), '', str(exc))
             self._on_refresh_ui()
+            logger.info(
+                'Download batch done: '
+                f'tab_id={self.tab_id}, count={len(remote_paths)}, total_bytes={total_bytes}, '
+                f'local_dir={self._local_dir}'
+            )
         finally:
             self._end_transfer_status('download')
 
     def delete_remote_paths(self, remote_paths: List[str]) -> None:
+        logger.info(f'Remote delete requested: tab_id={self.tab_id}, count={len(remote_paths)}, paths={remote_paths}')
         asyncio.create_task(self._delete_async(remote_paths))
 
     async def _delete_async(self, remote_paths: List[str]) -> None:
@@ -301,17 +342,24 @@ class SftpUiHandler(QObject):
         sftp = ssh.get_sftp()
         if sftp is None:
             return
+        logger.info(f'Remote delete batch start: tab_id={self.tab_id}, count={len(remote_paths)}')
         for remote in remote_paths:
             try:
                 await delete_path(sftp, remote)
+                logger.info(f'Remote delete item done: tab_id={self.tab_id}, remote={remote}')
             except Exception as exc:
                 logger.warning(f'delete failed: {exc}')
                 message_warning(self._dialog_parent(), '', str(exc))
         self._cm.invalidate_remote_cache(self.tab_id, self._remote_dir)
         await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
         self._on_refresh_ui()
+        logger.info(f'Remote delete batch done: tab_id={self.tab_id}, count={len(remote_paths)}')
 
     def rename_remote(self, old_name: str, new_name: str) -> None:
+        logger.info(
+            'Remote rename requested: '
+            f'tab_id={self.tab_id}, remote_dir={self._remote_dir}, old_name={old_name}, new_name={new_name}'
+        )
         asyncio.create_task(self._rename_async(old_name, new_name))
 
     async def _rename_async(self, old_name: str, new_name: str) -> None:
@@ -327,13 +375,16 @@ class SftpUiHandler(QObject):
         try:
             await rename(sftp, old_path, new_path)
         except Exception as exc:
+            logger.warning(f'rename failed: old={old_path}, new={new_path}, error={exc}')
             message_warning(self._dialog_parent(), '', str(exc))
             return
         self._cm.invalidate_remote_cache(self.tab_id, self._remote_dir)
         await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
         self._on_refresh_ui()
+        logger.info(f'Remote rename done: tab_id={self.tab_id}, old={old_path}, new={new_path}')
 
     def mkdir_remote(self, name: str) -> None:
+        logger.info(f'Remote mkdir requested: tab_id={self.tab_id}, remote_dir={self._remote_dir}, name={name}')
         asyncio.create_task(self._mkdir_async(name))
 
     async def _mkdir_async(self, name: str) -> None:
@@ -348,8 +399,10 @@ class SftpUiHandler(QObject):
         try:
             await mkdir(sftp, path)
         except Exception as exc:
+            logger.warning(f'mkdir failed: remote={path}, error={exc}')
             message_warning(self._dialog_parent(), '', str(exc))
             return
         self._cm.invalidate_remote_cache(self.tab_id, self._remote_dir)
         await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
         self._on_refresh_ui()
+        logger.info(f'Remote mkdir done: tab_id={self.tab_id}, remote={path}')

@@ -115,10 +115,16 @@ class ConnectionManager(QObject):
         on_error: Optional[Callable[[str], None]] = None,
     ) -> None:
         if tab_id in self._sessions:
+            logger.info(f'Connection tab already exists, closing old tab first: tab_id={tab_id}')
             await self.close_tab(tab_id)
 
         password = self.keyring.get_password(session_item.id)
         cols, rows = terminal._calc_cols_rows()
+        logger.info(
+            'Open connection tab: '
+            f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
+            f'host={session_item.host}, port={session_item.port}, username={session_item.username}'
+        )
 
         ssh = SSHSession(self)
         self._sessions[tab_id] = ssh
@@ -162,12 +168,20 @@ class ConnectionManager(QObject):
         try:
             await ssh.connect(session_item, password=password, cols=cols, rows=rows)
         except Exception:
+            logger.warning(
+                'Open connection tab failed: '
+                f'tab_id={tab_id}, session_id={session_item.id}, host={session_item.host}'
+            )
             self._sessions.pop(tab_id, None)
             self._terminals.pop(tab_id, None)
             self._tab_titles.pop(tab_id, None)
             self._remote_cache.pop(tab_id, None)
             raise
 
+        logger.info(
+            'Open connection tab succeeded: '
+            f'tab_id={tab_id}, session_id={session_item.id}, host={session_item.host}'
+        )
         if on_connected is not None:
             on_connected()
 
@@ -180,6 +194,7 @@ class ConnectionManager(QObject):
         await ssh.resize(cols, rows)
 
     async def close_tab(self, tab_id: str) -> None:
+        logger.info(f'Close connection tab: tab_id={tab_id}')
         ssh = self._sessions.pop(tab_id, None)
         terminal = self._terminals.pop(tab_id, None)
         self._tab_titles.pop(tab_id, None)
@@ -187,6 +202,7 @@ class ConnectionManager(QObject):
         if ssh is not None:
             self._disconnect_ssh_signals(ssh, terminal)
             await ssh.disconnect()
+        logger.info(f'Connection tab closed: tab_id={tab_id}')
 
     @staticmethod
     def _disconnect_ssh_signals(ssh: SSHSession, terminal) -> None:
