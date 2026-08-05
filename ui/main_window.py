@@ -422,7 +422,7 @@ class MainWindow(QMainWindow):
             handler = SftpUiHandler(
                 tab_id,
                 self.connection_manager,
-                on_refresh_ui=self._refresh_file_panels,
+                on_refresh_ui=lambda tid=tab_id: self._refresh_file_panels_for_tab(tid),
                 parent=self,
             )
             self._sftp_handlers[tab_id] = handler
@@ -454,19 +454,25 @@ class MainWindow(QMainWindow):
 
     async def _finish_close_async(self) -> None:
         logger.info('Application close sequence start')
-        self._save_session()
-        await self._close_all_async()
-        logger.info('Application close sequence done')
-        self._closing_after_transfer_confirm = True
-        self._close_in_progress = False
-        self.close()
+        try:
+            self._save_session()
+            await self._close_all_async()
+            logger.info('Application close sequence done')
+            self._closing_after_transfer_confirm = True
+            self.close()
+        finally:
+            self._close_in_progress = False
 
-    def _refresh_file_panels(self) -> None:
-        panel = self._active_files_panel()
+    def _refresh_file_panels_for_tab(self, tab_id: str) -> None:
+        panel = self.file_panels.get_panel(tab_id)
         if panel is None:
             return
         panel.local_file_panel.refresh()
         panel.remote_file_panel.refresh()
+
+    def _refresh_file_panels(self) -> None:
+        if self._active_tab_id:
+            self._refresh_file_panels_for_tab(self._active_tab_id)
 
     def _save_active_tab_paths(self) -> None:
         tab_id = self._active_tab_id
@@ -541,6 +547,12 @@ class MainWindow(QMainWindow):
                 on_connected=_on_connected,
                 on_disconnected=_on_disconnected,
             )
+        except asyncio.CancelledError:
+            logger.info(
+                'Connect session cancelled: '
+                f'session_id={session_item.id}, tab_id={tab_id}'
+            )
+            return
         except Exception as exc:
             logger.warning(
                 'Connect session failed: '
@@ -559,15 +571,19 @@ class MainWindow(QMainWindow):
             return True
 
     async def _init_file_panel_for_session(self, tab_id: str, session_item: SessionItem) -> None:
-        handler = self._ensure_sftp_handler(tab_id)
         panel = self.file_panels.get_panel(tab_id)
         if panel is None:
             return
+        if self.connection_manager.get_session(tab_id) is None:
+            return
+        handler = self._ensure_sftp_handler(tab_id)
         local_path = resolve_local_path(session_item.local_path)
         remote_path = await self.connection_manager.resolve_remote_path(
             tab_id,
             session_item.remote_path,
         )
+        if self.file_panels.get_panel(tab_id) is None:
+            return
         if (session_item.remote_path or '').strip():
             await self.connection_manager.cd_shell(tab_id, remote_path)
         if handler.try_init_session_paths(local_path, remote_path):
@@ -576,15 +592,14 @@ class MainWindow(QMainWindow):
             await self.connection_manager.refresh_remote_list(tab_id, remote_path)
         else:
             await self.connection_manager.refresh_remote_list(tab_id, handler.remote_dir)
-        if self._active_tab_id != tab_id:
+        if self._active_tab_id != tab_id or self.file_panels.get_panel(tab_id) is None:
             return
         self._attach_file_panel(tab_id)
         panel.remote_file_panel.refresh()
 
     def _on_tab_closed(self, tab_id: str) -> None:
         was_active = self._active_tab_id == tab_id
-        asyncio.create_task(self.connection_manager.close_tab(tab_id))
-        self._sftp_handlers.pop(tab_id, None)
+        handler = self._sftp_handlers.pop(tab_id, None)
         local_dialog = self._local_favorites_dialogs.pop(tab_id, None)
         if local_dialog is not None:
             local_dialog.close()
@@ -602,6 +617,17 @@ class MainWindow(QMainWindow):
                     self._attach_file_panel(new_tab_id)
             else:
                 self.file_panels.show_empty()
+        asyncio.create_task(self._finalize_tab_close_async(tab_id, handler))
+
+    async def _finalize_tab_close_async(
+        self,
+        tab_id: str,
+        handler: Optional[SftpUiHandler],
+    ) -> None:
+        if handler is not None:
+            handler.cancel_transfers()
+            await handler.wait_transfers_closed()
+        await self.connection_manager.close_tab(tab_id)
 
     def _on_tab_close_requested(self, tab_id: str) -> None:
         if self._has_running_transfers(tab_id):
@@ -612,6 +638,14 @@ class MainWindow(QMainWindow):
             handler = self._sftp_handlers.get(tab_id)
             if handler is not None:
                 handler.cancel_transfers()
+            asyncio.create_task(self._close_tab_after_transfers_async(tab_id))
+            return
+        self.terminal_tabs.force_close_tab(tab_id)
+
+    async def _close_tab_after_transfers_async(self, tab_id: str) -> None:
+        handler = self._sftp_handlers.get(tab_id)
+        if handler is not None:
+            await handler.wait_transfers_closed()
         self.terminal_tabs.force_close_tab(tab_id)
 
     def _on_current_tab_changed(self, index: int) -> None:

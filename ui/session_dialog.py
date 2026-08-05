@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 
 from i18n import tr
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
-from ui.dialog_i18n import translate_button_box
+from ui.dialog_i18n import message_warning, translate_button_box
 from ui.widgets import ArrowComboBox, GlyphSpinBox
 
 
@@ -170,8 +170,12 @@ class SessionDialog(QDialog):
 
     def _on_accept(self) -> None:
         if not self.name_edit.text().strip():
+            message_warning(self, tr('sessions.validation_title'), tr('sessions.validation_name_required'))
+            self.name_edit.setFocus(Qt.OtherFocusReason)
             return
         if not self.host_edit.text().strip():
+            message_warning(self, tr('sessions.validation_title'), tr('sessions.validation_host_required'))
+            self.host_edit.setFocus(Qt.OtherFocusReason)
             return
         self._password = self.password_edit.text()
         self.accept()

@@ -223,12 +223,14 @@ def _normalize_appearance(raw: Any) -> Dict[str, Any]:
 
 def _normalize_terminal(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
-    normalized = dict(_TERMINAL_SETTING_DEFAULTS)
+    normalized: Dict[str, Any] = {}
     for key, default in _TERMINAL_SETTING_DEFAULTS.items():
-        if key in raw:
-            normalized[key] = raw[key]
+        if isinstance(default, bool):
+            normalized[key] = _normalize_bool(raw.get(key, default), default)
+        elif isinstance(default, int):
+            normalized[key] = _clamp_int(raw.get(key, default), default, 1, 10_000_000)
         else:
-            normalized[key] = default
+            normalized[key] = raw.get(key, default)
     return normalized
 
 

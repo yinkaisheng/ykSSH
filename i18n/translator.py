@@ -26,12 +26,9 @@ Required files per language directory:
   Only escape as ``{{Key}}`` when the string uses ``tr('key', name=...)`` and
   you need a literal ``{`` after ``.format()`` runs.
 
-Qt built-in strings — two approaches (this project uses B, not A):
-
-  A) **Common Qt way:** ``QApplication.installTranslator()`` + PyQt5 ``.qm`` files
-     under ``Qt5/translations/`` (see ``i18n/qt_locale.py``, commented out).
-  B) **This project:** ``strings.txt`` + ``ui/dialog_i18n.py`` + ``ui/widgets.py``
-     so release builds need not ship PyQt5's ``translations/`` directory.
+Qt built-in strings — this project uses ``strings.txt`` + ``ui/dialog_i18n.py`` +
+``ui/widgets.py`` (not Qt ``.qm`` translators), so release builds need not ship
+PyQt5's ``translations/`` directory.
 """
 from __future__ import annotations
 

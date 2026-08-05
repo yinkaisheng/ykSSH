@@ -19,5 +19,3 @@ SESSIONS_FILE = DATA_DIR / 'sessions.json'
 CREDENTIALS_FILE = DATA_DIR / 'credentials.json'
 SECRET_KEY_FILE = DATA_DIR / 'secret.key'
 LANGUAGES_DIR = APP_DIR / 'Languages'
-
-STORAGE_VERSION = 1

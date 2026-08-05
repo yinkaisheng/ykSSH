@@ -20,7 +20,7 @@ from PyQt5.QtGui import (
     QInputMethodEvent,
     QPixmap,
 )
-from PyQt5.QtWidgets import QWidget, QMessageBox, QSizePolicy, QMenu
+from PyQt5.QtWidgets import QWidget, QSizePolicy, QMenu
 
 try:
     from PyQt5 import sip
@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
 from i18n import tr as t
 from storage.app_config import get_app_config, get_setting
 from storage.paths import DATA_DIR
+from ui.dialog_i18n import ask_yes_no
 from ui.theme import (
     terminal_font_family_css,
     normalize_terminal_font_family,
@@ -67,7 +68,7 @@ class TerminalVTWidget(QWidget):
         self.setAttribute(Qt.WA_InputMethodEnabled, True)
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
         self.setMouseTracking(True)
-        self.setAcceptDrops(True)
+        self.setAcceptDrops(False)
         # Ensure the widget actually expands/shrinks inside QSplitter layouts
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -159,9 +160,6 @@ class TerminalVTWidget(QWidget):
 
         # Local viewport scrollback (0 = follow bottom)
         self._scroll_lines = 0
-
-        # Optional worker set by MainWindow
-        self.worker = None
 
         self._debug_log_path = os.path.join(str(DATA_DIR), "terminal_debug.log")
         self._debug_input_count = 0
@@ -360,9 +358,6 @@ class TerminalVTWidget(QWidget):
                     self._alt_screen.resize(lines=rows, columns=cols)  # type: ignore[attr-defined]
             except Exception:
                 pass
-            # Resize remote pty
-            if self.worker and hasattr(self.worker, "resize_pty"):
-                self.worker.resize_pty(cols, rows)
         finally:
             # Reflow only plain shell output. Full-screen TUIs repaint after PTY
             # resize; replaying or preserving old cells causes duplicated rows.
@@ -2106,13 +2101,11 @@ class TerminalVTWidget(QWidget):
 
         if confirm_multiline and ("\n" in text or "\r" in text):
             preview = text[:800] + ("\n…" if len(text) > 800 else "")
-            ret = QMessageBox.question(
+            if not ask_yes_no(
                 self,
                 t("dialog.paste_confirm.title"),
                 t("dialog.paste_confirm.text", preview=preview),
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if ret != QMessageBox.Yes:
+            ):
                 return
 
         text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r")

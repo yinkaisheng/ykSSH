@@ -64,6 +64,9 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'sessions.browse_local': 'Browse…',
     'sessions.select_local_title': 'Select Local Directory',
     'sessions.path_home_hint': 'Leave empty for home (~)',
+    'sessions.validation_title': 'Invalid Session',
+    'sessions.validation_name_required': 'Session name is required.',
+    'sessions.validation_host_required': 'Host is required.',
     'terminal.new_tab': 'New Terminal',
     'terminal.close_tab': 'Close Tab',
     'terminal.connecting': 'Connecting…',
@@ -101,6 +104,8 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'file.upload': 'Upload',
     'file.download': 'Download',
     'file.delete': 'Delete',
+    'file.move_to_trash': 'Move to Recycle Bin',
+    'file.delete_permanently': 'Delete Permanently',
     'file.mkdir': 'New Folder',
     'file.rename': 'Rename',
     'file.copy_name': 'Copy Name',
@@ -110,7 +115,12 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'file.not_connected': 'Connect a session to browse remote files.',
     'file.prompt_name': 'Name:',
     'file.confirm_delete': 'Are you sure you want to delete the selected items?',
+    'file.confirm_delete_permanently': (
+        'Are you sure you want to permanently delete the selected items?\n'
+        'This cannot be undone.'
+    ),
     'file.move_to_trash_failed': 'Failed to move to trash:\n{path}',
+    'file.operation_failed': 'Operation Failed',
     'file.save_column_widths': 'Save Column Widths',
     'file.status_counts': (
         'Selected {selected_files}/{total_files} files, '
@@ -146,4 +156,9 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'edit.paste': 'Paste',
     'edit.delete': 'Delete',
     'edit.select_all': 'Select All',
+    'context.copy': 'Copy',
+    'context.paste': 'Paste',
+    'context.select_all': 'Select All',
+    'context.clear': 'Clear',
+    'context.follow_output': 'Follow Output',
 }

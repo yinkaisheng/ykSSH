@@ -27,11 +27,6 @@ class FavoritePath:
 
     @classmethod
     def from_dict(cls, data: Any) -> FavoritePath | None:
-        if isinstance(data, str):
-            path = data.strip()
-            if not path:
-                return None
-            return cls(path=path)
         if not isinstance(data, dict):
             return None
         path = str(data.get('path', '') or '').strip()

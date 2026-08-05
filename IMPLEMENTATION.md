@@ -37,6 +37,8 @@ asyncssh>=2.14
 pyte>=0.8
 qasync>=0.27
 cryptography>=42.0
+colorama
+loguru
 ```
 
 - **Python：** 3.10+
@@ -44,7 +46,7 @@ cryptography>=42.0
 - **启动：**
 
 ```powershell
-cd d:\Codes\Python\MyPyShell
+cd E:\codes\python\MyPyShell
 pip install -r requirements.txt
 python main.py
 ```
@@ -55,6 +57,7 @@ python main.py
 
 ```
 main.py
+  ├─ config_logger()            # logs/mypyshell.log
   ├─ init_app_config()          # 加载 config/config.json
   ├─ QApplication + Fusion 样式
   ├─ install_*_translations()   # 对话框 / 右键菜单 i18n
@@ -89,6 +92,7 @@ MyPyShell/
 │   ├── ssh_session.py           # 单条 SSH 连接（Shell PTY + SFTP）
 │   ├── connection_manager.py    # tab_id ↔ SSHSession 映射与远程列表缓存
 │   ├── path_resolver.py         # 本地/远程初始路径解析
+│   ├── file_permissions.py      # 本地/远程权限字符串格式化
 │   ├── sftp_service.py          # SFTP 异步 CRUD（listdir/upload/…）
 │   └── sftp_ui_handler.py       # 文件面板 UI ↔ SFTP 桥接
 │
@@ -135,7 +139,7 @@ MyPyShell/
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ WindowTitleBar（Connect / 设置 / 关于）                     │
+│ WindowTitleBar（Session / Settings / Help 菜单）            │
 ├──────────────┬───────────────────────────────────────────┤
 │ SessionTree  │  TerminalTabWidget                        │
 │ Panel        │    └─ TerminalVTWidget（每 Tab 一个）        │  main_splitter（水平）
@@ -226,8 +230,8 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 
 | 环境 | 按钮（从左到右） |
 |------|------------------|
-| 本地 Windows | 各盘符（`GetLogicalDrives`）→ `/`（当前盘根）→ `~` → `★`（收藏）→ 刷新 |
-| 本地非 Windows / 远端 | `/` → `~` → `★` → 刷新 |
+| 本地 Windows | 各盘符（`GetLogicalDrives`）→ `/`（当前盘根）→ `~` → 收藏 → 刷新 |
+| 本地非 Windows / 远端 | `/` → `~` → 收藏 → 刷新 |
 
 - 按钮为正方形（边长 = `file_panel.file_panel_toolbar_height`）。
 - 远端 `~` 使用 `SftpUiHandler.remote_home`（连接时由 Session `remote_path` 初始化，缺省 `/`）。
@@ -235,9 +239,9 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 工具栏与 Table 间距：`_FILE_PANEL_TOOLBAR_TABLE_SPACING`（4px）。
 - 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；ESC 或路径变化清除过滤。
 - 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。当前行单选且为文件夹时，Enter 进入该目录。
-- 本地文件 table 获焦时，Delete 将所选文件/文件夹移入回收站，Shift+Delete 直接彻底删除，均不弹确认；远端文件 table Delete 弹确认后删除，Shift+Delete 直接删除。
-- 上传本地文件/文件夹时默认上传到远端面板当前路径，下载远端文件/文件夹时默认下载到本地面板当前路径；活动传输期间对应 statusbar 右侧显示速度、百分比与上传/下载图标，并在 statusbar 最底部绘制约 4px 高的进度条，空闲时隐藏。上传与下载使用独立速度/进度统计，可双向同时显示；速度/百分比文字 tooltip 显示已传大小/总大小。
-- SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。目标同名文件/文件夹存在时提示：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime 为源 mtime，异常退出后保留已写入内容供下次续传。冲突提示中选择取消时，会中止本次传输剩余项目，不回滚已经传完或已部分写入的内容。关闭 Tab 或退出程序时若仍有传输任务，会提示是否中断传输并关闭/退出；确认后取消传输任务并保留已写入内容。
+- 本地文件 table：**Delete** → 回收站（无确认）；**Shift+Delete** → 永久删除（无确认）。右键菜单默认「移到回收站」；按住 **Shift** 再右键则显示「永久删除」并弹确认（对齐资源管理器习惯）。远端 Delete 弹确认后删除，Shift+Delete 直接删除。
+- **上传/下载仅通过右键菜单发起**（不支持文件面板拖拽互传）。默认上传到远端当前路径、下载到本地当前路径；活动传输期间 statusbar 显示速度、百分比与方向图标，底部约 4px 进度条，空闲时隐藏。上传与下载独立统计，可双向同时显示；tooltip 显示已传/总大小。
+- SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。冲突对话框经非阻塞 `ask_transfer_conflict_async` 弹出（不卡住 qasync）。选项：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime。冲突取消中止剩余项目，不回滚已写入内容。远端列表与下载会 follow 指向目录的 symlink，使其可进入/递归下载；远端删除对 symlink 使用 `lstat`，只删链接本身不跟随目标。关闭 Tab 或退出程序时若仍有传输/远端改名/删除/新建等后台任务，会提示是否中断；确认后 cancel 并 **await 任务结束** 再 disconnect，保留已写入内容。
 
 **收藏（★）：**
 
@@ -307,10 +311,11 @@ Tab 切换
   → file_panels.show_panel(new_tab_id)
   → _attach_file_panel（重新绑定 handler / callback）
 
-Tab 关闭
-  → connection_manager.close_tab
-  → _sftp_handlers.pop
-  → file_panels.remove_panel
+Tab 关闭（双击 Tab 栏；无关闭按钮）
+  → 若有后台 SFTP 任务：确认 → cancel → await wait_transfers_closed
+  → force_close_tab
+  → pop handler / 关收藏对话框 / remove_panel
+  → await close_tab（abort 连接中会话、cancel 读任务、disconnect、deleteLater）
 ```
 
 **关键映射表（MainWindow）：**
@@ -334,6 +339,7 @@ Tab 关闭
 - 认证：`AUTH_PASSWORD`（密码来自 CredentialStore）或 `AUTH_PUBLIC_KEY`（`key_path`）
 - 同时打开 Shell process 与 SFTP client
 - Signal：`connected` / `disconnected` / `data_received` / `error`
+- 若远端主动断开或读循环结束，`ConnectionManager` 会移除对应 `_sessions` / 远端缓存并断开 Qt signal，UI 清空远端文件面板；用户需要关闭当前 Tab 后重新连接。
 
 `ConnectionManager.cd_shell()`：向交互式 Shell 写入 `cd <path>\r`（延迟 150ms 等待 banner），使终端工作目录与文件面板远端路径一致。
 
@@ -365,20 +371,23 @@ Tab 关闭
   "appearance": {
     "theme": "solarized",
     "ui_font_size_px": 14,
-    "table_font_size_px": 13,
+    "table_font_size_px": 14,
     "status_font_size_px": 12,
-    "session_tree_font_size_px": 13,
-    "session_tree_row_height_px": 24,
+    "session_tree_font_size_px": 14,
+    "session_tree_row_height_px": 26,
     "filter_edit_height": 26,
-    "filter_edit_font_size": 13,
+    "filter_edit_font_size": 14,
     "terminal_font_family": "Consolas",
-    "terminal_font_size_px": 14,
+    "terminal_font_size_px": 22,
     ...
   },
   "language": "en",
   "terminal": {
     "terminal_scrollback_lines": 5000,
-    ...
+    "terminal_reflow_buffer_chars": 200000,
+    "terminal_experimental_raw_reflow_on_resize": false,
+    "terminal_paste_confirm_multiline": true,
+    "terminal_bracketed_paste": true
   },
   "window": {
     "width": 1400,
@@ -402,16 +411,20 @@ Tab 关闭
       "Modified": 144,
       "Permissions": 100
     },
-    "header_height_px": 24,
-    "row_height_px": 28,
-    "file_panel_toolbar_height": 30,
+    "header_height_px": 22,
+    "row_height_px": 24,
+    "file_panel_toolbar_height": 26,
     "file_panel_toolbar_font_size": 14,
     "file_panel_statusbar_font_size": 13,
     "file_panel_favorites_menu_font_size": 14,
     "folder_name_bold": true,
     "local_favorites": [
       { "path": "D:\\\\Projects", "note": "work" }
-    ]
+    ],
+    "local_favorites_dialog_width": 820,
+    "local_favorites_dialog_height": 420,
+    "remote_favorites_dialog_width": 560,
+    "remote_favorites_dialog_height": 380
   }
 }
 ```
@@ -429,10 +442,14 @@ Tab 关闭
 
 `app_config.py` 在加载时对当前 schema 做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` 默认值并校验范围）。当前处于开发阶段，不保留旧配置字段兼容；稳定版发布后再按发布策略补充迁移规则。
 
+`sessions.json` 当前只接受 `version: 1`；版本不匹配时丢弃加载结果并记录 warning。当前处于开发阶段，不保留旧 Session schema 兼容。
+
 ### 8.3 密码存储
 
-- `CredentialStore`：Fernet 加密，当前只接受 version 2
+- `CredentialStore`：Fernet 加密，当前只接受 version 1；version/解密失败会打 warning 并丢弃无法解密的条目
 - `secret.key` 与 `credentials.json` **必须配对迁移**
+- 若已有 `secret.key` 但内容无效：**不会**静默覆盖生成新钥，启动失败并提示修复（`InvalidSecretKeyError`）
+- 删除 Session 树节点（含文件夹）会递归清理对应 `credentials.json` 条目
 
 ### 8.4 配置目录迁移（WindTerm 风格）
 
@@ -457,7 +474,7 @@ Tab 关闭
 **注意事项：**
 
 - `secret.key` 与 `credentials.json` 必须配对；只复制其中一个会导致密码无法解密。
-- 当前处于开发阶段，只接受 version 2 的加密 `credentials.json`；旧版明文凭据不会自动迁移。
+- 当前处于开发阶段，只接受 version 1 的加密 `credentials.json`；旧版明文凭据不会自动迁移。
 - 私钥文件本身不在 `config/` 内；若 Session 使用公钥认证，需确保目标机器上 `key_path` 指向的私钥文件存在（或使用 `~/.ssh/id_rsa` 等相对路径）。
 - `config/` 含敏感信息，请勿提交到 git 或分享给不可信方。
 
@@ -496,7 +513,7 @@ Tab 关闭
 - 字符串源：`i18n/builtin_strings.py`（英文 fallback）+ `Languages/<locale>/strings.txt`
 - 语言切换：`set_language()` → 已注册 `retranslate_ui` 的 Widget 回调
 - 对话框按钮：`ui/dialog_i18n.py`（非 Qt `.qm` 文件）
-- 新增 UI 文案需 **同时** 更新 builtin_strings 与 zh-CN strings.txt
+- 新增 UI 文案需 **同时** 更新 `builtin_strings.py`、`Languages/en/strings.txt` 与 `Languages/zh-CN/strings.txt`
 
 ---
 
@@ -525,9 +542,10 @@ Tab 关闭
 
 - 表头右键「保存列宽」→ `save_file_panel_column_widths()` → 写入 config + 所有 Tab 同步
 
-### 远程 Table 右键菜单
+### 远程 / 本地 Table 右键菜单
 
-刷新、新建目录；有选中项时：复制文件名、复制路径名、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
+- **远程：** 刷新、新建目录；有选中项时：复制文件名、复制路径、复制父路径、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
+- **本地：** 刷新、新建目录；有选中项时：复制、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
 
 ---
 
@@ -577,11 +595,17 @@ sequenceDiagram
 | 项 | 说明 |
 |----|------|
 | Host key 校验 | `known_hosts=None`，生产环境需补充 |
-| 文件拖拽互传 | 尚未完整实现 |
+| 文件拖拽互传 | **不支持**；仅右键菜单上传/下载 |
 | 标题栏 Aero Snap | 手动 `window.move()` 拖动，无 Windows 贴边吸附（见 §5.1） |
 | 终端主题 | VT 配色未完全跟随 app theme |
 | 远程目录首次加载 | 可能需二次刷新（async 缓存时序） |
 | terminal_vt_widget.py | 从 nebula-shell 移植，可能有 PyQt5 兼容边角 |
+| 凭据与密钥同目录 | 能读 `config/` 即等价可读全部 Session 密码 |
+| secret.key / credentials.json 权限 | 目前仅文档警告，尚未做跨平台 ACL / chmod 硬化 |
+| 收藏按钮图标 | 当前使用 Unicode 星标，后续可改为 QStyle/icon font 以提升跨平台一致性 |
+| 远端列表性能 | 大目录仍是 `listdir` + 逐项 `lstat`，待改为 attrs readdir 或有界并发 |
+| 下载前体积扫描 | 下载目录前会递归统计大小，大目录开始前可能等待较久 |
+| 本地传输 IO | 上传读文件、目录遍历和本地大小统计仍有同步 IO，待 `asyncio.to_thread` 或分片让出事件循环 |
 
 ---
 

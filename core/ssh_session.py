@@ -28,8 +28,8 @@ class SSHSession(QObject):
         self._sftp: Optional[asyncssh.SFTPClient] = None
         self._read_task: Optional[asyncio.Task] = None
         self._disconnecting = False
+        self._aborted = False
         self._session_item: Optional[SessionItem] = None
-        self._password: Optional[str] = None
         self._cols = 80
         self._rows = 24
 
@@ -40,6 +40,14 @@ class SSHSession(QObject):
     @property
     def is_connected(self) -> bool:
         return self._conn is not None and not self._conn.is_closing()
+
+    @property
+    def is_aborted(self) -> bool:
+        return self._aborted
+
+    def request_abort(self) -> None:
+        """Mark connect/in-flight work as aborted (e.g. tab closed while connecting)."""
+        self._aborted = True
 
     async def connect(
         self,
@@ -52,8 +60,8 @@ class SSHSession(QObject):
         if self.is_connected:
             await self.disconnect()
 
+        self._aborted = False
         self._session_item = session_item
-        self._password = password
         self._cols = cols
         self._rows = rows
 
@@ -79,13 +87,25 @@ class SSHSession(QObject):
                 f'username={session_item.username}, auth_type={session_item.auth_type}'
             )
             self._conn = await asyncssh.connect(**options)
+            if self._aborted:
+                await self.disconnect()
+                raise asyncio.CancelledError()
+
             self._process = await self._conn.create_process(
                 '',
                 term_type='xterm-256color',
                 term_size=(cols, rows),
                 encoding='utf-8',
             )
+            if self._aborted:
+                await self.disconnect()
+                raise asyncio.CancelledError()
+
             self._sftp = await self._conn.start_sftp_client()
+            if self._aborted:
+                await self.disconnect()
+                raise asyncio.CancelledError()
+
             self._read_task = asyncio.create_task(self._read_loop())
             logger.info(
                 'SSH connected: '
@@ -93,6 +113,9 @@ class SSHSession(QObject):
                 f'port={session_item.port}, cols={cols}, rows={rows}'
             )
             self.connected.emit()
+        except asyncio.CancelledError:
+            await self.disconnect()
+            raise
         except Exception as exc:
             logger.warning(
                 'SSH connect failed: '
@@ -107,6 +130,7 @@ class SSHSession(QObject):
         if self._disconnecting:
             return
         self._disconnecting = True
+        self._aborted = True
         session_item = self._session_item
         if session_item is not None:
             logger.info(
@@ -120,20 +144,31 @@ class SSHSession(QObject):
                     await self._read_task
                 except asyncio.CancelledError:
                     pass
+                except Exception as exc:
+                    logger.warning(f'SSH read task cleanup error: {exc}')
                 self._read_task = None
 
             if self._process is not None:
-                self._process.close()
-                await self._process.wait_closed()
+                try:
+                    self._process.close()
+                    await self._process.wait_closed()
+                except Exception as exc:
+                    logger.warning(f'SSH process close error: {exc}')
                 self._process = None
 
             if self._sftp is not None:
-                self._sftp.exit()
+                try:
+                    self._sftp.exit()
+                except Exception as exc:
+                    logger.warning(f'SFTP exit error: {exc}')
                 self._sftp = None
 
             if self._conn is not None:
-                self._conn.close()
-                await self._conn.wait_closed()
+                try:
+                    self._conn.close()
+                    await self._conn.wait_closed()
+                except Exception as exc:
+                    logger.warning(f'SSH connection close error: {exc}')
                 self._conn = None
 
             self.disconnected.emit()

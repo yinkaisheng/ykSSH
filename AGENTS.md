@@ -31,7 +31,7 @@
 ## 改动后验证
 
 ```powershell
-cd d:\Codes\Python\MyPyShell
+cd E:\codes\python\MyPyShell
 pip install -r requirements.txt
 python -c "from ui.main_window import MainWindow"
 python main.py

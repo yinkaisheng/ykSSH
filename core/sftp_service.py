@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import shutil
 import stat
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 import asyncssh
 
@@ -15,8 +16,12 @@ from core.file_permissions import format_unix_mode
 from log_util import logger
 
 
+class TransferCancelled(Exception):
+    """User cancelled a transfer conflict (distinct from asyncio task cancellation)."""
+
+
 TransferDecision = Literal['overwrite', 'resume', 'cancel']
-ConflictHandler = Callable[[str, str, bool], TransferDecision]
+ConflictHandler = Callable[[str, str, bool], Union[TransferDecision, Awaitable[TransferDecision]]]
 ProgressHandler = Callable[[str, str, int, int], None]
 
 _COPY_CHUNK_SIZE = 256 * 1024
@@ -47,7 +52,7 @@ async def listdir(sftp: asyncssh.SFTPClient, path: str) -> List[Dict[str, Any]]:
         except asyncssh.SFTPError:
             continue
         mode = attrs.permissions or 0
-        is_dir = stat.S_ISDIR(mode)
+        is_dir = await _remote_entry_is_dir(sftp, full, attrs)
         entries.append({
             'name': name,
             'is_dir': is_dir,
@@ -84,7 +89,7 @@ async def download(
     conflict_handler: Optional[ConflictHandler] = None,
 ) -> None:
     attrs = await sftp.lstat(remote_path)
-    if stat.S_ISDIR(attrs.permissions or 0):
+    if await _remote_entry_is_dir(sftp, remote_path, attrs):
         logger.info(f'SFTP download directory start: remote={remote_path}, local={local_path}')
         await _download_dir(sftp, remote_path, local_path, progress_handler, conflict_handler)
         logger.info(f'SFTP download directory done: remote={remote_path}, local={local_path}')
@@ -180,7 +185,7 @@ async def _download_file(
     progress_handler: Optional[ProgressHandler],
     conflict_handler: Optional[ConflictHandler],
 ) -> None:
-    attrs = await sftp.lstat(remote_path)
+    attrs = await _remote_target_attrs(sftp, remote_path)
     src_size = int(attrs.size or 0)
     src_mtime = float(attrs.mtime or 0)
     start = await _local_file_start_offset(
@@ -226,9 +231,9 @@ async def _remote_file_start_offset(
     except asyncssh.SFTPError:
         return 0
     is_dir = stat.S_ISDIR(attrs.permissions or 0)
-    decision = _resolve_conflict(local_path, remote_path, is_dir, conflict_handler)
+    decision = await _resolve_conflict(local_path, remote_path, is_dir, conflict_handler)
     if decision == 'cancel':
-        raise asyncio.CancelledError()
+        raise TransferCancelled()
     if decision == 'overwrite':
         if is_dir:
             await delete_path(sftp, remote_path)
@@ -248,9 +253,9 @@ async def _local_file_start_offset(
     if not os.path.exists(local_path):
         return 0
     is_dir = os.path.isdir(local_path)
-    decision = _resolve_conflict(remote_path, local_path, is_dir, conflict_handler)
+    decision = await _resolve_conflict(remote_path, local_path, is_dir, conflict_handler)
     if decision == 'cancel':
-        raise asyncio.CancelledError()
+        raise TransferCancelled()
     if decision == 'overwrite':
         if is_dir:
             shutil.rmtree(local_path)
@@ -276,17 +281,17 @@ async def _ensure_remote_dir(
         return True
     target_is_dir = stat.S_ISDIR(attrs.permissions or 0)
     if target_is_dir:
-        decision = _resolve_conflict(local_source, remote_dir, True, conflict_handler)
+        decision = await _resolve_conflict(local_source, remote_dir, True, conflict_handler)
         if decision == 'cancel':
-            raise asyncio.CancelledError()
+            raise TransferCancelled()
         if decision == 'overwrite':
             logger.info(f'SFTP overwrite remote directory: remote={remote_dir}, source={local_source}')
             await delete_path(sftp, remote_dir)
             await sftp.makedirs(remote_dir, exist_ok=True)
         return True
-    decision = _resolve_conflict(local_source, remote_dir, False, conflict_handler)
+    decision = await _resolve_conflict(local_source, remote_dir, False, conflict_handler)
     if decision == 'cancel':
-        raise asyncio.CancelledError()
+        raise TransferCancelled()
     if decision == 'overwrite':
         logger.info(f'SFTP overwrite remote path with directory: remote={remote_dir}, source={local_source}')
         await delete_path(sftp, remote_dir)
@@ -310,17 +315,17 @@ async def _ensure_local_dir(
         os.makedirs(local_dir, exist_ok=True)
         return True
     if os.path.isdir(local_dir):
-        decision = _resolve_conflict(remote_source, local_dir, True, conflict_handler)
+        decision = await _resolve_conflict(remote_source, local_dir, True, conflict_handler)
         if decision == 'cancel':
-            raise asyncio.CancelledError()
+            raise TransferCancelled()
         if decision == 'overwrite':
             logger.info(f'Overwrite local directory for download: local={local_dir}, source={remote_source}')
             shutil.rmtree(local_dir)
             os.makedirs(local_dir, exist_ok=True)
         return True
-    decision = _resolve_conflict(remote_source, local_dir, False, conflict_handler)
+    decision = await _resolve_conflict(remote_source, local_dir, False, conflict_handler)
     if decision == 'cancel':
-        raise asyncio.CancelledError()
+        raise TransferCancelled()
     if decision == 'overwrite':
         logger.info(f'Overwrite local path with directory for download: local={local_dir}, source={remote_source}')
         os.remove(local_dir)
@@ -331,7 +336,7 @@ async def _ensure_local_dir(
     return True
 
 
-def _resolve_conflict(
+async def _resolve_conflict(
     source_path: str,
     target_path: str,
     target_is_dir: bool,
@@ -339,10 +344,18 @@ def _resolve_conflict(
 ) -> TransferDecision:
     if conflict_handler is None:
         return 'overwrite'
-    return conflict_handler(source_path, target_path, target_is_dir)
+    result = conflict_handler(source_path, target_path, target_is_dir)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
-async def _remote_entries(sftp: asyncssh.SFTPClient, path: str) -> list[_RemoteEntry]:
+async def _remote_entries(
+    sftp: asyncssh.SFTPClient,
+    path: str,
+    *,
+    follow_symlink_dirs: bool = True,
+) -> list[_RemoteEntry]:
     entries: list[_RemoteEntry] = []
     for name in await sftp.listdir(path):
         if name in ('.', '..'):
@@ -350,13 +363,43 @@ async def _remote_entries(sftp: asyncssh.SFTPClient, path: str) -> list[_RemoteE
         full = _remote_join(path, name)
         attrs = await sftp.lstat(full)
         mode = attrs.permissions or 0
+        is_dir = stat.S_ISDIR(mode)
+        if follow_symlink_dirs and stat.S_ISLNK(mode):
+            is_dir = await _remote_entry_is_dir(sftp, full, attrs)
         entries.append(_RemoteEntry(
             path=full,
-            is_dir=stat.S_ISDIR(mode),
+            is_dir=is_dir,
             size=int(attrs.size or 0),
             mtime=float(attrs.mtime or 0),
         ))
     return entries
+
+
+async def _remote_entry_is_dir(
+    sftp: asyncssh.SFTPClient,
+    path: str,
+    attrs: asyncssh.SFTPAttrs,
+) -> bool:
+    mode = attrs.permissions or 0
+    if stat.S_ISDIR(mode):
+        return True
+    if not stat.S_ISLNK(mode):
+        return False
+    try:
+        target_attrs = await sftp.stat(path)
+    except asyncssh.SFTPError:
+        return False
+    return stat.S_ISDIR(target_attrs.permissions or 0)
+
+
+async def _remote_target_attrs(sftp: asyncssh.SFTPClient, path: str) -> asyncssh.SFTPAttrs:
+    attrs = await sftp.lstat(path)
+    if not stat.S_ISLNK(attrs.permissions or 0):
+        return attrs
+    try:
+        return await sftp.stat(path)
+    except asyncssh.SFTPError:
+        return attrs
 
 
 def _remote_join(base: str, name: str) -> str:
@@ -381,18 +424,24 @@ def _set_local_mtime(path: str, mtime: float) -> None:
 
 
 async def delete(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
+    """Delete a remote path. Symlinks are removed without following the target."""
     try:
-        attrs = await sftp.stat(remote_path)
+        attrs = await sftp.lstat(remote_path)
     except asyncssh.SFTPError as exc:
         raise exc
-    if stat.S_ISDIR(attrs.permissions or 0):
+    mode = attrs.permissions or 0
+    if stat.S_ISLNK(mode):
+        logger.info(f'SFTP delete symlink: remote={remote_path}')
+        await sftp.remove(remote_path)
+        return
+    if stat.S_ISDIR(mode):
         logger.info(f'SFTP delete directory: remote={remote_path}')
-        for entry in await _remote_entries(sftp, remote_path):
+        for entry in await _remote_entries(sftp, remote_path, follow_symlink_dirs=False):
             await delete(sftp, entry.path)
         await sftp.rmdir(remote_path)
-    else:
-        logger.info(f'SFTP delete file: remote={remote_path}')
-        await sftp.remove(remote_path)
+        return
+    logger.info(f'SFTP delete file: remote={remote_path}')
+    await sftp.remove(remote_path)
 
 
 async def rename(sftp: asyncssh.SFTPClient, old_path: str, new_path: str) -> None:
@@ -403,14 +452,6 @@ async def rename(sftp: asyncssh.SFTPClient, old_path: str, new_path: str) -> Non
 async def mkdir(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
     logger.info(f'SFTP mkdir: remote={remote_path}')
     await sftp.mkdir(remote_path)
-
-
-def run_sync(coro):
-    """Run coroutine on the current asyncio event loop."""
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        return asyncio.ensure_future(coro)
-    return loop.run_until_complete(coro)
 
 
 delete_path = delete

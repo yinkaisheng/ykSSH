@@ -10,6 +10,8 @@ from log_util import logger
 from models.session_item import SessionItem
 from storage.paths import SESSIONS_FILE
 
+SESSIONS_VERSION = 1
+
 
 class SessionProfileStore:
     """Persist a flat list of root ``SessionItem`` nodes to sessions.json."""
@@ -35,6 +37,13 @@ class SessionProfileStore:
         if not isinstance(data, dict):
             self._cache = []
             return self._cache
+        if data.get('version') != SESSIONS_VERSION:
+            logger.warning(
+                f'Unsupported sessions version at {self.path}: '
+                f'{data.get("version")!r} (expected {SESSIONS_VERSION})'
+            )
+            self._cache = []
+            return self._cache
 
         items_data = data.get('items', [])
         self._cache = [SessionItem.from_dict(d) for d in items_data if isinstance(d, dict)]
@@ -43,7 +52,7 @@ class SessionProfileStore:
     def save_items(self, items: List[SessionItem]) -> None:
         self._ensure_dir()
         payload: Dict[str, Any] = {
-            'version': 1,
+            'version': SESSIONS_VERSION,
             'items': [item.to_dict() for item in items],
         }
         try:

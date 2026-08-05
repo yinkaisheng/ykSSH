@@ -3,6 +3,7 @@
 """Translate Qt standard dialog buttons via strings.txt (no Qt .qm files)."""
 from __future__ import annotations
 
+import asyncio
 from typing import Optional, Tuple
 
 from PyQt5.QtGui import QKeySequence
@@ -201,7 +202,7 @@ def ask_yes_no_cancel(
     return box.exec_()
 
 
-def ask_transfer_conflict(parent: QWidget, title: str, text: str) -> str:
+def _build_transfer_conflict_box(parent: QWidget, title: str, text: str) -> tuple[QMessageBox, dict[QPushButton, str]]:
     box = QMessageBox(QMessageBox.Question, title, text, QMessageBox.NoButton, parent)
     choices = (
         ('overwrite', 'dialog.overwrite'),
@@ -217,12 +218,45 @@ def ask_transfer_conflict(parent: QWidget, title: str, text: str) -> str:
         buttons[button] = value
         if value == 'resume':
             box.setDefaultButton(button)
-    result = box.exec_()
-    del result
+    return box, buttons
+
+
+def ask_transfer_conflict(parent: QWidget, title: str, text: str) -> str:
+    box, buttons = _build_transfer_conflict_box(parent, title, text)
+    box.exec_()
     clicked = box.clickedButton()
     if clicked is None:
         return 'cancel'
     return buttons.get(clicked, 'cancel')
+
+
+async def ask_transfer_conflict_async(parent: QWidget, title: str, text: str) -> str:
+    """Non-blocking conflict dialog that awaits a Future (keeps qasync loop alive)."""
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[str] = loop.create_future()
+    box, buttons = _build_transfer_conflict_box(parent, title, text)
+
+    def _finish() -> None:
+        if future.done():
+            return
+        clicked = box.clickedButton()
+        if clicked is None:
+            future.set_result('cancel')
+            return
+        future.set_result(buttons.get(clicked, 'cancel'))
+
+    box.finished.connect(_finish)
+    box.open()
+    try:
+        return await future
+    finally:
+        try:
+            box.finished.disconnect(_finish)
+        except TypeError:
+            pass
+        if box.isVisible():
+            box.close()
+        box.deleteLater()
 
 
 def get_open_file_name(

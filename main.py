@@ -82,6 +82,11 @@ def main() -> None:
     try:
         run_qt_app()
     except Exception as ex:
+        from storage.secret_key import InvalidSecretKeyError
+
+        if isinstance(ex, InvalidSecretKeyError):
+            logger.error(str(ex))
+            sys.exit(1)
         logger.error(
             'An unexpected error occurred:\n'
             f'{"".join(traceback.format_exception(type(ex), ex, ex.__traceback__))}'

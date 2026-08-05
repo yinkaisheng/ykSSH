@@ -33,6 +33,7 @@ class ConnectionManager(QObject):
         self._terminals: Dict[str, TerminalVTWidget] = {}
         self._tab_titles: Dict[str, str] = {}
         self._remote_cache: Dict[str, Dict[str, List[dict]]] = {}
+        self._refresh_tasks: Dict[tuple[str, str], asyncio.Task] = {}
 
     def get_session(self, tab_id: str) -> Optional[SSHSession]:
         return self._sessions.get(tab_id)
@@ -48,7 +49,12 @@ class ConnectionManager(QObject):
             cache = self._remote_cache.setdefault(tab_id, {})
             if path in cache:
                 return cache[path]
-            asyncio.create_task(self.refresh_remote_list(tab_id, path))
+            key = (tab_id, path)
+            existing = self._refresh_tasks.get(key)
+            if existing is None or existing.done():
+                task = asyncio.create_task(self.refresh_remote_list(tab_id, path))
+                self._refresh_tasks[key] = task
+                task.add_done_callback(lambda done, k=key: self._refresh_tasks.pop(k, None))
             return cache.get(path, [])
 
         return _callback
@@ -69,12 +75,13 @@ class ConnectionManager(QObject):
         sftp = ssh.get_sftp()
         if sftp is None:
             return []
+        cache = self._remote_cache.setdefault(tab_id, {})
         try:
             entries = await listdir(sftp, path)
         except Exception as exc:
             logger.warning(f'Remote list failed: {exc}')
-            entries = []
-        self._remote_cache.setdefault(tab_id, {})[path] = entries
+            return cache.get(path, [])
+        cache[path] = entries
         self.remote_list_updated.emit(tab_id)
         return entries
 
@@ -144,6 +151,7 @@ class ConnectionManager(QObject):
                 return
 
         def _on_disconnected() -> None:
+            self._discard_disconnected_session(tab_id, ssh, terminal)
             if on_disconnected is not None:
                 on_disconnected()
 
@@ -167,16 +175,28 @@ class ConnectionManager(QObject):
 
         try:
             await ssh.connect(session_item, password=password, cols=cols, rows=rows)
+        except asyncio.CancelledError:
+            logger.info(
+                'Open connection tab cancelled: '
+                f'tab_id={tab_id}, session_id={session_item.id}, host={session_item.host}'
+            )
+            self._discard_failed_session(tab_id, ssh, terminal)
+            raise
         except Exception:
             logger.warning(
                 'Open connection tab failed: '
                 f'tab_id={tab_id}, session_id={session_item.id}, host={session_item.host}'
             )
-            self._sessions.pop(tab_id, None)
-            self._terminals.pop(tab_id, None)
-            self._tab_titles.pop(tab_id, None)
-            self._remote_cache.pop(tab_id, None)
+            self._discard_failed_session(tab_id, ssh, terminal)
             raise
+
+        # Tab may have been closed while connect() was in flight.
+        if self._sessions.get(tab_id) is not ssh or ssh.is_aborted:
+            logger.info(f'Open connection tab aborted after connect: tab_id={tab_id}')
+            self._disconnect_ssh_signals(ssh, terminal)
+            await ssh.disconnect()
+            ssh.deleteLater()
+            return
 
         logger.info(
             'Open connection tab succeeded: '
@@ -199,10 +219,52 @@ class ConnectionManager(QObject):
         terminal = self._terminals.pop(tab_id, None)
         self._tab_titles.pop(tab_id, None)
         self._remote_cache.pop(tab_id, None)
+        for key in list(self._refresh_tasks):
+            if key[0] == tab_id:
+                task = self._refresh_tasks.pop(key, None)
+                if task is not None and not task.done():
+                    task.cancel()
         if ssh is not None:
+            ssh.request_abort()
             self._disconnect_ssh_signals(ssh, terminal)
             await ssh.disconnect()
+            ssh.deleteLater()
         logger.info(f'Connection tab closed: tab_id={tab_id}')
+
+    def _discard_failed_session(
+        self,
+        tab_id: str,
+        ssh: SSHSession,
+        terminal: Optional[TerminalVTWidget],
+    ) -> None:
+        if self._sessions.get(tab_id) is ssh:
+            self._sessions.pop(tab_id, None)
+            self._terminals.pop(tab_id, None)
+            self._tab_titles.pop(tab_id, None)
+            self._remote_cache.pop(tab_id, None)
+        self._disconnect_ssh_signals(ssh, terminal)
+        ssh.deleteLater()
+
+    def _discard_disconnected_session(
+        self,
+        tab_id: str,
+        ssh: SSHSession,
+        terminal: Optional[TerminalVTWidget],
+    ) -> None:
+        if self._sessions.get(tab_id) is not ssh:
+            return
+        logger.info(f'Remote session disconnected, discarding tab state: tab_id={tab_id}')
+        self._sessions.pop(tab_id, None)
+        self._terminals.pop(tab_id, None)
+        self._tab_titles.pop(tab_id, None)
+        self._remote_cache.pop(tab_id, None)
+        for key in list(self._refresh_tasks):
+            if key[0] == tab_id:
+                task = self._refresh_tasks.pop(key, None)
+                if task is not None and not task.done():
+                    task.cancel()
+        self._disconnect_ssh_signals(ssh, terminal)
+        ssh.deleteLater()
 
     @staticmethod
     def _disconnect_ssh_signals(ssh: SSHSession, terminal) -> None:

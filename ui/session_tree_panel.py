@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
 )
 
 from i18n import tr
-from models.session_item import AUTH_PUBLIC_KEY, SessionItem
+from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
 from storage.app_config import get_app_config
 from storage.credential_store import CredentialStore
 from storage.session_profile_store import SessionProfileStore
@@ -284,18 +284,24 @@ class SessionTreePanel(QWidget):
         is_folder = self._is_folder(item)
 
         if is_folder:
-            menu.addAction(tr('sessions.add_folder'))
-            menu.addAction(tr('sessions.add_session'))
+            add_folder_action = menu.addAction(tr('sessions.add_folder'))
+            add_session_action = menu.addAction(tr('sessions.add_session'))
             menu.addSeparator()
-            menu.addAction(tr('sessions.expand_all'))
-            menu.addAction(tr('sessions.collapse_all'))
+            expand_action = menu.addAction(tr('sessions.expand_all'))
+            collapse_action = menu.addAction(tr('sessions.collapse_all'))
             menu.addSeparator()
+            connect_action = None
+            edit_action = None
         else:
-            menu.addAction(tr('sessions.connect'))
-            menu.addAction(tr('sessions.edit'))
+            connect_action = menu.addAction(tr('sessions.connect'))
+            edit_action = menu.addAction(tr('sessions.edit'))
+            add_folder_action = None
+            add_session_action = None
+            expand_action = None
+            collapse_action = None
             menu.addSeparator()
-        menu.addAction(tr('sessions.rename'))
-        menu.addAction(tr('sessions.delete'))
+        rename_action = menu.addAction(tr('sessions.rename'))
+        delete_action = menu.addAction(tr('sessions.delete'))
         menu.addSeparator()
 
         cut_action = menu.addAction(tr('sessions.cut'))
@@ -323,30 +329,28 @@ class SessionTreePanel(QWidget):
             self._paste_item(item)
             return
 
-        action_text = action.text()
-
         if is_folder:
-            if action_text == tr('sessions.add_folder'):
+            if action == add_folder_action:
                 self._add_folder_under(item)
-            elif action_text == tr('sessions.add_session'):
+            elif action == add_session_action:
                 self._add_session_to_parent(item)
-            elif action_text == tr('sessions.expand_all'):
+            elif action == expand_action:
                 self._expand_recursive(item)
-            elif action_text == tr('sessions.collapse_all'):
+            elif action == collapse_action:
                 self._collapse_recursive(item)
-            elif action_text == tr('sessions.rename'):
+            elif action == rename_action:
                 self._rename_item(item)
-            elif action_text == tr('sessions.delete'):
-                self._delete_item(item, confirm=False)
+            elif action == delete_action:
+                self._delete_item(item, confirm=True)
         else:
-            if action_text == tr('sessions.connect'):
+            if action == connect_action:
                 self._on_item_double_clicked(item, 0)
-            elif action_text == tr('sessions.edit'):
+            elif action == edit_action:
                 self._edit_session(item)
-            elif action_text == tr('sessions.rename'):
+            elif action == rename_action:
                 self._rename_item(item)
-            elif action_text == tr('sessions.delete'):
-                self._delete_item(item, confirm=False)
+            elif action == delete_action:
+                self._delete_item(item, confirm=True)
 
     def _expand_recursive(self, item: QTreeWidgetItem) -> None:
         item.setExpanded(True)
@@ -441,8 +445,12 @@ class SessionTreePanel(QWidget):
         session.local_path = updated.local_path
         session.remote_path = updated.remote_path
         password = dialog.get_password()
-        if password:
+        if session.auth_type != AUTH_PASSWORD:
+            self.keyring.delete_password(session.id)
+        elif password:
             self.keyring.set_password(session.id, password)
+        else:
+            self.keyring.delete_password(session.id)
         item.setText(0, session.name)
         item.setToolTip(0, _session_tooltip(session))
         self.store.save_items(self._items)
@@ -466,6 +474,13 @@ class SessionTreePanel(QWidget):
             item.setToolTip(0, _session_tooltip(session))
         self.sessions_changed.emit()
 
+    def _delete_credentials_recursive(self, session: SessionItem) -> None:
+        if session.is_folder():
+            for child in session.children:
+                self._delete_credentials_recursive(child)
+            return
+        self.keyring.delete_password(session.id)
+
     def _delete_item(self, item: QTreeWidgetItem, confirm: bool = False) -> None:
         session = self._find_session_by_tree(item)
         if session is None:
@@ -477,16 +492,14 @@ class SessionTreePanel(QWidget):
                 tr('sessions.confirm_delete_body', name=item.text(0)),
             ):
                 return
-        else:
-            if session.is_folder() and session.children:
-                if not ask_yes_no(
-                    self,
-                    tr('sessions.confirm_delete'),
-                    tr('sessions.confirm_delete_body', name=item.text(0)),
-                ):
-                    return
-        if not session.is_folder():
-            self.keyring.delete_password(session.id)
+        elif session.is_folder() and session.children:
+            if not ask_yes_no(
+                self,
+                tr('sessions.confirm_delete'),
+                tr('sessions.confirm_delete_body', name=item.text(0)),
+            ):
+                return
+        self._delete_credentials_recursive(session)
         parent = item.parent()
         if parent:
             parent.removeChild(item)

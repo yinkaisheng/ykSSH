@@ -131,7 +131,7 @@ try:
     def config_logger(logger, log_level = 'info', log_dir = '', log_file = '',
                       backup_count = 15, log_to_stdout = True):
         def add_thread_native_id(record):
-            record['extra']['thread'] = threading.get_native_id
+            record['extra']['thread'] = current_thread_id()
 
         logger.configure(patcher=add_thread_native_id)
         if log_dir and log_dir != '.':

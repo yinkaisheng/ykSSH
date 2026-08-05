@@ -624,7 +624,17 @@ class LocalFileTable(_BaseFileTable):
             menu.addAction(tr('file.upload'), lambda: self._upload_selected(selected))
             if len(selected) == 1:
                 menu.addAction(tr('file.rename'), self._rename)
-            menu.addAction(tr('file.delete'), self._delete_selected)
+            shift_held = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+            if shift_held:
+                menu.addAction(
+                    tr('file.delete_permanently'),
+                    lambda: self._delete_selected(permanent=True),
+                )
+            else:
+                menu.addAction(
+                    tr('file.move_to_trash'),
+                    lambda: self._delete_selected(permanent=False),
+                )
         else:
             menu.addSeparator()
             menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path)
@@ -689,13 +699,18 @@ class LocalFileTable(_BaseFileTable):
         logger.info(f'Local upload selection: count={len(paths)}, paths={paths}')
         self.upload_requested.emit(paths)
 
-    def _delete_selected(self) -> None:
+    def _delete_selected(self, *, permanent: bool = False) -> None:
         selected = self._selected_entries()
         if not selected:
             return
-        if not ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
-            return
-        self._delete_entries(selected, permanent=True)
+        if permanent:
+            if not ask_yes_no(
+                self,
+                tr('file.delete_permanently'),
+                tr('file.confirm_delete_permanently'),
+            ):
+                return
+        self._delete_entries(selected, permanent=permanent)
 
     def _handle_delete_key(self, *, permanent: bool) -> bool:
         selected = self._selected_entries()
@@ -715,7 +730,11 @@ class LocalFileTable(_BaseFileTable):
                 if not permanent:
                     if not QFile.moveToTrash(path):
                         logger.warning(f'Local move to trash failed: path={path}')
-                        message_warning(self, tr('file.delete'), tr('file.move_to_trash_failed', path=path))
+                        message_warning(
+                            self,
+                            tr('file.move_to_trash'),
+                            tr('file.move_to_trash_failed', path=path),
+                        )
                     else:
                         logger.info(f'Local move to trash done: path={path}')
                 elif entry_type == 'dir':

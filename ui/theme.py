@@ -22,11 +22,6 @@ ThemeName = Literal['solarized', 'light', 'dark']
 THEME_SOLARIZED: ThemeName = 'solarized'
 THEME_LIGHT: ThemeName = 'light'
 THEME_DARK: ThemeName = 'dark'
-THEME_LABELS: Dict[ThemeName, str] = {
-    THEME_SOLARIZED: 'Solarized Light',
-    THEME_LIGHT: 'Light',
-    THEME_DARK: 'Dark',
-}
 THEME_OPTIONS = [THEME_SOLARIZED, THEME_LIGHT, THEME_DARK]
 
 
