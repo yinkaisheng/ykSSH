@@ -73,6 +73,7 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'terminal.connected': 'Connected',
     'terminal.disconnected': 'Disconnected',
     'terminal.connection_error': 'Connection error: {error}',
+    'terminal.command_sent_time': 'Command sent: {time}',
     'tab.rename': 'Rename',
     'tab.rename_title': 'Rename Tab',
     'tab.rename_label': 'Tab name:',

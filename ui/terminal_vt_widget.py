@@ -20,7 +20,7 @@ from PyQt5.QtGui import (
     QInputMethodEvent,
     QPixmap,
 )
-from PyQt5.QtWidgets import QWidget, QSizePolicy
+from PyQt5.QtWidgets import QWidget, QSizePolicy, QToolTip
 
 try:
     from PyQt5 import sip
@@ -149,7 +149,9 @@ class TerminalVTWidget(QWidget):
         self._last_double_click_pos: QPoint | None = None
         self._viewport_top_row = 0
         self._command_start_rows: list[int] = []
+        self._command_start_times: dict[int, str] = {}
         self._pending_command_start_y: int | None = None
+        self._last_gutter_tooltip_row: int | None = None
         self._paint_timer = QTimer(self)
         self._paint_timer.setSingleShot(True)
         self._paint_timer.timeout.connect(self.update)
@@ -687,7 +689,7 @@ class TerminalVTWidget(QWidget):
         self._sel_head = None
         self._scroll_lines = 0
         self._viewport_top_row = 0
-        self._command_start_rows.clear()
+        self._clear_command_marks()
         self._pending_command_start_y = None
         self._mark_full_repaint()
 
@@ -706,7 +708,7 @@ class TerminalVTWidget(QWidget):
         self._sel_head = None
         self._scroll_lines = 0
         self._viewport_top_row = 0
-        self._command_start_rows.clear()
+        self._clear_command_marks()
         self._pending_command_start_y = None
         self._mark_full_repaint()
 
@@ -734,7 +736,7 @@ class TerminalVTWidget(QWidget):
         self._sel_head = None
         self._scroll_lines = 0
         self._viewport_top_row = 0
-        self._command_start_rows.clear()
+        self._clear_command_marks()
         self._pending_command_start_y = None
         self._mark_full_repaint()
         self._debug_gutter_log(
@@ -1107,7 +1109,7 @@ class TerminalVTWidget(QWidget):
             pass
         self._scroll_lines = 0
         self._viewport_top_row = 0
-        self._command_start_rows.clear()
+        self._clear_command_marks()
         self._pending_command_start_y = None
         self._mark_full_repaint()
         self._mark_dirty()
@@ -1517,6 +1519,8 @@ class TerminalVTWidget(QWidget):
     # Mouse reporting (SGR 1006)
     # -------------------------
     def mousePressEvent(self, event):  # type: ignore[override]
+        self._hide_gutter_command_tooltip()
+
         if event.button() == Qt.LeftButton:
             self.setFocus(Qt.FocusReason.MouseFocusReason)
             if self._handle_scrollbar_press(event.pos()):
@@ -1623,6 +1627,8 @@ class TerminalVTWidget(QWidget):
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):  # type: ignore[override]
+        self._update_gutter_command_tooltip(event)
+
         if self._is_scrollbar_dragging:
             self._drag_scrollbar_to(event.pos())
             event.accept()
@@ -1652,6 +1658,10 @@ class TerminalVTWidget(QWidget):
             return
 
         super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):  # type: ignore[override]
+        self._hide_gutter_command_tooltip()
+        super().leaveEvent(event)
 
     # -------------------------
     # Rendering
@@ -2192,6 +2202,52 @@ class TerminalVTWidget(QWidget):
             return
         self._command_start_rows.append(start_y)
         self._command_start_rows = sorted(set(self._command_start_rows))[-500:]
+        self._command_start_times[start_y] = time.strftime("%Y-%m-%d %H:%M:%S")
+        keep = set(self._command_start_rows)
+        self._command_start_times = {
+            row: sent_at
+            for row, sent_at in self._command_start_times.items()
+            if row in keep
+        }
+
+    def _clear_command_marks(self) -> None:
+        self._command_start_rows.clear()
+        self._command_start_times.clear()
+        self._last_gutter_tooltip_row = None
+
+    def _command_start_row_for_abs_y(self, abs_y: int) -> int | None:
+        if self._in_alt_screen or not self._command_start_rows:
+            return None
+        start_row: int | None = None
+        for row in sorted(self._command_start_rows):
+            if row <= abs_y:
+                start_row = row
+            else:
+                break
+        return start_row
+
+    def _update_gutter_command_tooltip(self, event) -> None:
+        if event.buttons() != Qt.NoButton:
+            self._hide_gutter_command_tooltip()
+            return
+        if not self._pos_in_gutter(event.pos()):
+            self._hide_gutter_command_tooltip()
+            return
+        y = self._line_y_from_pos(event.pos())
+        abs_y = self._visible_y_to_abs_y(y)
+        start_row = self._command_start_row_for_abs_y(abs_y)
+        sent_at = self._command_start_times.get(start_row) if start_row is not None else None
+        if not sent_at:
+            self._hide_gutter_command_tooltip()
+            return
+        self._last_gutter_tooltip_row = start_row
+        QToolTip.showText(event.globalPos(), t("terminal.command_sent_time", time=sent_at), self)
+
+    def _hide_gutter_command_tooltip(self) -> None:
+        if self._last_gutter_tooltip_row is None:
+            return
+        self._last_gutter_tooltip_row = None
+        QToolTip.hideText()
 
     def _line_selection_limit(self, y: int) -> int | None:
         if self._input_line_y() != y:
@@ -2565,6 +2621,10 @@ class TerminalVTWidget(QWidget):
             event.accept()
             return
         if key == Qt.Key_Backspace:
+            if (mods & Qt.AltModifier) and not (mods & (Qt.ControlModifier | Qt.MetaModifier)):
+                self.input_received.emit(b"\x1b\x7f")
+                event.accept()
+                return
             self.input_received.emit(b"\x7f")
             event.accept()
             return

@@ -292,11 +292,11 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 连接时创建 `xterm-256color` PTY，尺寸取自 `TerminalVTWidget._calc_cols_rows()`
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
-- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 序列，由远端 shell/readline/zsh/fish 执行向后按词删除；右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
 - 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
-- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记；以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
+- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记并记录本地命令发送时间；以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
 - `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `config/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`T` 上传/下载传输、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
