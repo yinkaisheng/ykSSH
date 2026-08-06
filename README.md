@@ -4,6 +4,8 @@ YKShell is a local desktop SSH client built with PyQt5. It provides a WindTerm-l
 
 The project is currently in active development and primarily targets Windows.
 
+![YKShell screenshot](images/screenshot.png)
+
 ## Features
 
 - SSH session tree with folders and saved connection profiles
