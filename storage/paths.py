@@ -16,6 +16,7 @@ APP_DIR = _resolve_app_dir()
 DATA_DIR = APP_DIR / 'config'
 CONFIG_FILE = DATA_DIR / 'config.json'
 SESSIONS_FILE = DATA_DIR / 'sessions.json'
+COMMANDS_FILE = DATA_DIR / 'commands.json'
 CREDENTIALS_FILE = DATA_DIR / 'credentials.json'
 SECRET_KEY_FILE = DATA_DIR / 'secret.key'
 LANGUAGES_DIR = APP_DIR / 'Languages'

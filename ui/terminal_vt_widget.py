@@ -59,6 +59,7 @@ class TerminalVTWidget(QWidget):
     """
 
     input_received = pyqtSignal(bytes)
+    command_submitted = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -151,6 +152,10 @@ class TerminalVTWidget(QWidget):
         self._command_start_rows: list[int] = []
         self._command_start_times: dict[int, str] = {}
         self._pending_command_start_y: int | None = None
+        self._pending_command_start_x: int | None = None
+        self._pending_command_text = ''
+        self._pending_command_history_forced = False
+        self._command_start_commands: dict[int, str] = {}
         self._last_gutter_tooltip_row: int | None = None
         self._paint_timer = QTimer(self)
         self._paint_timer.setSingleShot(True)
@@ -2184,10 +2189,17 @@ class TerminalVTWidget(QWidget):
         if self._pending_command_start_y is not None:
             return
         self._pending_command_start_y = self._cursor_abs_y()
+        cursor = getattr(self.screen, "cursor", None)
+        try:
+            self._pending_command_start_x = int(getattr(cursor, "x", 0)) if cursor is not None else 0
+        except Exception:
+            self._pending_command_start_x = 0
 
     def _commit_command_start(self, *, check_continuation: bool = False) -> None:
         if self._in_alt_screen:
             self._pending_command_start_y = None
+            self._pending_command_start_x = None
+            self._pending_command_text = ''
             return
         if check_continuation and self._current_input_continues():
             self._record_pending_command_start()
@@ -2197,23 +2209,144 @@ class TerminalVTWidget(QWidget):
             start_y = self._cursor_abs_y()
         self._pending_command_start_y = None
         if start_y is None:
+            self._emit_pending_command_submitted('', None)
+            self._pending_command_start_x = None
             return
         if self._command_start_rows and self._command_start_rows[-1] == start_y:
+            self._emit_pending_command_submitted(self._command_start_times.get(start_y, ''), start_y)
+            self._pending_command_start_x = None
             return
         self._command_start_rows.append(start_y)
         self._command_start_rows = sorted(set(self._command_start_rows))[-500:]
-        self._command_start_times[start_y] = time.strftime("%Y-%m-%d %H:%M:%S")
+        sent_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        self._command_start_times[start_y] = sent_at
         keep = set(self._command_start_rows)
         self._command_start_times = {
             row: sent_at
             for row, sent_at in self._command_start_times.items()
             if row in keep
         }
+        self._command_start_commands = {
+            row: command
+            for row, command in self._command_start_commands.items()
+            if row in keep
+        }
+        self._emit_pending_command_submitted(sent_at, start_y)
+        self._pending_command_start_x = None
 
     def _clear_command_marks(self) -> None:
         self._command_start_rows.clear()
         self._command_start_times.clear()
+        self._pending_command_start_y = None
+        self._pending_command_start_x = None
+        self._pending_command_text = ''
+        self._pending_command_history_forced = False
+        self._command_start_commands.clear()
         self._last_gutter_tooltip_row = None
+
+    def _append_pending_command_text(self, text: str, *, force_history: bool = False) -> None:
+        if not text:
+            return
+        self._record_pending_command_start()
+        self._pending_command_text += text
+        self._pending_command_history_forced = self._pending_command_history_forced or force_history
+
+    def _delete_pending_command_char(self) -> None:
+        if self._pending_command_text:
+            self._pending_command_text = self._pending_command_text[:-1]
+
+    def _delete_pending_command_word(self) -> None:
+        text = self._pending_command_text.rstrip()
+        if not text:
+            self._pending_command_text = ''
+            return
+        i = len(text)
+        while i > 0 and text[i - 1].isalnum():
+            i -= 1
+        if i == len(text):
+            i -= 1
+        self._pending_command_text = text[:i]
+
+    def _emit_pending_command_submitted(self, sent_at: str, start_y: int | None) -> None:
+        command = self._pending_command_text.strip()
+        force_history = self._pending_command_history_forced
+        visible_command = self._visible_command_text_for_history(start_y, command)
+        if visible_command:
+            command = visible_command
+        self._pending_command_text = ''
+        self._pending_command_history_forced = False
+        if command and sent_at and (force_history or self._pending_command_was_visible(command)):
+            if start_y is not None:
+                self._command_start_commands[start_y] = command
+            self.command_submitted.emit(command, sent_at)
+
+    def _visible_command_text_for_history(self, start_y: int | None, typed_command: str) -> str:
+        if start_y is None:
+            return ''
+        visible_y = self._abs_y_to_visible_y(start_y)
+        _cols, rows = self._calc_cols_rows()
+        if visible_y < 0 or visible_y >= rows:
+            return ''
+        line = self._line_text(visible_y).rstrip()
+        if not line:
+            return ''
+        start_x = max(0, int(self._pending_command_start_x or 0))
+        candidate = line[start_x:].strip()
+        if not candidate:
+            return ''
+        return candidate
+
+    def _pending_command_was_visible(self, command: str) -> bool:
+        y = self._cursor_y()
+        if y is None:
+            return False
+        visible = self._line_text(y).rstrip()
+        if not visible:
+            return False
+        tail = command.splitlines()[-1].rstrip()
+        return bool(tail) and visible.endswith(tail)
+
+    def send_command_text(self, command: str, *, execute: bool = True) -> None:
+        command = (command or '').strip()
+        if not command:
+            return
+        payload_text = command.replace('\r\n', '\n').replace('\r', '\n')
+        self._append_pending_command_text(payload_text, force_history=True)
+        payload = payload_text.replace('\n', '\r').encode('utf-8', errors='replace')
+        if execute:
+            self._commit_command_start()
+            payload += b'\r'
+        self.input_received.emit(payload)
+
+    def scroll_to_command(self, command: str, sent_at: str) -> bool:
+        if self._in_alt_screen or not sent_at:
+            return False
+        rows_count = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+        if rows_count <= 0:
+            return False
+
+        matches = [
+            row for row in self._command_start_rows
+            if self._command_start_times.get(row) == sent_at
+            and self._command_start_commands.get(row) == command
+        ]
+        if not matches:
+            matches = [
+                row for row in self._command_start_rows
+                if self._command_start_times.get(row) == sent_at
+            ]
+        if not matches:
+            return False
+
+        start_y = matches[-1]
+        bottom_top = max(0, self._history_top_len())
+        max_abs_y = bottom_top + rows_count - 1
+        if start_y < 0 or start_y > max_abs_y:
+            return False
+
+        target_top = max(0, min(start_y, bottom_top))
+        self._restore_viewport_top_after_output(target_top)
+        return True
 
     def _command_start_row_for_abs_y(self, abs_y: int) -> int | None:
         if self._in_alt_screen or not self._command_start_rows:
@@ -2622,9 +2755,11 @@ class TerminalVTWidget(QWidget):
             return
         if key == Qt.Key_Backspace:
             if (mods & Qt.AltModifier) and not (mods & (Qt.ControlModifier | Qt.MetaModifier)):
+                self._delete_pending_command_word()
                 self.input_received.emit(b"\x1b\x7f")
                 event.accept()
                 return
+            self._delete_pending_command_char()
             self.input_received.emit(b"\x7f")
             event.accept()
             return
@@ -2642,6 +2777,9 @@ class TerminalVTWidget(QWidget):
         if mods & Qt.ControlModifier:
             # For Ctrl+A to Ctrl+Z, and some others
             if Qt.Key_A <= key <= Qt.Key_Z:
+                if key in (Qt.Key_C, Qt.Key_U):
+                    self._pending_command_text = ''
+                    self._pending_command_history_forced = False
                 ctrl_char = bytes([key - Qt.Key_A + 1])
                 self.input_received.emit(ctrl_char)
                 event.accept()
@@ -2661,7 +2799,7 @@ class TerminalVTWidget(QWidget):
 
         # Handle regular text input
         if text:
-            self._record_pending_command_start()
+            self._append_pending_command_text(text)
             self.input_received.emit(text.encode("utf-8"))
             event.accept()
             return
@@ -2677,7 +2815,7 @@ class TerminalVTWidget(QWidget):
             if Qt.Key_A <= key <= Qt.Key_Z:
                 base_char = ord('a') + (key - Qt.Key_A)
                 char = chr(base_char).upper() if (mods & Qt.ShiftModifier) else chr(base_char)
-                self._record_pending_command_start()
+                self._append_pending_command_text(char)
                 self.input_received.emit(char.encode("utf-8"))
                 event.accept()
                 return
@@ -2690,14 +2828,14 @@ class TerminalVTWidget(QWidget):
                     char = shifted[key - Qt.Key_0]
                 else:
                     char = chr(base_char)
-                self._record_pending_command_start()
+                self._append_pending_command_text(char)
                 self.input_received.emit(char.encode("utf-8"))
                 event.accept()
                 return
 
             # Space
             if key == Qt.Key_Space:
-                self._record_pending_command_start()
+                self._append_pending_command_text(" ")
                 self.input_received.emit(b" ")
                 event.accept()
                 return
@@ -2740,7 +2878,7 @@ class TerminalVTWidget(QWidget):
 
             if key in key_to_char:
                 char = key_to_char[key]
-                self._record_pending_command_start()
+                self._append_pending_command_text(char)
                 self.input_received.emit(char.encode("utf-8"))
                 event.accept()
                 return
@@ -2768,11 +2906,12 @@ class TerminalVTWidget(QWidget):
             ):
                 return
 
-        text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r")
+        history_text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = history_text.replace("\n", "\r")
         payload = text.encode("utf-8", errors="replace")
         if bracketed:
             payload = b"\x1b[200~" + payload + b"\x1b[201~"
-        self._record_pending_command_start()
+        self._append_pending_command_text(history_text)
         if b"\r" in payload:
             self._commit_command_start()
         self.input_received.emit(payload)

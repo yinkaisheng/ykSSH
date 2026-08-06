@@ -43,7 +43,7 @@ from ui.favorites_dialog import (
 )
 from ui.settings_dialog import AppSettings, prompt_app_settings
 from ui.file_table_panel import FilePanelsContainer, FilesPanel
-from ui.session_tree_panel import SessionTreePanel
+from ui.side_panel import SidePanel
 from ui.terminal_tab_widget import TerminalTabWidget
 from ui.terminal_vt_widget import TerminalVTWidget
 from ui.window_title_bar import WindowTitleBar
@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._title_bar, 0)
         self._setup_menus()
 
-        self.session_panel = SessionTreePanel(self.profile_store, self.credential_store)
+        self.session_panel = SidePanel(self.profile_store, self.credential_store)
         self.terminal_tabs = TerminalTabWidget()
         self.file_panels = FilePanelsContainer()
 
@@ -177,6 +177,8 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         self.session_panel.session_connect_requested.connect(self._connect_session)
+        self.session_panel.command_send_requested.connect(self._send_command_to_active_terminal)
+        self.session_panel.history_jump_requested.connect(self._jump_to_active_terminal_command)
         self.session_panel.sessions_changed.connect(self._schedule_session_save)
         self.terminal_tabs.tab_close_requested.connect(self._on_tab_close_requested)
         self.terminal_tabs.tab_closed.connect(self._on_tab_closed)
@@ -521,12 +523,22 @@ class MainWindow(QMainWindow):
             panel.remote_file_panel.clear_remote()
 
     def _on_connect_clicked(self) -> None:
-        item = self.session_panel.tree.currentItem()
-        if item is None:
-            return
-        session = self.session_panel._find_session_by_tree(item)
-        if session is not None and not session.is_folder():
+        session = self.session_panel.current_session()
+        if session is not None:
             self._connect_session(session)
+
+    def _send_command_to_active_terminal(self, command: str) -> None:
+        terminal = self.terminal_tabs.get_current_terminal()
+        if terminal is None or not self._terminal_is_alive(terminal):
+            return
+        terminal.send_command_text(command, execute=True)
+        terminal.setFocus(Qt.OtherFocusReason)
+
+    def _jump_to_active_terminal_command(self, command: str, sent_at: str) -> None:
+        terminal = self.terminal_tabs.get_current_terminal()
+        if terminal is None or not self._terminal_is_alive(terminal):
+            return
+        terminal.scroll_to_command(command, sent_at)
 
     def _connect_session(self, session_item: SessionItem) -> None:
         logger.info(
@@ -538,7 +550,11 @@ class MainWindow(QMainWindow):
 
     async def _connect_session_async(self, session_item: SessionItem) -> None:
         tab_id, terminal = self.terminal_tabs.add_terminal_tab(session_item.name)
+        terminal.command_submitted.connect(
+            lambda command, sent_at, tid=tab_id: self.session_panel.add_history_command(tid, command, sent_at)
+        )
         self._active_tab_id = tab_id
+        self.session_panel.set_active_history_tab(tab_id)
         terminal.setFocus(Qt.OtherFocusReason)
         local_path = resolve_local_path(session_item.local_path)
         panel = self.file_panels.create_panel(tab_id, initial_local_path=local_path)
@@ -638,6 +654,7 @@ class MainWindow(QMainWindow):
         if remote_dialog is not None:
             remote_dialog.close()
         self.file_panels.remove_panel(tab_id)
+        self.session_panel.remove_history_tab(tab_id)
         if was_active:
             self._active_tab_id = None
             index = self.terminal_tabs.currentIndex()
@@ -645,8 +662,10 @@ class MainWindow(QMainWindow):
                 new_tab_id = self.terminal_tabs._tab_ids.get(index)
                 if new_tab_id is not None:
                     self._active_tab_id = new_tab_id
+                    self.session_panel.set_active_history_tab(new_tab_id)
                     self._attach_file_panel(new_tab_id)
             else:
+                self.session_panel.set_active_history_tab(None)
                 self.file_panels.show_empty()
         asyncio.create_task(self._finalize_tab_close_async(tab_id, handler))
 
@@ -691,13 +710,16 @@ class MainWindow(QMainWindow):
             self._save_active_tab_paths()
             self.file_panels.show_empty()
             self._active_tab_id = None
+            self.session_panel.set_active_history_tab(None)
             return
         self._save_active_tab_paths()
         tab_id = self.terminal_tabs._tab_ids.get(index)
         self._active_tab_id = tab_id
         if tab_id is None:
             self.file_panels.show_empty()
+            self.session_panel.set_active_history_tab(None)
             return
+        self.session_panel.set_active_history_tab(tab_id)
         panel = self.file_panels.get_panel(tab_id)
         if panel is None:
             self.file_panels.show_empty()

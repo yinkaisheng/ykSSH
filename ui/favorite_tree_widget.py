@@ -35,6 +35,7 @@ class FavoriteTreeWidget(QTreeWidget):
     def __init__(self, parent: QWidget = None):
         super().__init__(parent)
         self._tree_id = uuid.uuid4().hex
+        self.empty_hint_key = 'sessions.empty_hint'
 
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
@@ -172,7 +173,7 @@ class FavoriteTreeWidget(QTreeWidget):
             font = painter.font()
             font.setPointSize(font.pointSize() + 1)
             painter.setFont(font)
-            painter.drawText(self.viewport().rect(), Qt.AlignCenter, tr('sessions.empty_hint'))
+            painter.drawText(self.viewport().rect(), Qt.AlignCenter, tr(self.empty_hint_key))
             painter.end()
 
         if self._sibling_dragging and self._sibling_indicator_target is not None:

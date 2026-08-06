@@ -970,8 +970,15 @@ QListWidget::item {{
     border-bottom: 1px solid {p.table_grid};
 }}
 
-QListWidget::item:selected {{
-    background-color: {p.background_secondary};
+QListWidget::item:selected,
+QListWidget::item:selected:!active {{
+    background-color: {p.tree_selected_background};
+    color: {p.text_primary};
+}}
+
+QListWidget::item:selected:hover,
+QListWidget::item:selected:!active:hover {{
+    background-color: {p.tree_selected_background};
     color: {p.text_primary};
 }}
 
@@ -1115,6 +1122,19 @@ QLabel#panelTitle {{
     font-weight: bold;
     color: {p.text_heading};
     padding: 4px 0;
+}}
+
+QToolButton#drawerHeaderButton {{
+    border: 0;
+    margin: 0;
+    padding: 2px 2px;
+    color: {p.text_heading};
+    background: transparent;
+    text-align: left;
+}}
+
+QToolButton#drawerHeaderButton:hover {{
+    color: {p.highlight};
 }}
 
 QLabel#historyItemLabel {{

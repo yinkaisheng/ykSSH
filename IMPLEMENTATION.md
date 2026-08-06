@@ -100,6 +100,8 @@ YKShell/
 │   ├── paths.py                 # config/ 路径常量
 │   ├── app_config.py            # config.json 读写与 normalize
 │   ├── session_profile_store.py # sessions.json（Session 树）
+│   ├── command_store.py         # commands.json（快捷命令树）
+│   ├── command_history_store.py # 内存历史命令（按运行时 Tab 分桶）
 │   ├── credential_store.py      # credentials.json（Fernet 加密密码）
 │   ├── secret_key.py            # secret.key 生成/加载
 │
@@ -114,7 +116,7 @@ YKShell/
 └── ui/
     ├── main_window.py           # 主窗口：布局、连接生命周期、Tab 切换
     ├── window_title_bar.py      # 无边框标题栏 + 菜单（见 §5.1）
-    ├── session_tree_panel.py    # Session 树 CRUD / 过滤 / 连接
+    ├── side_panel.py            # 左侧 Session/快捷命令/历史命令抽屉
     ├── favorite_tree_widget.py  # 可拖拽 QTreeWidget
     ├── session_dialog.py        # 新建/编辑 Session
     ├── terminal_tab_widget.py   # 终端 Tab 容器
@@ -258,7 +260,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 管理对话框支持添加、删除、上移、下移收藏；浏览选择本地路径添加后保持普通选中状态，不自动进入单元格编辑。
 - 点击收藏路径时若路径指向文件，会进入该文件所在目录并选中文件；远端路径通过 SFTP `lstat/stat` 判断文件/目录，类型变化会更新 `is_file`；路径不存在时逐级尝试父目录，直到可进入的父目录或 `/`。
 - 关闭管理对话框时写入窗口尺寸（`file_panel.local/remote_favorites_dialog_width/height`），下次打开恢复。
-- 不自动去重；收藏内容经 `save_file_panel_local_favorites` / `SessionTreePanel.persist_sessions()` 保存。
+- 不自动去重；收藏内容经 `save_file_panel_local_favorites` / `SidePanel.persist_sessions()` 保存。
 - `MainWindow._register_files_panel` 注入 provider / manage handler（按 `tab_id` 取 `SSHSession.session_item`）。
 
 **状态隔离规则：**
@@ -296,7 +298,8 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
 - 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
-- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记并记录本地命令发送时间；以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
+- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记并记录本地命令发送时间；普通键盘输入仅在当前终端行可见回显出命令时，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令由客户端主动发送，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
+- 历史命令面板单击某条历史时，会在当前活动终端中按 `command + sent_at` 查找本轮运行仍保留的命令标记并滚动到该命令块；如果对应命令已被 `clear` 清掉或已经不在 scrollback 中，则忽略跳转。历史命令双击会把该命令发送到当前活动终端并执行。
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
 - `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `config/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`T` 上传/下载传输、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
@@ -366,6 +369,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 |------|------|----------------|
 | `config/config.json` | 主题色、外观、语言、窗口尺寸、Session 树宽度、splitter 比例、文件面板布局 | 否 |
 | `config/sessions.json` | Session 树 JSON（无密码） | 否 |
+| `config/commands.json` | 快捷命令树（分组、显示名、命令详情、命令解释） | 否 |
 | `config/credentials.json` | Fernet 加密密码 `passwords[session_id]` | **是** |
 | `config/secret.key` | 解密 credentials 的密钥 | **是** |
 
@@ -463,7 +467,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 `app_config.py` 在加载时对当前 schema 做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` 默认值并校验范围）。当前处于开发阶段，不保留旧配置字段兼容；稳定版发布后再按发布策略补充迁移规则。
 
-`sessions.json` 当前只接受 `version: 1`；版本不匹配时丢弃加载结果并记录 warning。当前处于开发阶段，不保留旧 Session schema 兼容。
+`sessions.json`、`commands.json` 当前只接受 `version: 1`；版本不匹配时丢弃加载结果并记录 warning。当前处于开发阶段，不保留旧 schema 兼容。
 
 ### 8.3 密码存储
 
@@ -471,7 +475,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - `secret.key` 与 `credentials.json` **必须配对迁移**
 - 若已有 `secret.key` 但内容无效：**不会**静默覆盖生成新钥，启动失败并提示修复（`InvalidSecretKeyError`）
 - 删除 Session 树节点（含文件夹）会递归清理对应 `credentials.json` 条目
-- `config.json` / `sessions.json` / `credentials.json` 保存时使用同目录临时文件 + `os.replace()` 原子替换，降低进程中断导致 JSON 截断的风险。
+- `config.json` / `sessions.json` / `commands.json` / `credentials.json` 保存时使用同目录临时文件 + `os.replace()` 原子替换，降低进程中断导致 JSON 截断的风险。
 
 ### 8.4 配置目录迁移（WindTerm 风格）
 
@@ -483,6 +487,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 |------|------|
 | `config.json` | 主题、语言、终端/UI 字体、窗口尺寸、Session 树宽度与垂直 splitter 比例 |
 | `sessions.json` | Session 树（主机、端口、用户名、本地/远程路径等，无密码） |
+| `commands.json` | 快捷命令树 |
 | `credentials.json` | Fernet 加密后的 Session 密码 |
 | `secret.key` | 解密密码所需的本地密钥 |
 
