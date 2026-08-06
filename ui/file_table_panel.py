@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
     QApplication,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -748,7 +749,11 @@ class LocalFileTable(_BaseFileTable):
             add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_P)
             add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
             menu.addSeparator()
-            add_menu_key(menu, menu.addAction(tr('file.upload'), lambda: self._upload_selected(selected)), Qt.Key_T)
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.upload_to_right_dir'), lambda: self._upload_selected(selected)),
+                Qt.Key_T,
+            )
             if len(selected) == 1:
                 add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
             shift_held = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
@@ -950,6 +955,7 @@ class LocalFileTable(_BaseFileTable):
 class RemoteFileTable(_BaseFileTable):
     upload_requested = pyqtSignal(list)
     download_requested = pyqtSignal(list)
+    download_to_requested = pyqtSignal(list, str)
     delete_requested = pyqtSignal(list)
     rename_requested = pyqtSignal(str, str)
     mkdir_requested = pyqtSignal(str)
@@ -968,6 +974,7 @@ class RemoteFileTable(_BaseFileTable):
         self._apply_default_sort()
         self._current_path = '/'
         self._list_callback: Optional[Callable[[str], Any]] = None
+        self._download_directory_provider: Optional[Callable[[], str]] = None
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -1001,7 +1008,16 @@ class RemoteFileTable(_BaseFileTable):
             add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_P)
             add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
             menu.addSeparator()
-            add_menu_key(menu, menu.addAction(tr('file.download'), lambda: self._download_selected(selected)), Qt.Key_T)
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.download_to_left_dir'), lambda: self._download_selected(selected)),
+                Qt.Key_T,
+            )
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.download_to_other'), lambda: self._download_selected_to_other(selected)),
+                Qt.Key_B,
+            )
             if len(selected) == 1:
                 add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
             add_menu_key(menu, menu.addAction(tr('file.delete'), self._delete_selected), Qt.Key_D)
@@ -1058,6 +1074,24 @@ class RemoteFileTable(_BaseFileTable):
         logger.info(f'Remote download selection: count={len(paths)}, paths={paths}')
         self.download_requested.emit(paths)
 
+    def _download_selected_to_other(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+        selected = selected or self._selected_entries()
+        if not selected:
+            return
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            tr('file.select_download_dir'),
+            self._download_directory() or os.path.expanduser('~'),
+        )
+        if not directory:
+            return
+        paths = [self._remote_full_path(name) for name, _ in selected]
+        logger.info(
+            'Remote download to other selection: '
+            f'count={len(paths)}, local_dir={directory}, paths={paths}'
+        )
+        self.download_to_requested.emit(paths, directory)
+
     def _delete_selected(self) -> None:
         selected = self._selected_entries()
         if not selected:
@@ -1082,6 +1116,14 @@ class RemoteFileTable(_BaseFileTable):
 
     def set_list_callback(self, callback: Callable[[str], Any]) -> None:
         self._list_callback = callback
+
+    def set_download_directory_provider(self, provider: Optional[Callable[[], str]]) -> None:
+        self._download_directory_provider = provider
+
+    def _download_directory(self) -> str:
+        if self._download_directory_provider is None:
+            return ''
+        return self._download_directory_provider() or ''
 
     def refresh(self) -> None:
         if self._list_callback is None:
@@ -1991,6 +2033,7 @@ class RemoteFilePanel(QWidget):
             try:
                 self.table.upload_requested.disconnect()
                 self.table.download_requested.disconnect()
+                self.table.download_to_requested.disconnect()
                 self.table.delete_requested.disconnect()
                 self.table.rename_requested.disconnect()
                 self.table.mkdir_requested.disconnect()
@@ -2002,12 +2045,15 @@ class RemoteFilePanel(QWidget):
                 pass
         self._sftp_handler = handler
         if handler is None:
+            self.table.set_download_directory_provider(None)
             return
         self.table.upload_requested.connect(handler.upload_local_paths)
         self.table.download_requested.connect(handler.download_remote_paths)
+        self.table.download_to_requested.connect(handler.download_remote_paths_to)
         self.table.delete_requested.connect(handler.delete_remote_paths)
         self.table.rename_requested.connect(handler.rename_remote)
         self.table.mkdir_requested.connect(handler.mkdir_remote)
+        self.table.set_download_directory_provider(lambda: handler.local_dir)
         handler.transfer_status_changed.connect(self.statusbar.set_transfer_status)
         self.table.refresh_requested.connect(
             lambda: handler.refresh_remote(self.table.current_path()),

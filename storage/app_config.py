@@ -44,6 +44,14 @@ _TERMINAL_SETTING_DEFAULTS: Dict[str, Any] = {
     'terminal_experimental_raw_reflow_on_resize': False,
     'terminal_paste_confirm_multiline': True,
     'terminal_bracketed_paste': True,
+    'terminal_background_color': '#1E1E1E',
+    'terminal_selection_background_color': '#094771',
+    'terminal_left_gutter_width_px': 16,
+    'terminal_gutter_background_color': '#252525',
+    'terminal_scrollbar_width_px': 10,
+    'terminal_scrollbar_background_color': '#252525',
+    'terminal_scrollbar_thumb_color': '#6A6A6A',
+    'terminal_debug_gutter_selection': False,
 }
 
 
@@ -229,7 +237,13 @@ def _normalize_terminal(raw: Any) -> Dict[str, Any]:
         if isinstance(default, bool):
             normalized[key] = _normalize_bool(raw.get(key, default), default)
         elif isinstance(default, int):
-            normalized[key] = _clamp_int(raw.get(key, default), default, 1, 10_000_000)
+            if key in ('terminal_left_gutter_width_px', 'terminal_scrollbar_width_px'):
+                minimum = 0
+                maximum = 200
+            else:
+                minimum = 1
+                maximum = 10_000_000
+            normalized[key] = _clamp_int(raw.get(key, default), default, minimum, maximum)
         else:
             normalized[key] = raw.get(key, default)
     return normalized

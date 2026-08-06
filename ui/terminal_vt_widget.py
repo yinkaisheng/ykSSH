@@ -76,7 +76,6 @@ class TerminalVTWidget(QWidget):
         # Settings
         self._default_fg = QColor("#C8C8C8")
         self._default_bg = QColor("#1E1E1E")
-        self._selection_bg = QColor("#094771")
 
         # Font — from app appearance settings (px, monospace)
         self.setObjectName('terminalVTWidget')
@@ -107,6 +106,8 @@ class TerminalVTWidget(QWidget):
         self._esc_pending = ""
         self._decset_re = re.compile(r"\x1b\[\?([0-9;]*)([hl])")
         self._tui_control_re = re.compile(r"\x1b\[[?]?[0-9;:<>]*[ABCDHJKSTfhhlr]")
+        self._full_clear_re = re.compile(r"\x1b\[(?:0*2|0*3)J|\x1b\[H\x1b\[(?:0*2|0*3)J|\x1b\[(?:0*2|0*3)J\x1b\[H")
+        self._scrollback_clear_re = re.compile(r"\x1b\[0*3J")
         self._osc_color_query_re = re.compile(r"\x1b\](1[012]);\?(?:\x07|\x1b\\)")
         self._sgr_re = re.compile(r"\x1b\[([0-9:;]*)m")
 
@@ -140,10 +141,15 @@ class TerminalVTWidget(QWidget):
         self._full_repaint_needed = True
         self._dirty_lines: set[int] = set(range(rows))
         self._backing = QPixmap(self.size())
-        self._backing.fill(self._default_bg)
+        self._backing.fill(self._terminal_bg())
         self._color_cache: dict[Any, QColor] = {}
         self._last_cursor_cell: tuple[int, int] | None = None
         self._last_paint_t = 0.0
+        self._last_double_click_t = 0.0
+        self._last_double_click_pos: QPoint | None = None
+        self._viewport_top_row = 0
+        self._command_start_rows: list[int] = []
+        self._pending_command_start_y: int | None = None
         self._paint_timer = QTimer(self)
         self._paint_timer.setSingleShot(True)
         self._paint_timer.timeout.connect(self.update)
@@ -162,11 +168,14 @@ class TerminalVTWidget(QWidget):
 
         # Local viewport scrollback (0 = follow bottom)
         self._scroll_lines = 0
+        self._is_scrollbar_dragging = False
+        self._scrollbar_drag_offset_y = 0.0
 
         self._debug_log_path = os.path.join(str(DATA_DIR), "terminal_debug.log")
         self._debug_input_count = 0
         self._debug_after_resize_until = 0.0
         self._debug_enabled = bool(False)
+        self._debug_gutter_selection = bool(get_setting("terminal_debug_gutter_selection", False))
         self._debug_cell_dump_count = 0
 
     def _debug_log(self, message: str) -> None:
@@ -182,6 +191,33 @@ class TerminalVTWidget(QWidget):
     def _debug_escape_sample(self, text: str, limit: int = 500) -> str:
         sample = (text or "")[:limit]
         return sample.encode("unicode_escape", errors="replace").decode("ascii", errors="replace")
+
+    def _debug_gutter_log(self, message: str) -> None:
+        if not self._debug_gutter_selection:
+            return
+        try:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            with open(self._debug_log_path, "a", encoding="utf-8") as f:
+                f.write(f"{ts} [TerminalVTWidget.gutter] {message}\n")
+        except Exception:
+            pass
+
+    def _debug_visible_line_sample(self, y: int, limit: int = 100) -> str:
+        try:
+            _cols, rows = self._calc_cols_rows()
+            if y < 0 or y >= rows:
+                return "<offscreen>"
+            return self._line_text(y)[:limit]
+        except Exception:
+            return ""
+
+    def _debug_selection_state(self) -> str:
+        return (
+            f"viewport_top={self._viewport_top_row}, scroll_lines={self._scroll_lines}, "
+            f"history_top={self._history_top_len()}, history_bottom={self._history_bottom_len()}, "
+            f"cmd_abs={self._command_start_rows}, pending_abs={self._pending_command_start_y}, "
+            f"sel_anchor={self._sel_anchor}, sel_head={self._sel_head}"
+        )
 
     def event(self, event):
         # Handle ShortcutOverride to ensure terminal captures keys before they are
@@ -212,6 +248,7 @@ class TerminalVTWidget(QWidget):
             commit = ""
 
         if commit:
+            self._record_pending_command_start()
             self.input_received.emit(commit.encode("utf-8"))
             event.accept()
             return
@@ -291,6 +328,45 @@ class TerminalVTWidget(QWidget):
         self._cell_h = max(1.0, fm.lineSpacing())
         self._ascent = fm.ascent()
 
+    def _setting_color(self, key: str, fallback: QColor | str) -> QColor:
+        fallback_color = QColor(fallback)
+        value = get_setting(key, '')
+        if isinstance(value, str) and value.strip():
+            color = QColor(value.strip())
+            if color.isValid():
+                return color
+        return fallback_color
+
+    def _terminal_bg(self) -> QColor:
+        return self._setting_color("terminal_background_color", self._default_bg)
+
+    def _selection_bg(self) -> QColor:
+        return self._setting_color("terminal_selection_background_color", "#094771")
+
+    def _left_gutter_width(self) -> int:
+        try:
+            return max(0, min(200, int(get_setting("terminal_left_gutter_width_px", 16))))
+        except Exception:
+            return 16
+
+    def _right_scrollbar_width(self) -> int:
+        try:
+            return max(0, min(200, int(get_setting("terminal_scrollbar_width_px", 10))))
+        except Exception:
+            return 10
+
+    def _text_origin_x(self) -> float:
+        return float(self._left_gutter_width())
+
+    def _gutter_bg(self) -> QColor:
+        return self._setting_color("terminal_gutter_background_color", "#353535")
+
+    def _scrollbar_bg(self) -> QColor:
+        return self._setting_color("terminal_scrollbar_background_color", "#353535")
+
+    def _scrollbar_thumb_bg(self) -> QColor:
+        return self._setting_color("terminal_scrollbar_thumb_color", "#6A6A6A")
+
     def _is_alive(self) -> bool:
         if sip is None:
             return True
@@ -304,7 +380,8 @@ class TerminalVTWidget(QWidget):
             return 80, 24
         vp = self.size()
         # 给予至少 4 像素的右侧安全边距，并使用浮点数除法
-        cols = max(20, int(max(0.0, vp.width() - 4.0) // self._cell_w))
+        text_width = max(0.0, vp.width() - self._left_gutter_width() - self._right_scrollbar_width() - 4.0)
+        cols = max(20, int(text_width // self._cell_w))
         rows = max(5, int(max(0.0, vp.height()) // self._cell_h))
         return cols, rows
 
@@ -402,6 +479,7 @@ class TerminalVTWidget(QWidget):
             # so growing the widget can pull them back before adding bottom
             # whitespace.
             self._save_clipped_top_lines(old_rows - rows)
+            self._viewport_top_row += old_rows - rows
 
         self._main_screen.resize(lines=rows, columns=cols)  # type: ignore[attr-defined]
 
@@ -419,6 +497,7 @@ class TerminalVTWidget(QWidget):
             restore_count = len(restored)
             if restore_count <= 0:
                 return
+            self._viewport_top_row = max(0, self._viewport_top_row - restore_count)
 
             buffer = getattr(self._main_screen, "buffer", None)
             if buffer is None:
@@ -491,6 +570,7 @@ class TerminalVTWidget(QWidget):
             # top-most lines must move into scrollback and the prompt should
             # remain visible near the bottom, matching normal terminal behavior.
             self._save_clipped_top_lines(drop)
+            self._viewport_top_row += drop
 
             if buffer is not None:
                 for y in range(rows):
@@ -606,6 +686,9 @@ class TerminalVTWidget(QWidget):
         self._sel_anchor = None
         self._sel_head = None
         self._scroll_lines = 0
+        self._viewport_top_row = 0
+        self._command_start_rows.clear()
+        self._pending_command_start_y = None
         self._mark_full_repaint()
 
     def _clear_active_screen(self) -> None:
@@ -622,7 +705,42 @@ class TerminalVTWidget(QWidget):
         self._sel_anchor = None
         self._sel_head = None
         self._scroll_lines = 0
+        self._viewport_top_row = 0
+        self._command_start_rows.clear()
+        self._pending_command_start_y = None
         self._mark_full_repaint()
+
+    def _clear_history_queues(self) -> None:
+        try:
+            history = getattr(self.screen, "history", None)
+            top = getattr(history, "top", None)
+            bottom = getattr(history, "bottom", None)
+            if hasattr(top, "clear"):
+                top.clear()
+            if hasattr(bottom, "clear"):
+                bottom.clear()
+            if hasattr(history, "_replace"):
+                try:
+                    self.screen.history = history._replace(position=getattr(history, "size", 0))  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _reset_coordinate_state_after_remote_clear(self, *, clear_scrollback: bool) -> None:
+        """Reset local absolute-coordinate state after the remote clears the main screen."""
+        self._clear_history_queues()
+        self._sel_anchor = None
+        self._sel_head = None
+        self._scroll_lines = 0
+        self._viewport_top_row = 0
+        self._command_start_rows.clear()
+        self._pending_command_start_y = None
+        self._mark_full_repaint()
+        self._debug_gutter_log(
+            "remote-clear "
+            f"remote_requested_scrollback_clear={clear_scrollback}, {self._debug_selection_state()}"
+        )
 
     # -------------------------
     # Public API (compatible with legacy TerminalWidget)
@@ -636,6 +754,9 @@ class TerminalVTWidget(QWidget):
         if not text:
             return
         t0 = time.perf_counter()
+        history_top_before = self._history_top_len()
+        was_scrolled_up = bool(self._scroll_lines > 0 and not self._in_alt_screen)
+        desired_viewport_top = self._viewport_top_row
         self._debug_input_count += 1
         should_sample = self._debug_input_count <= 30 or time.monotonic() < self._debug_after_resize_until
         if should_sample:
@@ -660,6 +781,8 @@ class TerminalVTWidget(QWidget):
         self._esc_pending = ""
         data = self._normalize_sgr(data)
         data = self._answer_terminal_queries(data)
+        remote_full_clear = (not self._in_alt_screen) and bool(self._full_clear_re.search(data))
+        remote_scrollback_clear = remote_full_clear and bool(self._scrollback_clear_re.search(data))
         i = 0
 
         def feed(chunk: str) -> None:
@@ -752,6 +875,25 @@ class TerminalVTWidget(QWidget):
             feed(m.group(0))
             i = m.end()
 
+        if remote_full_clear and not self._in_alt_screen:
+            self._reset_coordinate_state_after_remote_clear(clear_scrollback=remote_scrollback_clear)
+
+        history_top_after = self._history_top_len()
+        if was_scrolled_up:
+            self._restore_viewport_top_after_output(desired_viewport_top)
+        elif history_top_after > history_top_before and self._scroll_lines == 0:
+            rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+            old_viewport_top = self._viewport_top_row
+            self._viewport_top_row += history_top_after - history_top_before
+            self._shift_selection_rows(-(history_top_after - history_top_before), rows)
+            self._debug_gutter_log(
+                "output-scroll "
+                f"history_top_before={history_top_before}, history_top_after={history_top_after}, "
+                f"delta={history_top_after - history_top_before}, "
+                f"viewport_top={old_viewport_top}->{self._viewport_top_row}, rows={rows}, "
+                f"{self._debug_selection_state()}"
+            )
+
         # If user is at bottom (not scrolled up), keep following output.
         # If user scrolled up, keep their viewport stable.
         if self._scroll_lines == 0:
@@ -796,7 +938,7 @@ class TerminalVTWidget(QWidget):
         if "\x1b]10;?" in data or "\x1b]11;?" in data or "\x1b]12;?" in data:
             colors = {
                 "10": self._default_fg,
-                "11": self._default_bg,
+                "11": self._terminal_bg(),
                 "12": self._default_fg,
             }
 
@@ -923,6 +1065,7 @@ class TerminalVTWidget(QWidget):
         self._mouse_sgr_1006 = False
         self._pressed_mouse_buttons.clear()
         self._scroll_lines = 0
+        self._viewport_top_row = 0
         self._raw_buffer_has_tui_control = False
         self._mark_full_repaint()
 
@@ -962,6 +1105,10 @@ class TerminalVTWidget(QWidget):
                 self.stream = self._main_stream
         except Exception:
             pass
+        self._scroll_lines = 0
+        self._viewport_top_row = 0
+        self._command_start_rows.clear()
+        self._pending_command_start_y = None
         self._mark_full_repaint()
         self._mark_dirty()
 
@@ -1036,6 +1183,10 @@ class TerminalVTWidget(QWidget):
             if rows <= 0:
                 return False
 
+            old_viewport_top = self._viewport_top_row
+            old_scroll_lines = self._scroll_lines
+            old_top_len = len(top)
+            old_bottom_len = len(bottom)
             if delta_lines > 0:
                 mid = min(abs(delta_lines), len(top))
                 if mid <= 0:
@@ -1047,6 +1198,7 @@ class TerminalVTWidget(QWidget):
                 for y in range(mid - 1, -1, -1):
                     buffer[y] = top.pop()
                 self._scroll_lines += mid
+                self._viewport_top_row -= mid
                 self._shift_selection_rows(mid, rows)
             else:
                 mid = min(abs(delta_lines), len(bottom))
@@ -1060,7 +1212,17 @@ class TerminalVTWidget(QWidget):
                 for y in range(rows - mid, rows):
                     buffer[y] = bottom.popleft()
                 self._scroll_lines = max(0, self._scroll_lines - mid)
+                self._viewport_top_row += mid
                 self._shift_selection_rows(-mid, rows)
+
+            self._debug_gutter_log(
+                "manual-scroll "
+                f"request={delta_lines}, applied={mid}, rows={rows}, "
+                f"viewport_top={old_viewport_top}->{self._viewport_top_row}, "
+                f"scroll_lines={old_scroll_lines}->{self._scroll_lines}, "
+                f"history_top={old_top_len}->{len(top)}, history_bottom={old_bottom_len}->{len(bottom)}, "
+                f"{self._debug_selection_state()}"
+            )
 
             dirty = getattr(self.screen, "dirty", None)
             if dirty is not None:
@@ -1069,19 +1231,161 @@ class TerminalVTWidget(QWidget):
         except Exception:
             return False
 
+    def _restore_viewport_top_after_output(self, desired_top: int) -> None:
+        """
+        Keep the user's scrolled-back viewport stable after new output arrives.
+
+        pyte may collapse its history.bottom queue and move the visible buffer
+        back near the newest output when data is fed while the user is scrolled
+        up. Our selection and command markers use absolute buffer rows, so the
+        visible viewport must be restored to the absolute top row the user was
+        looking at before the output arrived.
+        """
+        rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+        bottom_top = max(0, self._history_top_len())
+        target_top = max(0, min(int(desired_top), bottom_top))
+
+        old_viewport_top = self._viewport_top_row
+        old_scroll_lines = self._scroll_lines
+        old_top = self._history_top_len()
+        old_bottom = self._history_bottom_len()
+
+        self._scroll_lines = 0
+        self._viewport_top_row = bottom_top
+        if bottom_top > target_top:
+            self._scroll_history_lines(bottom_top - target_top)
+        else:
+            self._mark_dirty()
+
+        self._debug_gutter_log(
+            "restore-after-output "
+            f"desired_top={desired_top}, target_top={target_top}, bottom_top={bottom_top}, rows={rows}, "
+            f"viewport_top={old_viewport_top}->{self._viewport_top_row}, "
+            f"scroll_lines={old_scroll_lines}->{self._scroll_lines}, "
+            f"history_top={old_top}->{self._history_top_len()}, history_bottom={old_bottom}->{self._history_bottom_len()}, "
+            f"{self._debug_selection_state()}"
+        )
+
     def _shift_selection_rows(self, delta_y: int, rows: int) -> None:
-        """Keep local selection attached to content as scrollback moves."""
-        if delta_y == 0 or not self._sel_anchor or not self._sel_head:
+        """Selection rows are absolute buffer rows; viewport movement does not rewrite them."""
+        return
+
+    def _history_top_len(self) -> int:
+        try:
+            history = getattr(self.screen, "history", None)
+            top = getattr(history, "top", None)
+            return len(top) if top is not None else 0
+        except Exception:
+            return 0
+
+    def _history_bottom_len(self) -> int:
+        try:
+            history = getattr(self.screen, "history", None)
+            bottom = getattr(history, "bottom", None)
+            return len(bottom) if bottom is not None else 0
+        except Exception:
+            return 0
+
+    def _visible_y_to_abs_y(self, y: int) -> int:
+        return max(0, int(self._viewport_top_row) + int(y))
+
+    def _abs_y_to_visible_y(self, y: int) -> int:
+        return int(y) - max(0, int(self._viewport_top_row))
+
+    def _visible_cell_to_abs_cell(self, cell: tuple[int, int]) -> tuple[int, int]:
+        x, y = cell
+        return x, self._visible_y_to_abs_y(y)
+
+    def _abs_cell_to_visible_cell(self, cell: tuple[int, int]) -> tuple[int, int]:
+        x, y = cell
+        return x, self._abs_y_to_visible_y(y)
+
+    def _cursor_abs_y(self) -> int | None:
+        cursor = getattr(self.screen, "cursor", None)
+        if cursor is None:
+            return None
+        try:
+            y = int(getattr(cursor, "y", -1))
+        except Exception:
+            return None
+        _cols, widget_rows = self._calc_cols_rows()
+        rows = int(getattr(self.screen, "lines", widget_rows) or widget_rows)
+        if not 0 <= y < rows:
+            return None
+        return self._visible_y_to_abs_y(y) + self._history_bottom_len()
+
+    def _max_scroll_lines(self) -> int:
+        return max(0, int(self._scroll_lines) + self._history_top_len())
+
+    def _scrollbar_track_rect(self) -> QRectF:
+        width = self._right_scrollbar_width()
+        if width <= 0:
+            return QRectF()
+        return QRectF(max(0, self.width() - width), 0, width, self.height())
+
+    def _scrollbar_rects(self) -> tuple[QRectF, QRectF, int]:
+        track = self._scrollbar_track_rect()
+        if track.isNull() or track.width() <= 0 or track.height() <= 0:
+            return track, QRectF(), 0
+        _cols, rows = self._calc_cols_rows()
+        max_scroll = self._max_scroll_lines()
+        if max_scroll <= 0:
+            return track, QRectF(track.x(), track.y(), track.width(), track.height()), 0
+        track_h = float(track.height())
+        thumb_h = max(24.0, track_h * rows / max(1, rows + max_scroll))
+        thumb_h = min(track_h, thumb_h)
+        travel = max(0.0, track_h - thumb_h)
+        scroll_ratio = min(1.0, max(0.0, float(self._scroll_lines) / max_scroll))
+        thumb_y = track.y() + travel * (1.0 - scroll_ratio)
+        thumb = QRectF(track.x(), thumb_y, track.width(), thumb_h)
+        return track, thumb, max_scroll
+
+    def _draw_scrollbar(self, painter: QPainter) -> None:
+        track, thumb, _max_scroll = self._scrollbar_rects()
+        if track.isNull() or track.width() <= 0:
             return
+        painter.fillRect(track, self._scrollbar_bg())
+        if not thumb.isNull() and thumb.height() > 0:
+            painter.fillRect(thumb, self._scrollbar_thumb_bg())
 
-        def shift(cell: tuple[int, int]) -> tuple[int, int]:
-            x, y = cell
-            return x, y + delta_y
+    def _pos_in_scrollbar(self, pos: QPoint) -> bool:
+        track = self._scrollbar_track_rect()
+        return not track.isNull() and track.contains(QPointF(pos))
 
-        self._sel_anchor = shift(self._sel_anchor)
-        self._sel_head = shift(self._sel_head)
-        # Keep off-screen selections alive. If the user scrolls back to the
-        # selected content, the highlight should reappear instead of being lost.
+    def _set_scrollbar_target(self, target: int) -> None:
+        max_scroll = self._max_scroll_lines()
+        target = max(0, min(max_scroll, int(target)))
+        delta = target - int(self._scroll_lines)
+        if delta:
+            self._scroll_view(delta)
+        else:
+            self._mark_dirty()
+
+    def _scrollbar_target_from_y(self, y: float, thumb_offset: float = 0.0) -> int:
+        track, thumb, max_scroll = self._scrollbar_rects()
+        if max_scroll <= 0 or track.isNull():
+            return 0
+        thumb_h = max(1.0, float(thumb.height()))
+        travel = max(1.0, float(track.height()) - thumb_h)
+        thumb_top = max(float(track.top()), min(float(track.bottom()) - thumb_h, float(y) - thumb_offset))
+        ratio_from_top = (thumb_top - float(track.top())) / travel
+        return int(round((1.0 - ratio_from_top) * max_scroll))
+
+    def _handle_scrollbar_press(self, pos: QPoint) -> bool:
+        if not self._pos_in_scrollbar(pos):
+            return False
+        track, thumb, max_scroll = self._scrollbar_rects()
+        if max_scroll <= 0:
+            return True
+        if thumb.contains(QPointF(pos)):
+            self._is_scrollbar_dragging = True
+            self._scrollbar_drag_offset_y = float(pos.y()) - float(thumb.top())
+            return True
+        self._set_scrollbar_target(self._scrollbar_target_from_y(float(pos.y()), float(thumb.height()) / 2.0))
+        return True
+
+    def _drag_scrollbar_to(self, pos: QPoint) -> None:
+        self._set_scrollbar_target(self._scrollbar_target_from_y(float(pos.y()), self._scrollbar_drag_offset_y))
 
     def _enter_alt_screen(self) -> None:
         if self._in_alt_screen:
@@ -1215,10 +1519,17 @@ class TerminalVTWidget(QWidget):
     def mousePressEvent(self, event):  # type: ignore[override]
         if event.button() == Qt.LeftButton:
             self.setFocus(Qt.FocusReason.MouseFocusReason)
+            if self._handle_scrollbar_press(event.pos()):
+                event.accept()
+                return
 
         # When mouse reporting is enabled by the remote app (e.g. vim :set mouse=a),
         # forward events unless Shift is held (Shift = local select/copy like many terminals).
-        if self._mouse_enabled() and not (event.modifiers() & Qt.ShiftModifier):
+        if (
+            self._mouse_enabled()
+            and not (event.modifiers() & Qt.ShiftModifier)
+            and not self._pos_in_gutter(event.pos())
+        ):
             btn_map = {
                 Qt.LeftButton: 0,
                 Qt.MiddleButton: 1,
@@ -1234,9 +1545,16 @@ class TerminalVTWidget(QWidget):
 
         # Local selection
         if event.button() == Qt.LeftButton:
-            cell = self._pos_to_cell(event.pos())
-            self._sel_anchor = cell
-            self._sel_head = cell
+            if self._is_triple_click(event.pos()):
+                self._select_line_at_pos(event.pos())
+                self._is_selecting = False
+                self._last_double_click_t = 0.0
+                self._last_double_click_pos = None
+                self._mark_dirty()
+                event.accept()
+                return
+            self._sel_anchor = self._pos_to_selection_start_cell(event.pos())
+            self._sel_head = self._pos_to_selection_head_cell(event.pos())
             self._is_selecting = True
             self._mark_dirty()
             event.accept()
@@ -1249,6 +1567,13 @@ class TerminalVTWidget(QWidget):
             super().mouseDoubleClickEvent(event)
             return
 
+        if self._pos_in_gutter(event.pos()):
+            self._select_command_block_at_pos(event.pos())
+            self._is_selecting = False
+            self._mark_dirty()
+            event.accept()
+            return
+
         if self._mouse_enabled() and not (event.modifiers() & Qt.ShiftModifier):
             super().mouseDoubleClickEvent(event)
             return
@@ -1256,13 +1581,23 @@ class TerminalVTWidget(QWidget):
         cell = self._pos_to_cell(event.pos())
         if self._select_word_at(cell):
             self._is_selecting = False
+            self._last_double_click_t = time.monotonic()
+            self._last_double_click_pos = QPoint(event.pos())
             self._mark_dirty()
             event.accept()
             return
 
+        self._last_double_click_t = time.monotonic()
+        self._last_double_click_pos = QPoint(event.pos())
+
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event):  # type: ignore[override]
+        if event.button() == Qt.LeftButton and self._is_scrollbar_dragging:
+            self._is_scrollbar_dragging = False
+            event.accept()
+            return
+
         if self._mouse_enabled() and not (event.modifiers() & Qt.ShiftModifier):
             btn_map = {
                 Qt.LeftButton: 0,
@@ -1281,12 +1616,18 @@ class TerminalVTWidget(QWidget):
                 return
 
         if event.button() == Qt.LeftButton:
+            self._is_scrollbar_dragging = False
             self._is_selecting = False
             self._mark_dirty()
 
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):  # type: ignore[override]
+        if self._is_scrollbar_dragging:
+            self._drag_scrollbar_to(event.pos())
+            event.accept()
+            return
+
         if self._mouse_enabled() and not (event.modifiers() & Qt.ShiftModifier):
             # Motion reporting depends on mode:
             # - 1002: only while a button is pressed
@@ -1303,7 +1644,7 @@ class TerminalVTWidget(QWidget):
                 return
 
         if self._is_selecting and self._sel_anchor:
-            new_head = self._pos_to_cell(event.pos())
+            new_head = self._pos_to_selection_head_cell(event.pos())
             if new_head != self._sel_head:
                 self._sel_head = new_head
                 self._mark_dirty()
@@ -1318,7 +1659,7 @@ class TerminalVTWidget(QWidget):
     def _reset_backing_store(self) -> None:
         try:
             self._backing = QPixmap(max(1, self.width()), max(1, self.height()))
-            self._backing.fill(self._default_bg)
+            self._backing.fill(self._terminal_bg())
         except Exception:
             self._backing = QPixmap()
         self._mark_full_repaint()
@@ -1460,7 +1801,7 @@ class TerminalVTWidget(QWidget):
     ) -> tuple[str, QColor, QColor, bool, bool]:
         ch = self._cell_data(line, x)
         fg = self._default_fg
-        bg = self._default_bg
+        bg = self._terminal_bg()
         bold = False
         underline = False
         try:
@@ -1475,7 +1816,7 @@ class TerminalVTWidget(QWidget):
         except Exception:
             pass
         if sel and self._cell_in_selection(x, y, sel):
-            bg = self._selection_bg
+            bg = self._selection_bg()
         if cursor_cell and (x, y) == cursor_cell:
             fg, bg = bg, fg
         return ch, fg, bg, bold, underline
@@ -1545,15 +1886,16 @@ class TerminalVTWidget(QWidget):
         sel = self._normalized_selection() if include_selection else None
 
         widget_cols, widget_rows = self._calc_cols_rows()
+        text_origin_x = self._text_origin_x()
         screen_cols = int(getattr(self.screen, 'columns', widget_cols) or widget_cols)
         cols = min(widget_cols, screen_cols)
         rows = min(len(display), widget_rows)
         for y in sorted(line_nums):
             if y < 0 or y >= rows:
                 continue
-            row_rect = QRectF(0, y * self._cell_h, self.width(), self._cell_h)
+            row_rect = QRectF(text_origin_x, y * self._cell_h, max(0.0, self.width() - text_origin_x), self._cell_h)
             if clear_line:
-                painter.fillRect(row_rect, self._default_bg)
+                painter.fillRect(row_rect, self._terminal_bg())
             # Text glyphs such as underscore can extend slightly outside the
             # nominal font metrics. Clip each row so a glyph from one line
             # cannot leave stale pixels in the next row after scrolling.
@@ -1563,7 +1905,7 @@ class TerminalVTWidget(QWidget):
             # If we can't access per-cell attributes, draw plain text.
             if buffer is None:
                 painter.setPen(self._default_fg)
-                painter.drawText(QPointF(0, y * self._cell_h + self._ascent), line_str)
+                painter.drawText(QPointF(text_origin_x, y * self._cell_h + self._ascent), line_str)
                 painter.restore()
                 continue
 
@@ -1591,7 +1933,7 @@ class TerminalVTWidget(QWidget):
                     # merged into a run; Qt's normal text layout would apply
                     # glyph advance again and make the following placeholder
                     # cell look like an extra visible space.
-                    px = x * self._cell_w
+                    px = text_origin_x + x * self._cell_w
                     py = y * self._cell_h
                     painter.fillRect(QRectF(px, py, self._cell_w * span, self._cell_h), bg)
                     if bold:
@@ -1634,7 +1976,7 @@ class TerminalVTWidget(QWidget):
                     run_chars.append(ch2)
 
                 # Draw run text
-                px = x * self._cell_w
+                px = text_origin_x + x * self._cell_w
                 py = y * self._cell_h
                 # Fill background for the whole run (fixes missing background/colors when drawing in runs)
                 painter.fillRect(QRectF(px, py, self._cell_w * len(run_chars), self._cell_h), run_bg)
@@ -1665,7 +2007,7 @@ class TerminalVTWidget(QWidget):
         if self._backing.isNull() or self._backing.size() != self.size():
             self._reset_backing_store()
         if self._full_repaint_needed:
-            self._backing.fill(self._default_bg)
+            self._backing.fill(self._terminal_bg())
             _, rows = self._calc_cols_rows()
             line_nums: set[int] | range = range(rows)
             line_count = rows
@@ -1689,8 +2031,8 @@ class TerminalVTWidget(QWidget):
             return set()
         (_, sy), (_, ey) = sel
         rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
-        start = max(0, sy)
-        end = min(rows - 1, ey)
+        start = max(0, self._abs_y_to_visible_y(sy))
+        end = min(rows - 1, self._abs_y_to_visible_y(ey))
         if rows <= 0 or start > end:
             return set()
         return set(range(start, end + 1))
@@ -1701,9 +2043,13 @@ class TerminalVTWidget(QWidget):
         self._render_dirty_to_backing()
 
         p = QPainter(self)
-        p.fillRect(self.rect(), self._default_bg)
+        p.fillRect(self.rect(), self._terminal_bg())
         if not self._backing.isNull():
             p.drawPixmap(0, 0, self._backing)
+        gutter_width = self._left_gutter_width()
+        if gutter_width > 0:
+            p.fillRect(QRectF(0, 0, gutter_width, self.height()), self._gutter_bg())
+        self._draw_scrollbar(p)
 
         overlay_lines = self._selection_lines()
         cursor = getattr(self.screen, "cursor", None)
@@ -1727,23 +2073,240 @@ class TerminalVTWidget(QWidget):
         cw = max(1.0, float(self._cell_w))
         ch = max(1.0, float(self._cell_h))
         cols, rows = self._calc_cols_rows()
-        x = max(0, min(cols - 1, int(pos.x() / cw)))
+        text_x = max(0.0, float(pos.x()) - self._text_origin_x())
+        x = max(0, min(cols - 1, int(text_x / cw)))
         y = max(0, min(rows - 1, int(pos.y() / ch)))
         line = self._line_from_buffer(y)
         if self._is_wide_continuation_cell(line, x):
             x = max(0, x - 1)
         return x, y
 
+    def _is_triple_click(self, pos: QPoint) -> bool:
+        if self._last_double_click_pos is None:
+            return False
+        interval_ms = 500
+        try:
+            hints = QGuiApplication.styleHints()
+            interval_ms = int(hints.mouseDoubleClickInterval())
+            distance = int(hints.startDragDistance())
+        except Exception:
+            distance = 8
+        if (time.monotonic() - self._last_double_click_t) * 1000.0 > interval_ms:
+            return False
+        delta = pos - self._last_double_click_pos
+        return abs(delta.x()) <= distance and abs(delta.y()) <= distance
+
+    def _line_last_content_cell(self, y: int) -> int:
+        cols, rows = self._calc_cols_rows()
+        if rows <= 0:
+            return 0
+        y = max(0, min(rows - 1, y))
+        line = self._line_from_buffer(y)
+        last = 0
+        x = 0
+        while x < cols:
+            if self._is_wide_continuation_cell(line, x):
+                x += 1
+                continue
+            ch = self._cell_data(line, x)
+            span = self._cell_span(line, x, cols)
+            if ch and ch != ' ':
+                last = min(cols - 1, x + span - 1)
+            x += span
+        return last
+
+    def _line_text(self, y: int) -> str:
+        cols, rows = self._calc_cols_rows()
+        if rows <= 0:
+            return ''
+        y = max(0, min(rows - 1, y))
+        line = self._line_from_buffer(y)
+        chars: list[str] = []
+        x = 0
+        while x < cols:
+            if self._is_wide_continuation_cell(line, x):
+                x += 1
+                continue
+            ch = self._cell_data(line, x)
+            if ch:
+                chars.append(ch)
+            x += self._cell_span(line, x, cols)
+        return ''.join(chars).rstrip()
+
+    def _current_input_continues(self) -> bool:
+        y = self._cursor_y()
+        if y is None:
+            return False
+        return self._line_text(y).endswith('\\')
+
+    def _input_line_y(self) -> int | None:
+        if self._scroll_lines != 0:
+            return None
+        cursor = getattr(self.screen, "cursor", None)
+        if cursor is None:
+            return None
+        try:
+            y = int(getattr(cursor, "y", -1))
+        except Exception:
+            return None
+        _cols, rows = self._calc_cols_rows()
+        return y if 0 <= y < rows else None
+
+    def _virtual_input_line_y(self) -> int | None:
+        """Return the current input row in the local viewport coordinate space."""
+        abs_y = self._cursor_abs_y()
+        return None if abs_y is None else self._abs_y_to_visible_y(abs_y)
+
+    def _cursor_y(self) -> int | None:
+        cursor = getattr(self.screen, "cursor", None)
+        if cursor is None:
+            return None
+        try:
+            y = int(getattr(cursor, "y", -1))
+        except Exception:
+            return None
+        _cols, rows = self._calc_cols_rows()
+        return y if 0 <= y < rows else None
+
+    def _record_pending_command_start(self) -> None:
+        if self._in_alt_screen or self._scroll_lines != 0:
+            return
+        if self._pending_command_start_y is not None:
+            return
+        self._pending_command_start_y = self._cursor_abs_y()
+
+    def _commit_command_start(self, *, check_continuation: bool = False) -> None:
+        if self._in_alt_screen:
+            self._pending_command_start_y = None
+            return
+        if check_continuation and self._current_input_continues():
+            self._record_pending_command_start()
+            return
+        start_y = self._pending_command_start_y
+        if start_y is None:
+            start_y = self._cursor_abs_y()
+        self._pending_command_start_y = None
+        if start_y is None:
+            return
+        if self._command_start_rows and self._command_start_rows[-1] == start_y:
+            return
+        self._command_start_rows.append(start_y)
+        self._command_start_rows = sorted(set(self._command_start_rows))[-500:]
+
+    def _line_selection_limit(self, y: int) -> int | None:
+        if self._input_line_y() != y:
+            return None
+        return self._line_last_content_cell(y)
+
+    def _clamp_cell_to_line_content(self, cell: tuple[int, int]) -> tuple[int, int]:
+        x, y = cell
+        limit = self._line_selection_limit(y)
+        return (min(x, limit), y) if limit is not None else cell
+
+    def _pos_in_gutter(self, pos: QPoint) -> bool:
+        return self._left_gutter_width() > 0 and pos.x() < self._left_gutter_width()
+
+    def _line_y_from_pos(self, pos: QPoint) -> int:
+        _cols, rows = self._calc_cols_rows()
+        ch = max(1.0, float(self._cell_h))
+        return max(0, min(rows - 1, int(pos.y() / ch)))
+
+    def _gutter_line_cell(self, pos: QPoint, *, at_end: bool) -> tuple[int, int]:
+        y = self._line_y_from_pos(pos)
+        x = self._line_last_content_cell(y) if at_end else 0
+        return x, self._visible_y_to_abs_y(y)
+
+    def _pos_to_selection_start_cell(self, pos: QPoint) -> tuple[int, int]:
+        if self._pos_in_gutter(pos):
+            return self._gutter_line_cell(pos, at_end=False)
+        return self._visible_cell_to_abs_cell(self._clamp_cell_to_line_content(self._pos_to_cell(pos)))
+
+    def _pos_to_selection_head_cell(self, pos: QPoint) -> tuple[int, int]:
+        if self._pos_in_gutter(pos):
+            y = self._line_y_from_pos(pos)
+            abs_y = self._visible_y_to_abs_y(y)
+            anchor_y = self._sel_anchor[1] if self._sel_anchor is not None else abs_y
+            return self._gutter_line_cell(pos, at_end=abs_y >= anchor_y)
+        return self._visible_cell_to_abs_cell(self._clamp_cell_to_line_content(self._pos_to_cell(pos)))
+
+    def _select_line_at_pos(self, pos: QPoint) -> None:
+        _cols, rows = self._calc_cols_rows()
+        ch = max(1.0, float(self._cell_h))
+        y = max(0, min(rows - 1, int(pos.y() / ch)))
+        abs_y = self._visible_y_to_abs_y(y)
+        self._sel_anchor = (0, abs_y)
+        self._sel_head = (self._line_last_content_cell(y), abs_y)
+
+    def _select_command_block_at_pos(self, pos: QPoint) -> bool:
+        if self._in_alt_screen or not self._command_start_rows:
+            self._debug_gutter_log(
+                "double-click fallback-line "
+                f"reason={'alt-screen' if self._in_alt_screen else 'no-command-start'}, "
+                f"pos=({pos.x()},{pos.y()}), {self._debug_selection_state()}"
+            )
+            self._select_line_at_pos(pos)
+            return False
+        y = self._line_y_from_pos(pos)
+        abs_y = self._visible_y_to_abs_y(y)
+        starts = sorted(self._command_start_rows)
+        self._debug_gutter_log(
+            "double-click begin "
+            f"pos=({pos.x()},{pos.y()}), visible_y={y}, abs_y={abs_y}, "
+            f"line_sample={self._debug_visible_line_sample(y)!r}, starts={starts}, "
+            f"{self._debug_selection_state()}"
+        )
+        index = -1
+        for i, start in enumerate(starts):
+            if start <= abs_y:
+                index = i
+            else:
+                break
+        if index < 0:
+            self._debug_gutter_log(
+                "double-click fallback-line reason=no-start-before-click, "
+                f"visible_y={y}, abs_y={abs_y}, starts={starts}, {self._debug_selection_state()}"
+            )
+            self._select_line_at_pos(pos)
+            return False
+        start_abs_y = starts[index]
+        if index + 1 < len(starts):
+            end_abs_y = starts[index + 1] - 1
+            end_reason = "next-command"
+        else:
+            input_y = self._virtual_input_line_y()
+            input_abs_y = None if input_y is None else self._visible_y_to_abs_y(input_y)
+            end_abs_y = (input_abs_y - 1) if input_abs_y is not None else abs_y
+            end_reason = f"input-line input_y={input_y}, input_abs_y={input_abs_y}"
+        end_abs_y = max(start_abs_y, end_abs_y)
+        end_y = self._abs_y_to_visible_y(end_abs_y)
+        self._sel_anchor = (0, start_abs_y)
+        _cols, rows = self._calc_cols_rows()
+        end_x = self._line_last_content_cell(end_y) if 0 <= end_y < rows else max(0, _cols - 1)
+        self._sel_head = (end_x, end_abs_y)
+        self._debug_gutter_log(
+            "double-click selected "
+            f"index={index}, start_abs={start_abs_y}, end_abs={end_abs_y}, "
+            f"end_reason={end_reason}, start_visible={self._abs_y_to_visible_y(start_abs_y)}, "
+            f"end_visible={end_y}, end_x={end_x}, end_line_sample={self._debug_visible_line_sample(end_y)!r}, "
+            f"{self._debug_selection_state()}"
+        )
+        return True
+
     def _expand_selection_endpoint(self, x: int, y: int, *, is_end: bool) -> tuple[int, int]:
         # Selection is still stored as terminal cell coordinates, but a CJK
         # glyph occupies two cells. Normalize endpoints so drag/copy never
         # captures only the continuation half of a wide glyph.
         cols, _ = self._calc_cols_rows()
-        line = self._line_from_buffer(y)
+        visible_y = self._abs_y_to_visible_y(y)
+        line = self._line_from_buffer(visible_y)
         if self._is_wide_continuation_cell(line, x):
             return max(0, x - 1), y
         if is_end and self._is_wide_leading_cell(line, x, cols):
-            return min(cols - 1, x + 1), y
+            x = min(cols - 1, x + 1)
+        if is_end:
+            limit = self._line_selection_limit(visible_y)
+            if limit is not None and 0 <= visible_y < self._calc_cols_rows()[1]:
+                x = min(x, limit)
         return x, y
 
     def _is_word_char(self, ch: str) -> bool:
@@ -1790,8 +2353,9 @@ class TerminalVTWidget(QWidget):
                 break
             end = nxt
 
-        self._sel_anchor = (start, y)
-        self._sel_head = self._expand_selection_endpoint(end, y, is_end=True)
+        abs_y = self._visible_y_to_abs_y(y)
+        self._sel_anchor = (start, abs_y)
+        self._sel_head = self._expand_selection_endpoint(end, abs_y, is_end=True)
         return True
 
     def _normalized_selection(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
@@ -1807,13 +2371,20 @@ class TerminalVTWidget(QWidget):
 
     def _cell_in_selection(self, x: int, y: int, sel: tuple[tuple[int, int], tuple[int, int]]) -> bool:
         (sx, sy), (ex, ey) = sel
+        abs_y = self._visible_y_to_abs_y(y)
+        line_limit = self._line_selection_limit(y)
         if sy == ey:
-            return y == sy and sx <= x <= ex
-        if y == sy:
-            return x >= sx
-        if y == ey:
-            return x <= ex
-        return sy < y < ey
+            end = min(ex, line_limit) if line_limit is not None and abs_y == sy else ex
+            return abs_y == sy and sx <= x <= end
+        if abs_y == sy:
+            end = line_limit if line_limit is not None else self._calc_cols_rows()[0] - 1
+            return sx <= x <= end
+        if abs_y == ey:
+            end = min(ex, line_limit) if line_limit is not None else ex
+            return x <= end
+        if sy < abs_y < ey:
+            return x <= line_limit if line_limit is not None else True
+        return False
 
     def _selected_text(self) -> str:
         sel = self._normalized_selection()
@@ -1823,10 +2394,11 @@ class TerminalVTWidget(QWidget):
         cols, _ = self._calc_cols_rows()
 
         out: list[str] = []
-        for y in range(sy, ey + 1):
-            line = self._line_from_buffer(y)
-            start = sx if y == sy else 0
-            end = ex if y == ey else cols - 1
+        for abs_y in range(sy, ey + 1):
+            visible_y = self._abs_y_to_visible_y(abs_y)
+            line = self._line_from_buffer(visible_y)
+            start = sx if abs_y == sy else 0
+            end = ex if abs_y == ey else cols - 1
             chars: list[str] = []
             x = start
             while x <= end:
@@ -1877,8 +2449,8 @@ class TerminalVTWidget(QWidget):
     def _select_all_visible(self) -> None:
         # Select everything visible; use our selection coords for consistent highlight.
         cols, rows = self._calc_cols_rows()
-        self._sel_anchor = (0, 0)
-        self._sel_head = (max(0, cols - 1), max(0, rows - 1))
+        self._sel_anchor = (0, self._visible_y_to_abs_y(0))
+        self._sel_head = (max(0, cols - 1), self._visible_y_to_abs_y(max(0, rows - 1)))
         self._mark_dirty()
 
     def _clear_terminal_view(self) -> None:
@@ -1988,6 +2560,7 @@ class TerminalVTWidget(QWidget):
             return
 
         if key in (Qt.Key_Return, Qt.Key_Enter):
+            self._commit_command_start(check_continuation=True)
             self.input_received.emit(b"\r")
             event.accept()
             return
@@ -1996,6 +2569,7 @@ class TerminalVTWidget(QWidget):
             event.accept()
             return
         if key == Qt.Key_Tab:
+            self._record_pending_command_start()
             self.input_received.emit(b"\t")
             event.accept()
             return
@@ -2027,6 +2601,7 @@ class TerminalVTWidget(QWidget):
 
         # Handle regular text input
         if text:
+            self._record_pending_command_start()
             self.input_received.emit(text.encode("utf-8"))
             event.accept()
             return
@@ -2042,6 +2617,7 @@ class TerminalVTWidget(QWidget):
             if Qt.Key_A <= key <= Qt.Key_Z:
                 base_char = ord('a') + (key - Qt.Key_A)
                 char = chr(base_char).upper() if (mods & Qt.ShiftModifier) else chr(base_char)
+                self._record_pending_command_start()
                 self.input_received.emit(char.encode("utf-8"))
                 event.accept()
                 return
@@ -2054,12 +2630,14 @@ class TerminalVTWidget(QWidget):
                     char = shifted[key - Qt.Key_0]
                 else:
                     char = chr(base_char)
+                self._record_pending_command_start()
                 self.input_received.emit(char.encode("utf-8"))
                 event.accept()
                 return
 
             # Space
             if key == Qt.Key_Space:
+                self._record_pending_command_start()
                 self.input_received.emit(b" ")
                 event.accept()
                 return
@@ -2102,6 +2680,7 @@ class TerminalVTWidget(QWidget):
 
             if key in key_to_char:
                 char = key_to_char[key]
+                self._record_pending_command_start()
                 self.input_received.emit(char.encode("utf-8"))
                 event.accept()
                 return
@@ -2133,4 +2712,7 @@ class TerminalVTWidget(QWidget):
         payload = text.encode("utf-8", errors="replace")
         if bracketed:
             payload = b"\x1b[200~" + payload + b"\x1b[201~"
+        self._record_pending_command_start()
+        if b"\r" in payload:
+            self._commit_command_start()
         self.input_received.emit(payload)

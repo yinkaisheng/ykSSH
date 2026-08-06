@@ -126,8 +126,34 @@ def _parse_strings_file(path) -> Dict[str, str]:
         key = key.strip()
         value = value.strip()
         if key:
-            parsed[key] = value
+            parsed[key] = _unescape_string_value(value)
     return parsed
+
+
+def _unescape_string_value(value: str) -> str:
+    escapes = {
+        'n': '\n',
+        'r': '\r',
+        't': '\t',
+        '\\': '\\',
+    }
+    result: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char != '\\' or index + 1 >= len(value):
+            result.append(char)
+            index += 1
+            continue
+        next_char = value[index + 1]
+        replacement = escapes.get(next_char)
+        if replacement is None:
+            result.append(char)
+            result.append(next_char)
+        else:
+            result.append(replacement)
+        index += 2
+    return ''.join(result)
 
 
 def _read_language_name(code: str) -> str:

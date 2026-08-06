@@ -240,7 +240,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；中文名称额外支持按拼音首字母过滤（如 `zw` 匹配“中文测试”），首字符为单个多音汉字或后接非汉字时允许首字母多音变体（如“长”和“长abc.txt”可用 `c`/`z`，而“长度”按默认读音 `cd`）；ESC 或路径变化清除过滤。
 - 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。当前行单选且为文件夹时，Enter 进入该目录。
 - 本地文件 table：**Delete** → 回收站（无确认）；**Shift+Delete** → 永久删除（无确认）。右键菜单默认「移到回收站」；按住 **Shift** 再右键则显示「永久删除」并弹确认（对齐资源管理器习惯）。远端 Delete 弹确认后删除，Shift+Delete 直接删除。
-- **上传/下载仅通过右键菜单发起**（不支持文件面板拖拽互传）。默认上传到远端当前路径、下载到本地当前路径；活动传输期间 statusbar 显示速度、百分比与方向图标，底部约 4px 进度条，空闲时隐藏。上传与下载独立统计，可双向同时显示；tooltip 显示已传/总大小。
+- **上传/下载仅通过右键菜单发起**（不支持文件面板拖拽互传）。默认上传到右侧远端面板当前路径、下载到左侧本地面板当前路径；远端右键菜单另提供“下载到其它位置...”用于选择一次性本地目标目录，不改变左侧面板当前路径。活动传输期间 statusbar 显示速度、百分比与方向图标，底部约 4px 进度条，空闲时隐藏。上传与下载独立统计，可双向同时显示；tooltip 显示已传/总大小。
 - SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。冲突对话框经非阻塞 `ask_transfer_conflict_async` 弹出（不卡住 qasync）；传输/远端操作失败 warning 同样为非阻塞 async dialog，关闭/取消任务时会自动收起。选项：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime。冲突取消中止剩余项目，不回滚已写入内容。远端列表与下载会 follow 指向目录的 symlink，使其可进入/递归下载；目录下载与下载前体积统计使用 `realpath` 记录已访问目录，遇到环路会跳过递归分支；远端删除对 symlink 使用 `lstat`，只删链接本身不跟随目标。关闭 Tab 或退出程序时若仍有传输/远端改名/删除/新建等后台任务，会提示是否中断；确认后 cancel 并 **await 任务结束** 再 disconnect，保留已写入内容。
 
 **收藏（★）：**
@@ -293,6 +293,12 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
 - 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
+- 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
+- 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
+- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记；以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
+- 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
+- `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `config/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`T` 上传/下载传输、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
 - 粘贴时仅在配置允许且远端显式开启 `DECSET ?2004` bracketed paste 模式后才发送 `ESC[200~...ESC[201~` 包装；普通 shell 密码提示（如 `sudo`）不发送该包装，避免控制序列被当作密码字符。
 
@@ -394,7 +400,15 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
     "terminal_reflow_buffer_chars": 200000,
     "terminal_experimental_raw_reflow_on_resize": false,
     "terminal_paste_confirm_multiline": true,
-    "terminal_bracketed_paste": true
+    "terminal_bracketed_paste": true,
+    "terminal_background_color": "#1E1E1E",
+    "terminal_selection_background_color": "#094771",
+    "terminal_left_gutter_width_px": 16,
+    "terminal_gutter_background_color": "#252525",
+    "terminal_scrollbar_width_px": 10,
+    "terminal_scrollbar_background_color": "#252525",
+    "terminal_scrollbar_thumb_color": "#6A6A6A",
+    "terminal_debug_gutter_selection": false
   },
   "window": {
     "width": 1400,

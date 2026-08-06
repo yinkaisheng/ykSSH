@@ -371,14 +371,20 @@ class SftpUiHandler(QObject):
             self._end_transfer_status('upload')
 
     def download_remote_paths(self, remote_paths: List[str]) -> None:
+        self._download_remote_paths(remote_paths, self._local_dir)
+
+    def download_remote_paths_to(self, remote_paths: List[str], local_dir: str) -> None:
+        self._download_remote_paths(remote_paths, local_dir)
+
+    def _download_remote_paths(self, remote_paths: List[str], local_dir: str) -> None:
         logger.info(
             'Download requested: '
-            f'tab_id={self.tab_id}, count={len(remote_paths)}, local_dir={self._local_dir}, '
+            f'tab_id={self.tab_id}, count={len(remote_paths)}, local_dir={local_dir}, '
             f'paths={remote_paths}'
         )
-        self._track_transfer_task(asyncio.create_task(self._download_async(remote_paths)))
+        self._track_transfer_task(asyncio.create_task(self._download_async(remote_paths, local_dir)))
 
-    async def _download_async(self, remote_paths: List[str]) -> None:
+    async def _download_async(self, remote_paths: List[str], local_dir: str) -> None:
         ssh = self._cm.get_session(self.tab_id)
         if ssh is None:
             return
@@ -394,13 +400,13 @@ class SftpUiHandler(QObject):
         logger.info(
             'Download batch start: '
             f'tab_id={self.tab_id}, count={len(remote_paths)}, total_bytes={total_bytes}, '
-            f'local_dir={self._local_dir}'
+            f'local_dir={local_dir}'
         )
         user_cancelled = False
         try:
             for remote in remote_paths:
                 name = os.path.basename(remote.rstrip('/'))
-                local = os.path.join(self._local_dir, name)
+                local = os.path.join(local_dir, name)
                 try:
                     await download(
                         sftp,
@@ -411,11 +417,11 @@ class SftpUiHandler(QObject):
                     )
                     logger.info(f'Download item done: tab_id={self.tab_id}, remote={remote}, local={local}')
                 except TransferCancelled:
-                    logger.info(f'Download batch user-cancelled: tab_id={self.tab_id}, local_dir={self._local_dir}')
+                    logger.info(f'Download batch user-cancelled: tab_id={self.tab_id}, local_dir={local_dir}')
                     user_cancelled = True
                     break
                 except asyncio.CancelledError:
-                    logger.info(f'Download batch cancelled: tab_id={self.tab_id}, local_dir={self._local_dir}')
+                    logger.info(f'Download batch cancelled: tab_id={self.tab_id}, local_dir={local_dir}')
                     raise
                 except Exception as exc:
                     logger.warning(f'download failed: {exc}')
@@ -425,13 +431,13 @@ class SftpUiHandler(QObject):
                 logger.info(
                     'Download batch stopped by user: '
                     f'tab_id={self.tab_id}, count={len(remote_paths)}, total_bytes={total_bytes}, '
-                    f'local_dir={self._local_dir}'
+                    f'local_dir={local_dir}'
                 )
             else:
                 logger.info(
                     'Download batch done: '
                     f'tab_id={self.tab_id}, count={len(remote_paths)}, total_bytes={total_bytes}, '
-                    f'local_dir={self._local_dir}'
+                    f'local_dir={local_dir}'
                 )
         finally:
             self._end_transfer_status('download')

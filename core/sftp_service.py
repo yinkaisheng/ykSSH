@@ -122,7 +122,8 @@ async def _upload_dir(
             await _upload_dir(sftp, local_child, remote_child, progress_handler, conflict_handler)
         else:
             await _upload_file(sftp, local_child, remote_child, progress_handler, conflict_handler)
-    await _set_remote_mtime(sftp, remote_dir, os.path.getmtime(local_dir))
+    src_stat = os.stat(local_dir)
+    await _set_remote_mtime(sftp, remote_dir, src_stat.st_mtime, src_stat.st_atime)
 
 
 async def _upload_file(
@@ -132,8 +133,9 @@ async def _upload_file(
     progress_handler: Optional[ProgressHandler],
     conflict_handler: Optional[ConflictHandler],
 ) -> None:
-    src_size = os.path.getsize(local_path)
-    src_mtime = os.path.getmtime(local_path)
+    src_stat = os.stat(local_path)
+    src_size = src_stat.st_size
+    src_mtime = src_stat.st_mtime
     start = await _remote_file_start_offset(
         sftp,
         local_path,
@@ -162,7 +164,7 @@ async def _upload_file(
                     progress_handler(local_path, remote_path, copied, src_size)
     finally:
         await remote_file.close()
-    await _set_remote_mtime(sftp, remote_path, src_mtime)
+    await _set_remote_mtime(sftp, remote_path, src_mtime, src_stat.st_atime)
 
 
 async def _download_dir(
@@ -434,9 +436,16 @@ def _remote_join(base: str, name: str) -> str:
     return f'{base}/{name}' if base else f'/{name}'
 
 
-async def _set_remote_mtime(sftp: asyncssh.SFTPClient, path: str, mtime: float) -> None:
+async def _set_remote_mtime(
+    sftp: asyncssh.SFTPClient,
+    path: str,
+    mtime: float,
+    atime: Optional[float] = None,
+) -> None:
+    if mtime <= 0:
+        return
     try:
-        await sftp.setstat(path, asyncssh.SFTPAttrs(mtime=int(mtime)))
+        await sftp.utime(path, (atime if atime is not None else mtime, mtime))
     except Exception as exc:
         logger.warning(f'failed to set remote mtime for {path}: {exc}')
 
