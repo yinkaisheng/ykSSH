@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-- **MyPyShell**：本地 PyQt5 SSH 客户端（类似 WindTerm），多 Tab 终端 + SFTP 文件管理。
+- **YKShell**：本地 PyQt5 SSH 客户端（类似 WindTerm），多 Tab 终端 + SFTP 文件管理。
 - **技术栈：** PyQt5 + asyncssh + qasync + pyte。
 - 界面文案与注释默认使用中文；**用户可见字符串**通过 i18n（`tr('namespace.key')`）管理，业务逻辑中勿硬编码中英文。
 
@@ -26,12 +26,12 @@
 - Python 3.10+，`from __future__ import annotations`，UTF-8，`# -*- coding: utf-8 -*-`。
 - 新代码匹配现有风格：类型标注、简短 docstring、分层清晰（models → core → storage → ui）。
 - 修改配置 schema 时直接采用新结构，不保留旧字段兼容层。
-- 移植或对齐参考项目（`../http-requester`、`../nebula-shell`）时保持 PyQt5，改 import 路径为 MyPyShell 包结构。
+- 移植或对齐参考项目（`../http-requester`、`../nebula-shell`）时保持 PyQt5，改 import 路径为 YKShell 包结构。
 
 ## 改动后验证
 
 ```powershell
-cd E:\codes\python\MyPyShell
+cd E:\codes\python\YKShell
 pip install -r requirements.txt
 python -c "from ui.main_window import MainWindow"
 python main.py

@@ -2,6 +2,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-APP_NAME = 'MyPyShell'
+APP_NAME = 'YKShell'
 APP_VERSION = '1.0.0'
-GITHUB_URL = 'https://github.com/yinkaisheng/MyPyShell'
+GITHUB_URL = 'https://github.com/yinkaisheng/YKShell'

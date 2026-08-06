@@ -1,6 +1,6 @@
-# MyPyShell 实现文档
+# YKShell 实现文档
 
-本文档描述 MyPyShell 当前代码的架构、数据流与实现细节，供开发者阅读与维护参考。
+本文档描述 YKShell 当前代码的架构、数据流与实现细节，供开发者阅读与维护参考。
 
 与 [`AGENTS.md`](AGENTS.md) 的分工：
 
@@ -13,7 +13,7 @@
 
 ## 1. 项目概述
 
-**MyPyShell** 是一款本地桌面 **PyQt5 SSH 客户端**，功能类似 WindTerm：
+**YKShell** 是一款本地桌面 **PyQt5 SSH 客户端**，功能类似 WindTerm：
 
 - 左侧 Session 树（分组 + 连接配置）
 - 右侧多 Tab 终端（VT100 仿真）
@@ -46,7 +46,7 @@ loguru
 - **启动：**
 
 ```powershell
-cd E:\codes\python\MyPyShell
+cd E:\codes\python\YKShell
 pip install -r requirements.txt
 python main.py
 ```
@@ -57,7 +57,7 @@ python main.py
 
 ```
 main.py
-  ├─ config_logger()            # logs/mypyshell.log
+  ├─ config_logger()            # logs/ykshell.log
   ├─ init_app_config()          # 加载 config/config.json
   ├─ QApplication + Fusion 样式
   ├─ install_*_translations()   # 对话框 / 右键菜单 i18n
@@ -79,7 +79,7 @@ main.py
 ## 4. 目录结构与模块职责
 
 ```
-MyPyShell/
+YKShell/
 ├── main.py                      # 应用入口
 ├── app_info.py                  # APP_NAME / APP_VERSION
 ├── log_util.py                  # loguru 日志封装
@@ -475,7 +475,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 ### 8.4 配置目录迁移（WindTerm 风格）
 
-将整个 `config/` 目录复制到另一台电脑的 MyPyShell 程序目录下（与 `main.py` 同级），即可直接使用，无需重新配置 Session。
+将整个 `config/` 目录复制到另一台电脑的 YKShell 程序目录下（与 `main.py` 同级），即可直接使用，无需重新配置 Session。
 
 **必须一并复制的文件：**
 
@@ -488,9 +488,9 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 **迁移步骤：**
 
-1. 在源机器上关闭 MyPyShell。
-2. 复制整个 `config/` 文件夹到目标机器同名路径（例如 `d:\Codes\Python\MyPyShell\config\`）。
-3. 在目标机器启动 MyPyShell；Session 树、密码、外观设置应自动生效。
+1. 在源机器上关闭 ykshell。
+2. 复制整个 `config/` 文件夹到目标机器同名路径（例如 `d:\Codes\Python\YKShell\config\`）。
+3. 在目标机器启动 ykshell；Session 树、密码、外观设置应自动生效。
 4. 连接 Session 时，文件面板会打开 Session 中配置的本地/远程路径；路径无效或留空时回退到各自的主目录（`~`）。
 
 **注意事项：**
@@ -516,7 +516,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 ### 9.1 运行日志
 
-`main.py` 启动时通过 `log_util.config_logger()` 写入 `logs/mypyshell.log`，同时在有 stdout 时输出到控制台。
+`main.py` 启动时通过 `log_util.config_logger()` 写入 `logs/ykshell.log`，同时在有 stdout 时输出到控制台。
 
 关键操作会写日志，便于排查连接与文件管理问题：
 

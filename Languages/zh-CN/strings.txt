@@ -1,4 +1,4 @@
-main.window_title=MyPyShell
+main.window_title=YKShell
 main.new_session=+ 新建会话
 main.connect=连接
 main.settings_tooltip=设置

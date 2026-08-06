@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Dict
 
 BUILTIN_STRINGS: Dict[str, str] = {
-    'main.window_title': 'MyPyShell',
+    'main.window_title': 'YKShell',
     'main.new_session': '+ New Session',
     'main.connect': 'Connect',
     'main.settings_tooltip': 'Settings',
