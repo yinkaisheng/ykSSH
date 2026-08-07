@@ -6,6 +6,19 @@ from __future__ import annotations
 import os
 import stat
 import sys
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class PermissionChange:
+    """Permission bit mask/value pair used by local and remote property tasks."""
+
+    mask: int
+    value: int
+    recursive: bool
+
+    def apply(self, mode: int) -> int:
+        return (mode & ~self.mask) | (self.value & self.mask)
 
 
 def format_unix_mode(mode: int) -> str:

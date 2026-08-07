@@ -81,7 +81,7 @@ class CredentialStore:
             )
         self._passwords = passwords
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             'version': _CREDENTIALS_VERSION,
@@ -96,19 +96,33 @@ class CredentialStore:
                     f'Skipped saving credentials because {self.path} was loaded from an '
                     'unsupported version'
                 )
-                return
+                return False
             atomic_write_json(self.path, payload)
+            return True
         except OSError as exc:
             logger.warning(f'Failed to save credentials to {self.path}: {exc}')
+            return False
 
     def get_password(self, session_id: str) -> Optional[str]:
         return self._passwords.get(session_id)
 
-    def set_password(self, session_id: str, password: str) -> None:
+    def set_password(self, session_id: str, password: str) -> bool:
+        existed = session_id in self._passwords
+        previous = self._passwords.get(session_id)
         self._passwords[session_id] = password
-        self._save()
+        if self._save():
+            return True
+        if existed and previous is not None:
+            self._passwords[session_id] = previous
+        else:
+            self._passwords.pop(session_id, None)
+        return False
 
-    def delete_password(self, session_id: str) -> None:
+    def delete_password(self, session_id: str) -> bool:
         if session_id in self._passwords:
-            del self._passwords[session_id]
-            self._save()
+            previous = self._passwords.pop(session_id)
+            if self._save():
+                return True
+            self._passwords[session_id] = previous
+            return False
+        return True

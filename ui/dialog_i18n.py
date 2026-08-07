@@ -213,6 +213,39 @@ def ask_yes_no(
     return box.exec_() == QMessageBox.Yes
 
 
+async def ask_yes_no_async(
+    parent: QWidget,
+    title: str,
+    text: str,
+    *,
+    default: int = QMessageBox.No,
+) -> bool:
+    """Show a non-blocking yes/no question compatible with qasync cancellation."""
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[int] = loop.create_future()
+    box = QMessageBox(QMessageBox.Question, title, text, QMessageBox.NoButton, parent)
+    box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    _translate_message_box_buttons(box)
+    box.setDefaultButton(QMessageBox.Yes if default == QMessageBox.Yes else QMessageBox.No)
+
+    def _finish(result: int) -> None:
+        if not future.done():
+            future.set_result(result)
+
+    box.finished.connect(_finish)
+    box.open()
+    try:
+        return await future == QMessageBox.Yes
+    finally:
+        try:
+            box.finished.disconnect(_finish)
+        except TypeError:
+            pass
+        if box.isVisible():
+            box.close()
+        box.deleteLater()
+
+
 def ask_yes_no_cancel(
     parent: QWidget,
     title: str,

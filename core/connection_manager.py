@@ -10,10 +10,11 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from core.path_resolver import resolve_remote_path
 from core.sftp_service import listdir
-from core.ssh_session import SSHSession
+from core.ssh_session import HostKeyConfirm, SSHSession
 from log_util import logger
 from models.session_item import SessionItem
 from storage.credential_store import CredentialStore
+from storage.host_key_store import HostKeyStore
 from ui.terminal_vt_widget import TerminalVTWidget
 
 
@@ -29,6 +30,7 @@ class ConnectionManager(QObject):
     ) -> None:
         super().__init__(parent)
         self.keyring = credential_store or CredentialStore()
+        self.host_keys = HostKeyStore()
         self._sessions: Dict[str, SSHSession] = {}
         self._terminals: Dict[str, TerminalVTWidget] = {}
         self._tab_titles: Dict[str, str] = {}
@@ -120,6 +122,7 @@ class ConnectionManager(QObject):
         on_connected: Optional[Callable[[], None]] = None,
         on_disconnected: Optional[Callable[[], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
+        host_key_confirm: Optional[HostKeyConfirm] = None,
     ) -> None:
         if tab_id in self._sessions:
             logger.info(f'Connection tab already exists, closing old tab first: tab_id={tab_id}')
@@ -133,7 +136,7 @@ class ConnectionManager(QObject):
             f'host={session_item.host}, port={session_item.port}, username={session_item.username}'
         )
 
-        ssh = SSHSession(self)
+        ssh = SSHSession(self, self.host_keys)
         self._sessions[tab_id] = ssh
         self._terminals[tab_id] = terminal
         self._tab_titles[tab_id] = session_item.name
@@ -174,7 +177,13 @@ class ConnectionManager(QObject):
         terminal.input_received.connect(ssh.write)
 
         try:
-            await ssh.connect(session_item, password=password, cols=cols, rows=rows)
+            await ssh.connect(
+                session_item,
+                password=password,
+                cols=cols,
+                rows=rows,
+                host_key_confirm=host_key_confirm,
+            )
         except asyncio.CancelledError:
             logger.info(
                 'Open connection tab cancelled: '

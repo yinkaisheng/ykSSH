@@ -20,6 +20,10 @@ class TransferCancelled(Exception):
     """User cancelled a transfer conflict (distinct from asyncio task cancellation)."""
 
 
+class LocalSymlinkUnsupported(Exception):
+    """A local symlink/junction was selected for upload."""
+
+
 TransferDecision = Literal['overwrite', 'resume', 'cancel']
 ConflictHandler = Callable[[str, str, bool], Union[TransferDecision, Awaitable[TransferDecision]]]
 ProgressHandler = Callable[[str, str, int, int], None]
@@ -59,6 +63,7 @@ async def listdir(sftp: asyncssh.SFTPClient, path: str) -> List[Dict[str, Any]]:
             'size': attrs.size or 0,
             'mtime': float(attrs.mtime or 0),
             'perm': format_unix_mode(mode),
+            'mode': mode,
         })
     return entries
 
@@ -71,9 +76,18 @@ async def upload(
     conflict_handler: Optional[ConflictHandler] = None,
 ) -> None:
     local_path = os.path.abspath(local_path)
+    if _is_local_link(local_path):
+        raise LocalSymlinkUnsupported(local_path)
     if os.path.isdir(local_path):
         logger.info(f'SFTP upload directory start: local={local_path}, remote={remote_path}')
-        await _upload_dir(sftp, local_path, remote_path, progress_handler, conflict_handler)
+        await _upload_dir(
+            sftp,
+            local_path,
+            remote_path,
+            progress_handler,
+            conflict_handler,
+            visited_dirs=set(),
+        )
         logger.info(f'SFTP upload directory done: local={local_path}, remote={remote_path}')
         return
     logger.info(f'SFTP upload file start: local={local_path}, remote={remote_path}')
@@ -112,14 +126,30 @@ async def _upload_dir(
     remote_dir: str,
     progress_handler: Optional[ProgressHandler],
     conflict_handler: Optional[ConflictHandler],
+    visited_dirs: set[str],
 ) -> None:
+    canonical_dir = os.path.realpath(local_dir)
+    if canonical_dir in visited_dirs:
+        logger.warning(f'SFTP upload skipped recursive local directory: local={local_dir}')
+        return
+    visited_dirs.add(canonical_dir)
     if not await _ensure_remote_dir(sftp, remote_dir, local_dir, conflict_handler):
         return
     for name in os.listdir(local_dir):
         local_child = os.path.join(local_dir, name)
         remote_child = _remote_join(remote_dir, name)
+        if _is_local_link(local_child):
+            logger.warning(f'SFTP upload skipped local symlink or junction: local={local_child}')
+            continue
         if os.path.isdir(local_child):
-            await _upload_dir(sftp, local_child, remote_child, progress_handler, conflict_handler)
+            await _upload_dir(
+                sftp,
+                local_child,
+                remote_child,
+                progress_handler,
+                conflict_handler,
+                visited_dirs,
+            )
         else:
             await _upload_file(sftp, local_child, remote_child, progress_handler, conflict_handler)
     src_stat = os.stat(local_dir)
@@ -272,6 +302,14 @@ async def _local_file_start_offset(
     src_size: int,
     conflict_handler: Optional[ConflictHandler],
 ) -> Optional[int]:
+    if _is_local_link(local_path):
+        decision = await _resolve_conflict(remote_path, local_path, os.path.isdir(local_path), conflict_handler)
+        if decision == 'cancel':
+            raise TransferCancelled()
+        if decision == 'overwrite':
+            _remove_local_link(local_path)
+            return 0
+        return None
     if not os.path.exists(local_path):
         return 0
     is_dir = os.path.isdir(local_path)
@@ -294,7 +332,6 @@ async def _ensure_remote_dir(
     local_source: str,
     conflict_handler: Optional[ConflictHandler],
 ) -> bool:
-    source_is_dir = os.path.isdir(local_source)
     try:
         attrs = await sftp.lstat(remote_dir)
     except asyncssh.SFTPError:
@@ -303,13 +340,7 @@ async def _ensure_remote_dir(
         return True
     target_is_dir = stat.S_ISDIR(attrs.permissions or 0)
     if target_is_dir:
-        decision = await _resolve_conflict(local_source, remote_dir, True, conflict_handler)
-        if decision == 'cancel':
-            raise TransferCancelled()
-        if decision == 'overwrite':
-            logger.info(f'SFTP overwrite remote directory: remote={remote_dir}, source={local_source}')
-            await delete_path(sftp, remote_dir)
-            await sftp.makedirs(remote_dir, exist_ok=True)
+        logger.info(f'SFTP merge into remote directory: remote={remote_dir}, source={local_source}')
         return True
     decision = await _resolve_conflict(local_source, remote_dir, False, conflict_handler)
     if decision == 'cancel':
@@ -319,9 +350,7 @@ async def _ensure_remote_dir(
         await delete_path(sftp, remote_dir)
         await sftp.makedirs(remote_dir, exist_ok=True)
         return True
-    if source_is_dir:
-        return False
-    return True
+    return False
 
 
 async def _ensure_local_dir(
@@ -331,19 +360,21 @@ async def _ensure_local_dir(
     conflict_handler: Optional[ConflictHandler],
 ) -> bool:
     del sftp
-    source_is_dir = True
+    if _is_local_link(local_dir):
+        decision = await _resolve_conflict(remote_source, local_dir, os.path.isdir(local_dir), conflict_handler)
+        if decision == 'cancel':
+            raise TransferCancelled()
+        if decision == 'overwrite':
+            _remove_local_link(local_dir)
+            os.makedirs(local_dir, exist_ok=True)
+            return True
+        return False
     if not os.path.exists(local_dir):
         logger.info(f'Create local directory for download: local={local_dir}')
         os.makedirs(local_dir, exist_ok=True)
         return True
     if os.path.isdir(local_dir):
-        decision = await _resolve_conflict(remote_source, local_dir, True, conflict_handler)
-        if decision == 'cancel':
-            raise TransferCancelled()
-        if decision == 'overwrite':
-            logger.info(f'Overwrite local directory for download: local={local_dir}, source={remote_source}')
-            shutil.rmtree(local_dir)
-            os.makedirs(local_dir, exist_ok=True)
+        logger.info(f'Merge download into local directory: local={local_dir}, source={remote_source}')
         return True
     decision = await _resolve_conflict(remote_source, local_dir, False, conflict_handler)
     if decision == 'cancel':
@@ -353,9 +384,24 @@ async def _ensure_local_dir(
         os.remove(local_dir)
         os.makedirs(local_dir, exist_ok=True)
         return True
-    if source_is_dir:
-        return False
-    return True
+    return False
+
+
+def _is_local_link(path: str) -> bool:
+    """Return whether a path is a symlink or Windows directory junction."""
+    if os.path.islink(path):
+        return True
+    isjunction = getattr(os.path, 'isjunction', None)
+    return bool(isjunction is not None and isjunction(path))
+
+
+def _remove_local_link(path: str) -> None:
+    """Remove a link itself without traversing its target."""
+    isjunction = getattr(os.path, 'isjunction', None)
+    if isjunction is not None and isjunction(path):
+        os.rmdir(path)
+    else:
+        os.unlink(path)
 
 
 async def _resolve_conflict(

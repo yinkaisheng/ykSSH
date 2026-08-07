@@ -4,15 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 import asyncssh
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from log_util import logger
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
+from storage.host_key_store import HostKeyStore
 
 _SSH_CONNECT_TIMEOUT_SECONDS = 15.0
+HostKeyConfirm = Callable[[str, int, str, str], Awaitable[bool]]
+
+
+class HostKeyChangedError(RuntimeError):
+    def __init__(self, host: str, port: int, expected: str, actual: str) -> None:
+        super().__init__(f'SSH host key changed for {host}:{port}: {expected} -> {actual}')
+        self.host = host
+        self.port = port
+        self.expected = expected
+        self.actual = actual
+
+
+class HostKeyRejectedError(RuntimeError):
+    """The user declined the first-seen SSH server key."""
 
 
 class SSHSession(QObject):
@@ -23,7 +38,7 @@ class SSHSession(QObject):
     data_received = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, parent: QObject = None) -> None:
+    def __init__(self, parent: QObject = None, host_key_store: Optional[HostKeyStore] = None) -> None:
         super().__init__(parent)
         self._conn: Optional[asyncssh.SSHClientConnection] = None
         self._process: Optional[asyncssh.SSHClientProcess] = None
@@ -34,6 +49,7 @@ class SSHSession(QObject):
         self._session_item: Optional[SessionItem] = None
         self._cols = 80
         self._rows = 24
+        self._host_key_store = host_key_store or HostKeyStore()
 
     @property
     def session_item(self) -> Optional[SessionItem]:
@@ -58,6 +74,7 @@ class SSHSession(QObject):
         password: Optional[str] = None,
         cols: int = 80,
         rows: int = 24,
+        host_key_confirm: Optional[HostKeyConfirm] = None,
     ) -> None:
         if self.is_connected:
             await self.disconnect()
@@ -71,7 +88,6 @@ class SSHSession(QObject):
             'host': session_item.host,
             'port': session_item.port,
             'username': session_item.username,
-            'known_hosts': None,
             'connect_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
             'login_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
         }
@@ -90,6 +106,40 @@ class SSHSession(QObject):
                 f'host={session_item.host}, port={session_item.port}, '
                 f'username={session_item.username}, auth_type={session_item.auth_type}'
             )
+            server_key = await asyncio.wait_for(
+                asyncssh.get_server_host_key(session_item.host, session_item.port),
+                timeout=_SSH_CONNECT_TIMEOUT_SECONDS,
+            )
+            if server_key is None:
+                raise RuntimeError('SSH server did not present a host key')
+            status = self._host_key_store.check(session_item.host, session_item.port, server_key)
+            actual_fingerprint = server_key.get_fingerprint()
+            if status == 'changed':
+                raise HostKeyChangedError(
+                    session_item.host,
+                    session_item.port,
+                    self._host_key_store.fingerprint(session_item.host, session_item.port),
+                    actual_fingerprint,
+                )
+            if status == 'unknown':
+                accepted = False
+                if host_key_confirm is not None:
+                    accepted = await host_key_confirm(
+                        session_item.host,
+                        session_item.port,
+                        server_key.get_algorithm(),
+                        actual_fingerprint,
+                    )
+                if not accepted:
+                    raise HostKeyRejectedError(
+                        f'SSH host key was not trusted for {session_item.host}:{session_item.port}'
+                    )
+                self._host_key_store.trust(session_item.host, session_item.port, server_key)
+
+            # This key was already checked against HostKeyStore above. Passing
+            # it directly also works when AsyncSSH represents default port 22
+            # as ``None`` during known-host matching.
+            options['known_hosts'] = ([server_key], [], [])
             self._conn = await asyncssh.connect(**options)
             if self._aborted:
                 await self.disconnect()
@@ -127,7 +177,6 @@ class SSHSession(QObject):
                 f'port={session_item.port}, error={exc}'
             )
             await self.disconnect()
-            self.error.emit(str(exc))
             raise
 
     async def disconnect(self) -> None:

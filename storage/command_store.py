@@ -42,7 +42,7 @@ class CommandStore:
         self._cache = [CommandItem.from_dict(d) for d in items_data if isinstance(d, dict)]
         return self._cache
 
-    def save_items(self, items: List[CommandItem]) -> None:
+    def save_items(self, items: List[CommandItem]) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload: Dict[str, Any] = {
             'version': COMMANDS_VERSION,
@@ -51,5 +51,7 @@ class CommandStore:
         try:
             atomic_write_json(self.path, payload)
             self._cache = items
-        except OSError:
-            logger.warning(f'Failed to save commands to {self.path}')
+            return True
+        except OSError as exc:
+            logger.warning(f'Failed to save commands to {self.path}: {exc}')
+            return False

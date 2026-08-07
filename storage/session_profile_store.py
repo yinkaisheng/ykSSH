@@ -50,7 +50,7 @@ class SessionProfileStore:
         self._cache = [SessionItem.from_dict(d) for d in items_data if isinstance(d, dict)]
         return self._cache
 
-    def save_items(self, items: List[SessionItem]) -> None:
+    def save_items(self, items: List[SessionItem]) -> bool:
         self._ensure_dir()
         payload: Dict[str, Any] = {
             'version': SESSIONS_VERSION,
@@ -59,8 +59,10 @@ class SessionProfileStore:
         try:
             atomic_write_json(self.path, payload)
             self._cache = items
-        except OSError:
-            logger.warning(f'Failed to save sessions to {self.path}')
+            return True
+        except OSError as exc:
+            logger.warning(f'Failed to save sessions to {self.path}: {exc}')
+            return False
 
     def _ensure_dir(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

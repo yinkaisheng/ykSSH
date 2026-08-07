@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 from core.connection_manager import ConnectionManager
 from core.path_resolver import resolve_local_path
 from core.sftp_ui_handler import SftpUiHandler
+from core.ssh_session import HostKeyChangedError, HostKeyRejectedError
 from i18n import register_retranslator, set_language, tr
 from log_util import logger
 from models.favorite_path import FavoritePath
@@ -56,7 +57,7 @@ from ui.theme import (
     normalize_terminal_font_size,
     normalize_theme_name,
 )
-from ui.dialog_i18n import ask_yes_no
+from ui.dialog_i18n import ask_yes_no, ask_yes_no_async, message_warning
 
 
 def splitter_ratio_to_sizes(total: int, ratio: float) -> list[int]:
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self._closing_after_transfer_confirm = False
         self._close_in_progress = False
         self._connect_tasks: dict[str, asyncio.Task] = {}
+        self._background_tasks: set[asyncio.Task] = set()
         self._session_save_timer = QTimer(self)
         self._session_save_timer.setSingleShot(True)
         self._session_save_timer.setInterval(500)
@@ -125,7 +127,11 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._title_bar, 0)
         self._setup_menus()
 
-        self.session_panel = SidePanel(self.profile_store, self.credential_store)
+        self.session_panel = SidePanel(
+            self.profile_store,
+            self.credential_store,
+            host_key_store=self.connection_manager.host_keys,
+        )
         self.terminal_tabs = TerminalTabWidget()
         self.file_panels = FilePanelsContainer()
 
@@ -254,20 +260,23 @@ class MainWindow(QMainWindow):
         self._vertical_splitter.setSizes(splitter_ratio_to_sizes(height, ratio))
 
     def _save_session(self) -> None:
-        save_window_state(
-            width=self.width(),
-            height=self.height(),
-            session_tree_width=(
-                self._main_splitter.sizes()[0]
-                if self._main_splitter and self._main_splitter.sizes()
-                else self._session_tree_width
-            ),
-            vertical_splitter=(
-                splitter_sizes_to_ratio(self._vertical_splitter.sizes())
-                if self._vertical_splitter
-                else self.DEFAULT_VERTICAL_SPLITTER_RATIO
-            ),
-        )
+        try:
+            save_window_state(
+                width=self.width(),
+                height=self.height(),
+                session_tree_width=(
+                    self._main_splitter.sizes()[0]
+                    if self._main_splitter and self._main_splitter.sizes()
+                    else self._session_tree_width
+                ),
+                vertical_splitter=(
+                    splitter_sizes_to_ratio(self._vertical_splitter.sizes())
+                    if self._vertical_splitter
+                    else self.DEFAULT_VERTICAL_SPLITTER_RATIO
+                ),
+            )
+        except OSError as exc:
+            logger.warning(f'Failed to save window state: {exc}')
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._closing_after_transfer_confirm:
@@ -286,7 +295,24 @@ class MainWindow(QMainWindow):
             self._cancel_all_transfers()
         event.ignore()
         self._close_in_progress = True
-        asyncio.create_task(self._finish_close_async())
+        self._track_background_task(asyncio.create_task(self._finish_close_async()))
+
+    def _track_background_task(self, task: asyncio.Task) -> asyncio.Task:
+        self._background_tasks.add(task)
+
+        def _done(done: asyncio.Task) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error is not None:
+                logger.error(f'Background UI task failed: {error}')
+
+        task.add_done_callback(_done)
+        return task
 
     def retranslate_ui(self) -> None:
         self.setWindowTitle(tr('main.window_title'))
@@ -399,7 +425,11 @@ class MainWindow(QMainWindow):
         global_entries: List[FavoritePath],
         session_entries: List[FavoritePath],
     ) -> None:
-        save_file_panel_local_favorites(global_entries)
+        try:
+            save_file_panel_local_favorites(global_entries)
+        except OSError as exc:
+            logger.warning(f'Failed to save global local favorites: {exc}')
+            message_warning(self, tr('storage.save_failed_title'), tr('storage.save_config_failed'))
         session = self._session_item_for_tab(tab_id)
         if session is not None:
             session.local_favorites = list(session_entries)
@@ -469,6 +499,21 @@ class MainWindow(QMainWindow):
             handler.cancel_transfers()
 
     async def _close_all_async(self) -> None:
+        connect_tasks = [task for task in self._connect_tasks.values() if not task.done()]
+        for task in connect_tasks:
+            task.cancel()
+        if connect_tasks:
+            await asyncio.gather(*connect_tasks, return_exceptions=True)
+        self._connect_tasks.clear()
+        current = asyncio.current_task()
+        background_tasks = [
+            task for task in self._background_tasks
+            if task is not current and not task.done()
+        ]
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         await asyncio.gather(
             *(handler.wait_transfers_closed() for handler in list(self._sftp_handlers.values())),
             return_exceptions=True,
@@ -546,7 +591,7 @@ class MainWindow(QMainWindow):
             f'session_id={session_item.id}, name={session_item.name}, '
             f'host={session_item.host}, port={session_item.port}, username={session_item.username}'
         )
-        asyncio.create_task(self._connect_session_async(session_item))
+        self._track_background_task(asyncio.create_task(self._connect_session_async(session_item)))
 
     async def _connect_session_async(self, session_item: SessionItem) -> None:
         tab_id, terminal = self.terminal_tabs.add_terminal_tab(session_item.name)
@@ -568,7 +613,9 @@ class MainWindow(QMainWindow):
             if not self._terminal_is_alive(terminal):
                 return
             terminal.write_text(tr('terminal.connected') + '\r\n')
-            asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item))
+            self._track_background_task(
+                asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item))
+            )
 
         def _on_disconnected() -> None:
             if not self._terminal_is_alive(terminal):
@@ -592,6 +639,7 @@ class MainWindow(QMainWindow):
                 terminal,
                 on_connected=_on_connected,
                 on_disconnected=_on_disconnected,
+                host_key_confirm=self._confirm_host_key,
             )
         except asyncio.CancelledError:
             logger.info(
@@ -599,6 +647,22 @@ class MainWindow(QMainWindow):
                 f'session_id={session_item.id}, tab_id={tab_id}'
             )
             return
+        except HostKeyChangedError as exc:
+            logger.error(
+                f'SSH host key changed: host={exc.host}, port={exc.port}, '
+                f'expected={exc.expected}, actual={exc.actual}'
+            )
+            if self._terminal_is_alive(terminal):
+                terminal.write_text(tr(
+                    'terminal.host_key_changed',
+                    host=exc.host,
+                    port=exc.port,
+                    expected=exc.expected,
+                    actual=exc.actual,
+                ) + '\r\n')
+        except HostKeyRejectedError:
+            if self._terminal_is_alive(terminal):
+                terminal.write_text(tr('terminal.host_key_rejected') + '\r\n')
         except Exception as exc:
             logger.warning(
                 'Connect session failed: '
@@ -610,6 +674,25 @@ class MainWindow(QMainWindow):
         finally:
             if self._connect_tasks.get(tab_id) is current_task:
                 self._connect_tasks.pop(tab_id, None)
+
+    async def _confirm_host_key(
+        self,
+        host: str,
+        port: int,
+        algorithm: str,
+        fingerprint: str,
+    ) -> bool:
+        return await ask_yes_no_async(
+            self,
+            tr('terminal.host_key_title'),
+            tr(
+                'terminal.host_key_first_seen',
+                host=host,
+                port=port,
+                algorithm=algorithm,
+                fingerprint=fingerprint,
+            ),
+        )
 
     @staticmethod
     def _terminal_is_alive(terminal: TerminalVTWidget) -> bool:
@@ -669,7 +752,9 @@ class MainWindow(QMainWindow):
             else:
                 self.session_panel.set_active_history_tab(None)
                 self.file_panels.show_empty()
-        asyncio.create_task(self._finalize_tab_close_async(tab_id, handler))
+        self._track_background_task(
+            asyncio.create_task(self._finalize_tab_close_async(tab_id, handler))
+        )
 
     async def _finalize_tab_close_async(
         self,
@@ -697,7 +782,9 @@ class MainWindow(QMainWindow):
             handler = self._sftp_handlers.get(tab_id)
             if handler is not None:
                 handler.cancel_transfers()
-            asyncio.create_task(self._close_tab_after_transfers_async(tab_id))
+            self._track_background_task(
+                asyncio.create_task(self._close_tab_after_transfers_async(tab_id))
+            )
             return
         self.terminal_tabs.force_close_tab(tab_id)
 
@@ -773,12 +860,17 @@ class MainWindow(QMainWindow):
                 widget.apply_terminal_font(family, size_px)
 
     def _save_settings(self, settings: AppSettings) -> None:
-        save_app_preferences(
-            theme=settings.theme,
-            terminal_font_family=settings.family,
-            terminal_font_size_px=settings.size,
-            language=settings.language,
-        )
+        try:
+            save_app_preferences(
+                theme=settings.theme,
+                terminal_font_family=settings.family,
+                terminal_font_size_px=settings.size,
+                language=settings.language,
+            )
+        except OSError as exc:
+            logger.warning(f'Failed to save app preferences: {exc}')
+            message_warning(self, tr('storage.save_failed_title'), tr('storage.save_config_failed'))
+            return
         set_language(settings.language)
         self._apply_appearance()
 
@@ -879,4 +971,6 @@ class MainWindow(QMainWindow):
 
     def _resize_active_terminal(self) -> None:
         if self._active_tab_id is not None:
-            asyncio.create_task(self.connection_manager.resize_terminal(self._active_tab_id))
+            self._track_background_task(
+                asyncio.create_task(self.connection_manager.resize_terminal(self._active_tab_id))
+            )

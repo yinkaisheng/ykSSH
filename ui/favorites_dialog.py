@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 )
 
 from i18n import register_retranslator, tr, unregister_retranslator
+from log_util import logger
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_favorites_dialog_size
 from ui.dialog_i18n import translate_button_box
@@ -262,7 +263,10 @@ class LocalFavoritesDialog(QWidget):
         register_retranslator(self.retranslate_ui)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        save_favorites_dialog_size(local=True, width=self.width(), height=self.height())
+        try:
+            save_favorites_dialog_size(local=True, width=self.width(), height=self.height())
+        except OSError as exc:
+            logger.warning(f'Failed to save local favorites dialog size: {exc}')
         unregister_retranslator(self.retranslate_ui)
         super().closeEvent(event)
 
@@ -320,7 +324,10 @@ class RemoteFavoritesDialog(QWidget):
         register_retranslator(self.retranslate_ui)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        save_favorites_dialog_size(local=False, width=self.width(), height=self.height())
+        try:
+            save_favorites_dialog_size(local=False, width=self.width(), height=self.height())
+        except OSError as exc:
+            logger.warning(f'Failed to save remote favorites dialog size: {exc}')
         unregister_retranslator(self.retranslate_ui)
         super().closeEvent(event)
 

@@ -4,7 +4,7 @@
 
 ## 项目概况
 
-- **YKShell**：本地 PyQt5 SSH 客户端，包含 Session 树、多 Tab 终端和 SFTP 文件管理。
+- **ykSSH**：本地 PyQt5 SSH 客户端，包含 Session 树、多 Tab 终端和 SFTP 文件管理。
 - **技术栈**：PyQt5 + asyncssh + qasync + pyte；改动时保持该技术栈，不要切换到 PyQt6 或 paramiko。
 - 界面文案与注释默认中文；**用户可见字符串**必须走 i18n（`tr('namespace.key')`），不要在业务逻辑中硬编码中英文。
 
@@ -25,12 +25,12 @@
 
 - Python 3.10+，`from __future__ import annotations`，UTF-8，`# -*- coding: utf-8 -*-`。
 - 新代码匹配现有风格：类型标注、简短 docstring、分层清晰（models → core → storage → ui）。
-- 移植或对齐 `../http-requester`、`../nebula-shell` 时保持 PyQt5，并改为 YKShell 包结构。
+- 移植或对齐 `../http-requester`、`../nebula-shell` 时保持 PyQt5，并改为 ykSSH 包结构。
 
 ## 验证
 
 ```powershell
-cd E:\codes\python\YKShell
+cd E:\codes\python\ykSSH
 pip install -r requirements.txt
 python -c "from ui.main_window import MainWindow"
 python main.py

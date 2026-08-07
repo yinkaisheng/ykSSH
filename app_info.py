@@ -2,6 +2,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-APP_NAME = 'YKShell'
+APP_NAME = 'ykSSH'
 APP_VERSION = '1.0.0'
-GITHUB_URL = 'https://github.com/yinkaisheng/YKShell'
+GITHUB_URL = 'https://github.com/yinkaisheng/ykSSH'

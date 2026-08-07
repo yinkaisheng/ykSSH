@@ -715,14 +715,14 @@ QLineEdit, QPlainTextEdit {{
     color: {p.text_primary};
     border: 1px solid {p.border};
     border-radius: 0px;
-    padding: 4px 8px;
+    padding: 4px 4px;
     selection-background-color: {p.highlight};
     selection-color: {p.highlight_text};
 }}
 
 QLineEdit#SessionFilterEdit {{
     font-size: {filter_edit_font_size}px;
-    padding: {filter_edit_pad_y}px 6px;
+    padding: {filter_edit_pad_y}px 4px;
 }}
 
 QWidget#filePanelToolbar QLabel,
@@ -732,7 +732,7 @@ QWidget#filePanelToolbar QPushButton {{
 
 QWidget#filePanelToolbar QLineEdit {{
     font-size: {file_panel_toolbar_font_size}px;
-    padding: {file_panel_toolbar_pad_y}px 8px;
+    padding: {file_panel_toolbar_pad_y}px 4px;
 }}
 
 QWidget#fileNavToolbar QToolButton#filePanelNavButton {{
@@ -763,7 +763,7 @@ QWidget#filePanelStatusBar QLabel {{
 
 QWidget#filePanelStatusBar QLineEdit#fileFilterEdit {{
     font-size: {file_panel_statusbar_font_size}px;
-    padding: 0px 6px;
+    padding: 0px 4px;
 }}
 
 QWidget#filePanelStatusBar QToolButton#filePanelStatusButton {{
@@ -936,7 +936,7 @@ QTableWidget#headerTable::item:selected:!active {{
 }}
 
 QTableWidget QLineEdit#tableCellEditor {{
-    padding: 0px 4px;
+    padding: 1px 4px;
     margin: 0px;
     border: none;
     background-color: {p.background_primary};
@@ -1135,6 +1135,11 @@ QToolButton#drawerHeaderButton {{
 
 QToolButton#drawerHeaderButton:hover {{
     color: {p.highlight};
+}}
+
+QToolButton#drawerHeaderButton QLabel {{
+    padding: 0;
+    margin: 0;
 }}
 
 QLabel#historyItemLabel {{

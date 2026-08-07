@@ -446,10 +446,7 @@ def _to_app_config(data: Dict[str, Any]) -> AppConfig:
 
 
 def _save_config(path: Path, data: Dict[str, Any]) -> None:
-    try:
-        atomic_write_json(path, data)
-    except OSError:
-        logger.warning(f'Failed to save app config to {path}')
+    atomic_write_json(path, data)
 
 
 def _config_needs_save(raw: Dict[str, Any], normalized: Dict[str, Any]) -> bool:
@@ -481,7 +478,10 @@ def _load_config(path: Path = CONFIG_FILE) -> AppConfig:
     global _raw_config_cache
     if not path.exists():
         normalized = _default_config()
-        _save_config(path, normalized)
+        try:
+            _save_config(path, normalized)
+        except OSError as exc:
+            logger.warning(f'Failed to create app config at {path}: {exc}')
         _raw_config_cache = normalized
         return _to_app_config(normalized)
 
@@ -491,7 +491,10 @@ def _load_config(path: Path = CONFIG_FILE) -> AppConfig:
     except (json.JSONDecodeError, OSError):
         logger.warning(f'Failed to load app config from {path}; using defaults')
         normalized = _default_config()
-        _save_config(path, normalized)
+        try:
+            _save_config(path, normalized)
+        except OSError as exc:
+            logger.warning(f'Failed to replace invalid app config at {path}: {exc}')
         _raw_config_cache = normalized
         return _to_app_config(normalized)
 
@@ -500,7 +503,10 @@ def _load_config(path: Path = CONFIG_FILE) -> AppConfig:
 
     normalized = _normalize_config(raw)
     if _config_needs_save(raw, normalized):
-        _save_config(path, normalized)
+        try:
+            _save_config(path, normalized)
+        except OSError as exc:
+            logger.warning(f'Failed to normalize app config at {path}: {exc}')
     _raw_config_cache = normalized
     return _to_app_config(normalized)
 

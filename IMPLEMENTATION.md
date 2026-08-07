@@ -1,6 +1,6 @@
-# YKShell 实现文档
+# ykSSH 实现文档
 
-本文档描述 YKShell 当前代码的架构、数据流与实现细节，供开发者阅读与维护参考。
+本文档描述 ykSSH 当前代码的架构、数据流与实现细节，供开发者阅读与维护参考。
 
 与 [`AGENTS.md`](AGENTS.md) 的分工：
 
@@ -13,7 +13,7 @@
 
 ## 1. 项目概述
 
-**YKShell** 是一款本地桌面 **PyQt5 SSH 客户端**，功能类似 WindTerm：
+**ykSSH** 是一款本地桌面 **PyQt5 SSH 客户端**，功能类似 WindTerm：
 
 - 左侧 Session 树（分组 + 连接配置）
 - 右侧多 Tab 终端（VT100 仿真）
@@ -46,7 +46,7 @@ loguru
 - **启动：**
 
 ```powershell
-cd E:\codes\python\YKShell
+cd E:\codes\python\ykSSH
 pip install -r requirements.txt
 python main.py
 ```
@@ -57,7 +57,7 @@ python main.py
 
 ```
 main.py
-  ├─ config_logger()            # logs/ykshell.log
+  ├─ config_logger()            # logs/ykssh.log
   ├─ init_app_config()          # 加载 config/config.json
   ├─ QApplication + Fusion 样式
   ├─ install_*_translations()   # 对话框 / 右键菜单 i18n
@@ -79,7 +79,7 @@ main.py
 ## 4. 目录结构与模块职责
 
 ```
-YKShell/
+ykSSH/
 ├── main.py                      # 应用入口
 ├── app_info.py                  # APP_NAME / APP_VERSION
 ├── log_util.py                  # loguru 日志封装
@@ -104,6 +104,7 @@ YKShell/
 │   ├── command_history_store.py # 内存历史命令（按运行时 Tab 分桶）
 │   ├── credential_store.py      # credentials.json（Fernet 加密密码）
 │   ├── secret_key.py            # secret.key 生成/加载
+│   ├── host_key_store.py         # host_keys.json（SSH 服务器 TOFU 公钥）
 │
 ├── i18n/
 │   ├── translator.py            # tr() 引擎
@@ -243,6 +244,8 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；中文名称额外支持按拼音首字母过滤（如 `zw` 匹配“中文测试”），首字符为单个多音汉字或后接非汉字时允许首字母多音变体（如“长”和“长abc.txt”可用 `c`/`z`，而“长度”按默认读音 `cd`）；ESC 或路径变化清除过滤。
 - 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。当前行单选且为文件夹时，Enter 进入该目录。
 - 本地文件 table：**Delete** → 回收站（无确认）；**Shift+Delete** → 永久删除（无确认）。右键菜单默认「移到回收站」；按住 **Shift** 再右键则显示「永久删除」并弹确认（对齐资源管理器习惯）。远端 Delete 弹确认后删除，Shift+Delete 直接删除。
+- 本地/远端文件可通过右键菜单或文件表格获得焦点时按 **F2** 重命名，名称列显示行内 `QLineEdit`：文件按常见单/复合后缀智能选中名称部分（如 `abc.test.tar.gz` 选中 `abc.test`），未知后缀或目录选中全名；**Esc** 取消，**Enter** 或编辑框失焦提交。
+- 本地/远端右键「属性」可编辑权限：对话框显示选择项目数；存在直接选中的文件时额外显示文件数、文件总大小和精确字节数，只有文件夹时不显示大小（不递归统计文件夹内容）。Unix/远端显示 owner/group/others 的 rwx；Windows 本地因 `os.chmod` 只能可靠控制只读标志，按资源管理器习惯仅显示单一“只读”选项（取消即恢复可写）。多选时权限位以三态显示：半选表示各项目值不一致并保持原值，用户点击后只在勾选/取消间切换；选中目录时可递归应用。本地递归通过 `asyncio.to_thread` 后台执行；远端先通过 SFTP 枚举且不跟随 symlink，再以每批 16 项并发 `chmod(..., follow_symlinks=False)`。执行期间文件面板 statusbar 显示齿轮图标，tooltip 显示已处理/总数及失败数，完成后刷新列表。
 - **上传/下载仅通过右键菜单发起**（不支持文件面板拖拽互传）。默认上传到右侧远端面板当前路径、下载到左侧本地面板当前路径；远端右键菜单另提供“下载到其它位置...”用于选择一次性本地目标目录，不改变左侧面板当前路径。活动传输期间 statusbar 显示速度、百分比与方向图标，底部约 4px 进度条，空闲时隐藏。上传与下载独立统计，可双向同时显示；tooltip 显示已传/总大小。
 - SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。冲突对话框经非阻塞 `ask_transfer_conflict_async` 弹出（不卡住 qasync）；传输/远端操作失败 warning 同样为非阻塞 async dialog，关闭/取消任务时会自动收起。选项：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime。冲突取消中止剩余项目，不回滚已写入内容。远端列表与下载会 follow 指向目录的 symlink，使其可进入/递归下载；目录下载与下载前体积统计使用 `realpath` 记录已访问目录，遇到环路会跳过递归分支；远端删除对 symlink 使用 `lstat`，只删链接本身不跟随目标。关闭 Tab 或退出程序时若仍有传输/远端改名/删除/新建等后台任务，会提示是否中断；确认后 cancel 并 **await 任务结束** 再 disconnect，保留已写入内容。
 
@@ -353,7 +356,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 `SSHSession`（`core/ssh_session.py`）：
 
-- 使用 `asyncssh.connect()`，`known_hosts=None`（**未校验 host key**，生产环境待完善）；`connect_timeout` / `login_timeout` 当前为 15 秒
+- 认证前使用 `asyncssh.get_server_host_key()` 获取服务器主机密钥，并由 `HostKeyStore` 执行 TOFU 校验；首次连接展示算法和 SHA256 指纹供用户确认，确认后写入 `config/host_keys.json`，后续指纹变化会阻止连接。实际 `asyncssh.connect()` 使用本次已确认密钥构造的 `known_hosts` 再次校验，避免探测与认证之间密钥被替换；`connect_timeout` / `login_timeout` 当前为 15 秒
 - 认证：`AUTH_PASSWORD`（密码来自 CredentialStore）或 `AUTH_PUBLIC_KEY`（`key_path`）
 - 同时打开 Shell process 与 SFTP client
 - Signal：`connected` / `disconnected` / `data_received` / `error`
@@ -374,6 +377,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 | `config/commands.json` | 快捷命令树（分组、显示名、命令详情、命令解释） | 否 |
 | `config/credentials.json` | Fernet 加密密码 `passwords[session_id]` | **是** |
 | `config/secret.key` | 解密 credentials 的密钥 | **是** |
+| `config/host_keys.json` | 用户已信任的 SSH 服务器公钥（TOFU） | 否 |
 
 > **注意：** 窗口状态保存在 `config.json` 的 `window` 段，**不是**单独的 `session.json`。
 
@@ -476,15 +480,16 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 - `CredentialStore`：Fernet 加密，当前只接受 version 1；解密失败会打 warning 并丢弃无法解密的条目；version 不匹配会拒绝加载整份凭据并阻止后续保存覆盖原文件
 - `secret.key` 与 `credentials.json` **必须配对迁移**
+- `host_keys.json` 保存已确认的服务器身份；不迁移时目标机器会在首次连接时重新询问指纹
 - 若已有 `secret.key` 但内容无效：**不会**静默覆盖生成新钥，启动失败并提示修复（`InvalidSecretKeyError`）
 - 删除 Session 树节点（含文件夹）会递归清理对应 `credentials.json` 条目
-- `config.json` / `sessions.json` / `commands.json` / `credentials.json` 保存时使用同目录临时文件 + `os.replace()` 原子替换，降低进程中断导致 JSON 截断的风险。
+- `config.json` / `sessions.json` / `commands.json` / `credentials.json` / `host_keys.json` 保存时使用同目录临时文件 + `os.replace()` 原子替换，降低进程中断导致 JSON 截断的风险。
 
 ### 8.4 配置目录迁移（WindTerm 风格）
 
-将整个 `config/` 目录复制到另一台电脑的 YKShell 程序目录下（与 `main.py` 同级），即可直接使用，无需重新配置 Session。
+将整个 `config/` 目录复制到另一台电脑的 ykSSH 程序目录下（与 `main.py` 同级），即可直接使用，无需重新配置 Session。
 
-**必须一并复制的文件：**
+**迁移涉及的文件：**
 
 | 文件 | 说明 |
 |------|------|
@@ -493,12 +498,13 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 | `commands.json` | 快捷命令树 |
 | `credentials.json` | Fernet 加密后的 Session 密码 |
 | `secret.key` | 解密密码所需的本地密钥 |
+| `host_keys.json` | 已确认的 SSH 服务器主机密钥；可选迁移，不迁移时需重新确认指纹 |
 
 **迁移步骤：**
 
-1. 在源机器上关闭 ykshell。
-2. 复制整个 `config/` 文件夹到目标机器同名路径（例如 `d:\Codes\Python\YKShell\config\`）。
-3. 在目标机器启动 ykshell；Session 树、密码、外观设置应自动生效。
+1. 在源机器上关闭 ykssh。
+2. 复制整个 `config/` 文件夹到目标机器同名路径（例如 `d:\Codes\Python\ykSSH\config\`）。
+3. 在目标机器启动 ykssh；Session 树、密码、外观设置应自动生效。
 4. 连接 Session 时，文件面板会打开 Session 中配置的本地/远程路径；路径无效或留空时回退到各自的主目录（`~`）。
 
 **注意事项：**
@@ -524,7 +530,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 ### 9.1 运行日志
 
-`main.py` 启动时通过 `log_util.config_logger()` 写入 `logs/ykshell.log`，同时在有 stdout 时输出到控制台。
+`main.py` 启动时通过 `log_util.config_logger()` 写入 `logs/ykssh.log`，同时在有 stdout 时输出到控制台。
 
 关键操作会写日志，便于排查连接与文件管理问题：
 
@@ -533,7 +539,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - 文件管理：本地新建/重命名/删除/移动到回收站，远端新建/重命名/递归删除。
 - 关闭流程：传输中关闭 Tab 或退出程序时，记录用户取消或确认中断。
 
-日志允许记录 session id、主机、端口、用户名、文件路径和错误信息；密码不会写入日志。
+常规日志允许记录 session id、主机、端口、用户名、文件路径和错误信息；密码不会写入日志。`terminal_debug_gutter_selection` / `terminal_debug_history_jump` 属于仅供排障的显式调试开关，可能记录终端可见内容或命令文本，其中可能含 Token 等敏感信息；启用后应保护并及时清理对应调试日志。
 
 ---
 
@@ -627,7 +633,6 @@ sequenceDiagram
 
 | 项 | 说明 |
 |----|------|
-| Host key 校验 | `known_hosts=None`，生产环境需补充 |
 | 文件拖拽互传 | **不支持**；仅右键菜单上传/下载 |
 | 标题栏 Aero Snap | 手动 `window.move()` 拖动，无 Windows 贴边吸附（见 §5.1） |
 | 终端主题 | VT 配色未完全跟随 app theme |
@@ -639,8 +644,10 @@ sequenceDiagram
 | 远端列表性能 | 大目录仍是 `listdir` + 逐项 `lstat`，待改为 attrs readdir 或有界并发 |
 | 下载前体积扫描 | 下载目录前会递归统计大小，大目录开始前可能等待较久 |
 | 本地文件 IO | 上传读文件、目录遍历、本地大小统计、本地删除/重命名/新建目录仍有同步 IO，待 `asyncio.to_thread` 或分片让出事件循环 |
+| 本地链接上传 | 为避免递归环和越出用户选择目录，符号链接与 Windows 目录联接默认跳过；直接选择链接上传会提示不支持 |
 | Tab 重命名 | 右键 Tab 重命名仅修改当前运行时显示标题，不持久化到 `sessions.json` |
 | 密码为空 | 密码认证 Session 若未保存密码，不会弹窗补录；连接时按无密码参数尝试并由 SSH 认证失败返回错误 |
+| 加密私钥口令 | 公钥认证目前只保存私钥路径，尚未提供加密私钥的口令输入与安全存储 |
 
 ---
 
@@ -659,6 +666,8 @@ sequenceDiagram
 3. 在 `RemoteFileTable` 添加上下文菜单或 signal
 4. 在 `RemoteFilePanel.set_sftp_handler` 中 connect
 
+目录上传/下载遇到已存在的目标目录时采用合并语义：保留目标目录独有内容并递归处理源目录；只有同名文件或“文件与目录类型冲突”才显示覆盖/续传/取消对话框，不会为了覆盖目录而先删除整个目标目录。
+
 ### 新增文件面板控件
 
 优先扩展 `LocalFilePanel` / `RemoteFilePanel`，而非直接改 `MainWindow`。
@@ -676,6 +685,7 @@ sequenceDiagram
 ```powershell
 python -c "from ui.main_window import MainWindow"
 python -m compileall .
+python -m unittest discover -s tests -v
 python main.py
 ```
 

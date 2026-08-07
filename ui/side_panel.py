@@ -12,9 +12,12 @@ from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QSizePolicy,
     QToolButton,
     QTreeWidgetItem,
     QTextEdit,
@@ -30,6 +33,7 @@ from storage.app_config import get_app_config
 from storage.command_history_store import CommandHistoryStore
 from storage.command_store import CommandStore
 from storage.credential_store import CredentialStore
+from storage.host_key_store import HostKeyStore
 from storage.session_profile_store import SessionProfileStore
 from ui.dialog_common import add_form_field, create_form_grid
 from ui.dialog_i18n import ask_yes_no, message_warning, translate_button_box
@@ -171,6 +175,7 @@ class SidePanel(QWidget):
         credential_store: Optional[CredentialStore] = None,
         command_store: Optional[CommandStore] = None,
         history_store: Optional[CommandHistoryStore] = None,
+        host_key_store: Optional[HostKeyStore] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -178,6 +183,7 @@ class SidePanel(QWidget):
         self.keyring = credential_store or CredentialStore()
         self.command_store = command_store or CommandStore()
         self.history_store = history_store or CommandHistoryStore()
+        self.host_keys = host_key_store or HostKeyStore()
         self._items: List[SessionItem] = []
         self._commands: List[CommandItem] = []
         self._history_items: List[CommandHistoryItem] = []
@@ -200,6 +206,8 @@ class SidePanel(QWidget):
         layout.setSpacing(4)
 
         self._drawer_buttons: Dict[str, QToolButton] = {}
+        self._drawer_symbols: Dict[str, QLabel] = {}
+        self._drawer_titles: Dict[str, QLabel] = {}
 
         self._sessions_button = self._create_drawer_button(DRAWER_SESSIONS)
         layout.addWidget(self._sessions_button)
@@ -262,10 +270,25 @@ class SidePanel(QWidget):
     def _create_drawer_button(self, drawer: str) -> QToolButton:
         button = QToolButton(self)
         button.setObjectName('drawerHeaderButton')
-        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         button.setCheckable(True)
         button.clicked.connect(lambda _checked=False, d=drawer: self._set_active_drawer(d))
+        header_layout = QHBoxLayout(button)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(4)
+        symbol = QLabel(button)
+        symbol.setObjectName('drawerHeaderSymbol')
+        symbol.setAlignment(Qt.AlignCenter)
+        symbol.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        title = QLabel(button)
+        title.setObjectName('drawerHeaderTitle')
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        header_layout.addWidget(symbol)
+        header_layout.addWidget(title, 1)
         self._drawer_buttons[drawer] = button
+        self._drawer_symbols[drawer] = symbol
+        self._drawer_titles[drawer] = title
         return button
 
     def _set_active_drawer(self, drawer: str) -> None:
@@ -296,9 +319,9 @@ class SidePanel(QWidget):
         }[self._active_drawer]
 
     def _update_drawer_texts(self) -> None:
-        for drawer, button in self._drawer_buttons.items():
-            prefix = '▾' if drawer == self._active_drawer else '▸'
-            button.setText(f"{prefix} {tr(self._drawer_title_key(drawer))}")
+        for drawer in self._drawer_buttons:
+            self._drawer_symbols[drawer].setText('-' if drawer == self._active_drawer else '+')
+            self._drawer_titles[drawer].setText(tr(self._drawer_title_key(drawer)))
 
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
         if event.type() == QEvent.KeyPress and isinstance(event, QKeyEvent):
@@ -368,9 +391,27 @@ class SidePanel(QWidget):
             self._history_items = []
             self._rebuild_history_list()
 
-    def persist_sessions(self) -> None:
+    def persist_sessions(self) -> bool:
         """Write current in-memory session tree (including favorites) to disk."""
-        self.store.save_items(self._items)
+        return self._save_sessions()
+
+    def _save_sessions(self) -> bool:
+        if self.store.save_items(self._items):
+            return True
+        message_warning(self, tr('storage.save_failed_title'), tr('storage.save_sessions_failed'))
+        return False
+
+    def _save_commands(self) -> bool:
+        if self.command_store.save_items(self._commands):
+            return True
+        message_warning(self, tr('storage.save_failed_title'), tr('storage.save_commands_failed'))
+        return False
+
+    def _save_credential_result(self, saved: bool) -> bool:
+        if saved:
+            return True
+        message_warning(self, tr('storage.save_failed_title'), tr('storage.save_credentials_failed'))
+        return False
 
     def _rebuild_tree(self) -> None:
         self.tree.clear()
@@ -457,7 +498,7 @@ class SidePanel(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             new_items.append(self._tree_to_session(self.tree.topLevelItem(i), lookup))
         self._items = new_items
-        self.store.save_items(self._items)
+        self._save_sessions()
         self.tree.viewport().update()
 
     @staticmethod
@@ -551,7 +592,7 @@ class SidePanel(QWidget):
         for i in range(self.commands_tree.topLevelItemCount()):
             new_items.append(self._tree_to_command(self.commands_tree.topLevelItem(i), lookup))
         self._commands = new_items
-        self.command_store.save_items(self._commands)
+        self._save_commands()
         self.commands_tree.viewport().update()
 
     @staticmethod
@@ -682,6 +723,10 @@ class SidePanel(QWidget):
             add_menu_key(menu, connect_action, Qt.Key_C)
             edit_action = menu.addAction(tr('sessions.edit'))
             add_menu_key(menu, edit_action, Qt.Key_E)
+            session = self._find_session_by_tree(item)
+            forget_host_key_action = None
+            if session is not None and self.host_keys.has(session.host, session.port):
+                forget_host_key_action = menu.addAction(tr('sessions.forget_host_key'))
             add_folder_action = None
             add_session_action = None
             expand_action = None
@@ -738,10 +783,31 @@ class SidePanel(QWidget):
                 self._on_item_double_clicked(item, 0)
             elif action == edit_action:
                 self._edit_session(item)
+            elif forget_host_key_action is not None and action == forget_host_key_action:
+                self._forget_host_key(item)
             elif action == rename_action:
                 self._rename_item(item)
             elif action == delete_action:
                 self._delete_item(item, confirm=True)
+
+    def _forget_host_key(self, item: QTreeWidgetItem) -> None:
+        session = self._find_session_by_tree(item)
+        if session is None or session.is_folder():
+            return
+        fingerprint = self.host_keys.fingerprint(session.host, session.port)
+        if not ask_yes_no(
+            self,
+            tr('sessions.forget_host_key'),
+            tr(
+                'sessions.forget_host_key_confirm',
+                host=session.host,
+                port=session.port,
+                fingerprint=fingerprint,
+            ),
+        ):
+            return
+        if not self.host_keys.forget(session.host, session.port):
+            message_warning(self, tr('storage.save_failed_title'), tr('storage.save_host_keys_failed'))
 
     def _show_command_context_menu(self, pos) -> None:
         item = self.commands_tree.itemAt(pos)
@@ -904,7 +970,7 @@ class SidePanel(QWidget):
         tree_item = self._session_to_tree(session)
         self.tree.addTopLevelItem(tree_item)
         self._items.append(session)
-        self.store.save_items(self._items)
+        self._save_sessions()
         self.sessions_changed.emit()
         self.tree.setCurrentItem(tree_item)
 
@@ -916,7 +982,7 @@ class SidePanel(QWidget):
         tree_item = self._command_to_tree(command)
         self.commands_tree.addTopLevelItem(tree_item)
         self._commands.append(command)
-        self.command_store.save_items(self._commands)
+        self._save_commands()
         self.commands_tree.setCurrentItem(tree_item)
 
     def _add_folder_under(self, parent_item: QTreeWidgetItem) -> None:
@@ -930,7 +996,7 @@ class SidePanel(QWidget):
         parent_session = self._find_session_by_tree(parent_item)
         if parent_session is not None:
             parent_session.children.append(session)
-        self.store.save_items(self._items)
+        self._save_sessions()
         self.sessions_changed.emit()
         self.tree.setCurrentItem(tree_item)
 
@@ -945,7 +1011,7 @@ class SidePanel(QWidget):
         parent_command = self._find_command_by_tree(parent_item)
         if parent_command is not None:
             parent_command.children.append(command)
-        self.command_store.save_items(self._commands)
+        self._save_commands()
         self.commands_tree.setCurrentItem(tree_item)
 
     def _add_session_to_parent(self, parent_item: Optional[QTreeWidgetItem]) -> None:
@@ -955,7 +1021,7 @@ class SidePanel(QWidget):
         session = dialog.get_session()
         password = dialog.get_password()
         if password:
-            self.keyring.set_password(session.id, password)
+            self._save_credential_result(self.keyring.set_password(session.id, password))
         tree_item = self._session_to_tree(session)
         if parent_item is not None:
             parent_item.addChild(tree_item)
@@ -966,7 +1032,7 @@ class SidePanel(QWidget):
         else:
             self.tree.addTopLevelItem(tree_item)
             self._items.append(session)
-        self.store.save_items(self._items)
+        self._save_sessions()
         self.sessions_changed.emit()
         self.tree.setCurrentItem(tree_item)
 
@@ -987,7 +1053,7 @@ class SidePanel(QWidget):
         else:
             self.commands_tree.addTopLevelItem(tree_item)
             self._commands.append(command)
-        self.command_store.save_items(self._commands)
+        self._save_commands()
         self.commands_tree.setCurrentItem(tree_item)
 
     def _edit_session(self, item: QTreeWidgetItem) -> None:
@@ -1013,14 +1079,14 @@ class SidePanel(QWidget):
         session.remote_path = updated.remote_path
         password = dialog.get_password()
         if session.auth_type != AUTH_PASSWORD:
-            self.keyring.delete_password(session.id)
+            self._save_credential_result(self.keyring.delete_password(session.id))
         elif password:
-            self.keyring.set_password(session.id, password)
+            self._save_credential_result(self.keyring.set_password(session.id, password))
         else:
-            self.keyring.delete_password(session.id)
+            self._save_credential_result(self.keyring.delete_password(session.id))
         item.setText(0, session.name)
         item.setToolTip(0, _session_tooltip(session))
-        self.store.save_items(self._items)
+        self._save_sessions()
         self.sessions_changed.emit()
 
     def _edit_command(self, item: QTreeWidgetItem) -> None:
@@ -1035,7 +1101,7 @@ class SidePanel(QWidget):
             return
         item.setText(0, updated.name)
         item.setToolTip(0, _command_tooltip(updated))
-        self.command_store.save_items(self._commands)
+        self._save_commands()
 
     def _rename_item(self, item: QTreeWidgetItem) -> None:
         session = self._find_session_by_tree(item)
@@ -1072,12 +1138,13 @@ class SidePanel(QWidget):
         if not command.is_folder():
             item.setToolTip(0, _command_tooltip(command))
 
-    def _delete_credentials_recursive(self, session: SessionItem) -> None:
+    def _delete_credentials_recursive(self, session: SessionItem) -> bool:
+        saved = True
         if session.is_folder():
             for child in session.children:
-                self._delete_credentials_recursive(child)
-            return
-        self.keyring.delete_password(session.id)
+                saved = self._delete_credentials_recursive(child) and saved
+            return saved
+        return self.keyring.delete_password(session.id)
 
     def _delete_item(self, item: QTreeWidgetItem, confirm: bool = False) -> None:
         session = self._find_session_by_tree(item)
@@ -1097,7 +1164,7 @@ class SidePanel(QWidget):
                 tr('sessions.confirm_delete_body', name=item.text(0)),
             ):
                 return
-        self._delete_credentials_recursive(session)
+        self._save_credential_result(self._delete_credentials_recursive(session))
         parent = item.parent()
         if parent:
             parent.removeChild(item)
@@ -1267,6 +1334,10 @@ class SidePanel(QWidget):
 
     def apply_appearance(self) -> None:
         appearance = get_app_config().appearance
+        symbol_font = QFont(appearance.terminal_font_family)
+        symbol_font.setStyleHint(QFont.Monospace)
+        for symbol in self._drawer_symbols.values():
+            symbol.setFont(symbol_font)
         tree_font = QFont()
         tree_font.setPixelSize(appearance.session_tree_font_size_px)
         self.tree.setFont(tree_font)

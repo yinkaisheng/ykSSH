@@ -74,7 +74,7 @@ def run_qt_app() -> None:
 
 
 def main() -> None:
-    config_logger(logger, log_dir=str(LOGS_DIR), log_file='ykshell.log', log_to_stdout=bool(sys.stdout))
+    config_logger(logger, log_dir=str(LOGS_DIR), log_file='ykssh.log', log_to_stdout=bool(sys.stdout))
 
     logger.info('========================================\n')
     logger.info(f'executable={exe_path}, pid={os.getpid()}, working_directory={os.getcwd()}')

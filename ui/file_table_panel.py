@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
     QApplication,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -34,7 +35,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from core.file_permissions import format_local_permission
+from core.file_permissions import PermissionChange, format_local_permission
 from i18n import tr
 from log_util import logger
 from models.favorite_path import FavoritePath
@@ -49,6 +50,7 @@ from ui.file_panel_defaults import (
     column_widths_from_table,
 )
 from ui.prompt_dialog import prompt_text
+from ui.file_properties_dialog import FilePropertiesDialog
 
 try:
     from pypinyin import Style, lazy_pinyin, pinyin
@@ -69,7 +71,73 @@ SORT_NAME = Qt.UserRole + 2
 SORT_SIZE = Qt.UserRole + 3
 SORT_MTIME = Qt.UserRole + 4
 SORT_PERM = Qt.UserRole + 5
+PERMISSION_MODE = Qt.UserRole + 6
 _PARENT_SORT_RANK = 0
+
+# Used only to choose the editable stem; the actual rename operation accepts
+# any valid filesystem name.  Compound suffixes must be checked first.
+_COMMON_RENAME_SUFFIXES = frozenset({
+    '.tar', '.tar.gz', '.tar.bz2', '.tar.xz', '.tar.zst', '.tar.lz', '.tar.lzma',
+    '.tgz', '.tbz', '.tbz2', '.txz', '.tlz',
+    '.7z', '.bz2', '.gz', '.xz', '.zst', '.zip', '.rar',
+    '.apk', '.appimage', '.deb', '.dmg', '.exe', '.msi', '.rpm',
+    '.csv', '.doc', '.docx', '.md', '.pdf', '.ppt', '.pptx', '.rtf', '.txt', '.xls', '.xlsx',
+    '.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.png', '.svg', '.tif', '.tiff', '.webp',
+    '.aac', '.flac', '.m4a', '.mp3', '.ogg', '.wav',
+    '.avi', '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.webm',
+    '.c', '.cc', '.cpp', '.css', '.go', '.h', '.hpp', '.html', '.java', '.js', '.json',
+    '.jsx', '.kt', '.lua', '.py', '.rs', '.sh', '.sql', '.ts', '.tsx', '.xml', '.yaml', '.yml',
+})
+
+
+def _rename_selection_length(name: str) -> int:
+    """Return the stem length to select for an inline rename editor."""
+    if not name or name.startswith('.'):
+        return len(name)
+    lower_name = name.casefold()
+    for suffix in sorted(_COMMON_RENAME_SUFFIXES, key=len, reverse=True):
+        if lower_name.endswith(suffix) and len(name) > len(suffix):
+            return len(name) - len(suffix)
+    return len(name)
+
+
+def _apply_local_permission_change(
+    paths: Sequence[str],
+    change: PermissionChange,
+    progress: Callable[[int, int, int], None],
+) -> tuple[int, int]:
+    """Apply permissions in a worker thread, returning (processed, failed)."""
+    targets: list[str] = []
+    for path in dict.fromkeys(paths):
+        if change.recursive and os.path.isdir(path) and not os.path.islink(path):
+            nested_dirs: list[str] = []
+            for root, dir_names, file_names in os.walk(path, topdown=True, followlinks=False):
+                dir_names[:] = [name for name in dir_names if not os.path.islink(os.path.join(root, name))]
+                targets.extend(
+                    os.path.join(root, name)
+                    for name in file_names
+                    if not os.path.islink(os.path.join(root, name))
+                )
+                nested_dirs.extend(os.path.join(root, name) for name in dir_names)
+            targets.extend(reversed(nested_dirs))
+        targets.append(path)
+
+    targets = list(dict.fromkeys(targets))
+    total = len(targets)
+    failed = 0
+    progress(0, total, failed)
+    for done, target in enumerate(targets, start=1):
+        try:
+            current = os.lstat(target).st_mode
+            new_mode = change.apply(current)
+            if os.path.islink(target):
+                os.chmod(target, new_mode, follow_symlinks=False)
+            else:
+                os.chmod(target, new_mode)
+        except (OSError, NotImplementedError):
+            failed += 1
+        progress(done, total, failed)
+    return total, failed
 
 
 class EqualSplitSplitter(QSplitter):
@@ -274,6 +342,46 @@ class _FileTableHeaderView(QHeaderView):
         option.fontMetrics = QFontMetrics(self._body_font)
 
 
+class _InlineRenameEdit(QLineEdit):
+    """Name-cell editor which commits once on Enter/focus loss or cancels on Esc."""
+
+    rename_committed = pyqtSignal(str)
+    rename_cancelled = pyqtSignal()
+
+    def __init__(self, name: str, entry_type: str, parent: QWidget = None) -> None:
+        super().__init__(name, parent)
+        self.setObjectName('tableCellEditor')
+        self._finished = False
+        if entry_type == 'file':
+            self.setSelection(0, _rename_selection_length(name))
+        else:
+            self.selectAll()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_Escape:
+            self._finish(commit=False)
+            event.accept()
+            return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self._finish(commit=True)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        self._finish(commit=True)
+        super().focusOutEvent(event)
+
+    def _finish(self, *, commit: bool) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        if commit:
+            self.rename_committed.emit(self.text())
+        else:
+            self.rename_cancelled.emit()
+
+
 def _apply_file_panel_toolbar_layout(
     toolbar: QWidget,
     *,
@@ -345,6 +453,7 @@ class _BaseFileTable(QTableWidget):
     filter_focus_requested = pyqtSignal()
     filter_cancelled = pyqtSignal()
     favorites_menu_requested = pyqtSignal()
+    property_status_changed = pyqtSignal(bool, int, int, int)
 
     DEFAULT_SORT_COLUMN = 0
     DEFAULT_SORT_ORDER = Qt.AscendingOrder
@@ -365,6 +474,8 @@ class _BaseFileTable(QTableWidget):
         self._filter_text = ''
         self._filter_edit_focused = False
         self._pending_select_name = ''
+        self._inline_rename_edit: Optional[_InlineRenameEdit] = None
+        self._inline_rename_item: Optional[QTableWidgetItem] = None
         self.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.itemSelectionChanged.connect(self._emit_status_counts)
 
@@ -380,6 +491,10 @@ class _BaseFileTable(QTableWidget):
         if event.key() == Qt.Key_D and event.modifiers() & Qt.ControlModifier:
             # Ctrl + D
             self.favorites_menu_requested.emit()
+            event.accept()
+            return
+        if event.key() == Qt.Key_F2 and not event.modifiers():
+            self._rename()
             event.accept()
             return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
@@ -411,6 +526,9 @@ class _BaseFileTable(QTableWidget):
         super().keyPressEvent(event)
 
     def _is_at_root(self) -> bool:
+        raise NotImplementedError
+
+    def _rename(self) -> None:
         raise NotImplementedError
 
     def _jump_to_visible_edge(self, *, last: bool) -> bool:
@@ -445,6 +563,53 @@ class _BaseFileTable(QTableWidget):
     def _select_pending_entry(self) -> None:
         if self._pending_select_name and self._select_entry_by_name(self._pending_select_name):
             self._pending_select_name = ''
+
+    def _start_inline_rename(self, on_commit: Callable[[str, str], None]) -> None:
+        selected_rows = sorted({idx.row() for idx in self.selectedIndexes()})
+        if len(selected_rows) != 1:
+            return
+        item = self.item(selected_rows[0], 0)
+        if item is None or item.text() == '..':
+            return
+
+        self._close_inline_rename()
+        old_name = item.text()
+        entry_type = str(item.data(Qt.UserRole) or 'file')
+        edit = _InlineRenameEdit(old_name, entry_type, self)
+        self._inline_rename_edit = edit
+        self._inline_rename_item = item
+        self.setCellWidget(item.row(), 0, edit)
+        edit.rename_cancelled.connect(self._close_inline_rename)
+        edit.rename_committed.connect(
+            lambda new_name, old=old_name: self._commit_inline_rename(
+                old,
+                new_name,
+                on_commit,
+            )
+        )
+        QTimer.singleShot(0, edit.setFocus)
+
+    def _commit_inline_rename(
+        self,
+        old_name: str,
+        new_name: str,
+        on_commit: Callable[[str, str], None],
+    ) -> None:
+        new_name = new_name.strip()
+        self._close_inline_rename()
+        if not new_name or new_name == old_name:
+            return
+        on_commit(old_name, new_name)
+
+    def _close_inline_rename(self) -> None:
+        edit = self._inline_rename_edit
+        item = self._inline_rename_item
+        self._inline_rename_edit = None
+        self._inline_rename_item = None
+        if item is not None and item.tableWidget() is self and item.row() >= 0:
+            self.removeCellWidget(item.row(), 0)
+        if edit is not None:
+            edit.deleteLater()
 
     def _context_menu_row_at(self, pos) -> Optional[int]:
         index = self.indexAt(pos)
@@ -585,6 +750,7 @@ class _BaseFileTable(QTableWidget):
         perm: str = '',
         *,
         is_parent: bool = False,
+        mode: int = 0,
     ) -> None:
         row = self.rowCount()
         self.insertRow(row)
@@ -599,6 +765,7 @@ class _BaseFileTable(QTableWidget):
             is_parent=is_parent,
         )
         _apply_entry_name_font(name_item, entry_type)
+        name_item.setData(PERMISSION_MODE, int(mode))
         self.setItem(row, 0, name_item)
         self.setItem(row, 1, _make_sort_item('' if entry_type == 'dir' else _format_size(size)))
         self.setItem(row, 2, _make_sort_item(_format_mtime(mtime) if mtime > 0 else ''))
@@ -719,6 +886,7 @@ class LocalFileTable(_BaseFileTable):
         self._current_path = initial_path or os.path.expanduser('~')
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        self._property_tasks: set[asyncio.Task] = set()
 
     def _is_at_root(self) -> bool:
         return _is_local_root(self._current_path)
@@ -756,6 +924,7 @@ class LocalFileTable(_BaseFileTable):
             )
             if len(selected) == 1:
                 add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
+            add_menu_key(menu, menu.addAction(tr('file.properties'), self._properties), Qt.Key_O)
             shift_held = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
             if shift_held:
                 add_menu_key(
@@ -794,13 +963,9 @@ class LocalFileTable(_BaseFileTable):
         self.refresh()
 
     def _rename(self) -> None:
-        selected = self._selected_entries()
-        if len(selected) != 1:
-            return
-        old_name, _ = selected[0]
-        new_name = prompt_text(self, tr('file.rename'), tr('file.prompt_name'), initial=old_name)
-        if not new_name or new_name == old_name:
-            return
+        self._start_inline_rename(self._rename_local)
+
+    def _rename_local(self, old_name: str, new_name: str) -> None:
         old_path = self._local_full_path(old_name)
         new_path = self._local_full_path(new_name)
         try:
@@ -809,7 +974,68 @@ class LocalFileTable(_BaseFileTable):
         except OSError as exc:
             logger.warning(f'Local rename failed: old={old_path}, new={new_path}, error={exc}')
             return
+        self._pending_select_name = new_name
         self.refresh()
+
+    def _properties(self) -> None:
+        selected = self._selected_entries()
+        if not selected:
+            return
+        paths = [self._local_full_path(name) for name, _entry_type in selected]
+        try:
+            stats = [os.lstat(path) for path in paths]
+        except OSError as exc:
+            logger.warning(f'Local properties stat failed: error={exc}')
+            return
+        modes = [item_stat.st_mode for item_stat in stats]
+        file_count = sum(1 for _name, entry_type in selected if entry_type != 'dir')
+        total_file_bytes = sum(
+            item_stat.st_size
+            for item_stat, (_name, entry_type) in zip(stats, selected)
+            if entry_type != 'dir'
+        )
+        dialog = FilePropertiesDialog(
+            modes,
+            has_directories=any(entry_type == 'dir' for _name, entry_type in selected),
+            windows_local=sys.platform == 'win32',
+            file_count=file_count,
+            total_file_bytes=total_file_bytes,
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        task = asyncio.create_task(self._apply_properties_async(paths, dialog.permission_change()))
+        self._property_tasks.add(task)
+        task.add_done_callback(self._property_task_done)
+
+    def _property_task_done(self, task: asyncio.Task) -> None:
+        self._property_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(f'Local properties task failed: error={error}')
+
+    async def _apply_properties_async(self, paths: Sequence[str], change: PermissionChange) -> None:
+        self.property_status_changed.emit(True, 0, 0, 0)
+        try:
+            _done, failed = await asyncio.to_thread(
+                _apply_local_permission_change,
+                paths,
+                change,
+                lambda done, total, failed: self.property_status_changed.emit(
+                    True, done, total, failed,
+                ),
+            )
+            if failed:
+                message_warning(
+                    self,
+                    tr('file.properties'),
+                    tr('file.properties.failed', count=failed),
+                )
+        finally:
+            self.property_status_changed.emit(False, 0, 0, 0)
+            self.refresh()
 
     def _copy_text(self, text: str) -> None:
         clipboard = QApplication.clipboard()
@@ -904,8 +1130,8 @@ class LocalFileTable(_BaseFileTable):
             self._end_refresh(sort_column, sort_order)
             return
 
-        dirs: list[tuple[str, int, float, str]] = []
-        files: list[tuple[str, int, float, str]] = []
+        dirs: list[tuple[str, int, float, str, int]] = []
+        files: list[tuple[str, int, float, str, int]] = []
         for name in entries:
             if name in ('.', '..'):
                 continue
@@ -916,16 +1142,16 @@ class LocalFileTable(_BaseFileTable):
                 continue
             perm = format_local_permission(full)
             if stat.S_ISDIR(st.st_mode):
-                dirs.append((name, st.st_size, st.st_mtime, perm))
+                dirs.append((name, st.st_size, st.st_mtime, perm, st.st_mode))
             else:
-                files.append((name, st.st_size, st.st_mtime, perm))
+                files.append((name, st.st_size, st.st_mtime, perm, st.st_mode))
 
         dirs.sort(key=lambda item: item[0].casefold())
         files.sort(key=lambda item: item[0].casefold())
-        for name, size, mtime, perm in dirs:
-            self._append_entry_row(name, 'dir', size, mtime, perm)
-        for name, size, mtime, perm in files:
-            self._append_entry_row(name, 'file', size, mtime, perm)
+        for name, size, mtime, perm, mode in dirs:
+            self._append_entry_row(name, 'dir', size, mtime, perm, mode=mode)
+        for name, size, mtime, perm, mode in files:
+            self._append_entry_row(name, 'file', size, mtime, perm, mode=mode)
         self._end_refresh(sort_column, sort_order)
         self._select_pending_entry()
 
@@ -960,6 +1186,7 @@ class RemoteFileTable(_BaseFileTable):
     rename_requested = pyqtSignal(str, str)
     mkdir_requested = pyqtSignal(str)
     refresh_requested = pyqtSignal()
+    properties_requested = pyqtSignal(list, object)
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
@@ -1020,6 +1247,7 @@ class RemoteFileTable(_BaseFileTable):
             )
             if len(selected) == 1:
                 add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
+            add_menu_key(menu, menu.addAction(tr('file.properties'), self._properties), Qt.Key_O)
             add_menu_key(menu, menu.addAction(tr('file.delete'), self._delete_selected), Qt.Key_D)
         else:
             menu.addSeparator()
@@ -1033,17 +1261,43 @@ class RemoteFileTable(_BaseFileTable):
             self.mkdir_requested.emit(name)
 
     def _rename(self) -> None:
+        self._start_inline_rename(self._rename_remote)
+
+    def _rename_remote(self, old_name: str, new_name: str) -> None:
+        logger.info(
+            'Remote rename selection: '
+            f'current_path={self._current_path}, old_name={old_name}, new_name={new_name}'
+        )
+        self._pending_select_name = new_name
+        self.rename_requested.emit(old_name, new_name)
+
+    def _properties(self) -> None:
         selected = self._selected_entries()
-        if len(selected) != 1:
+        if not selected:
             return
-        old_name, _ = selected[0]
-        new_name = prompt_text(self, tr('file.rename'), tr('file.prompt_name'), initial=old_name)
-        if new_name and new_name != old_name:
-            logger.info(
-                'Remote rename selection: '
-                f'current_path={self._current_path}, old_name={old_name}, new_name={new_name}'
-            )
-            self.rename_requested.emit(old_name, new_name)
+        modes: list[int] = []
+        file_count = 0
+        total_file_bytes = 0
+        for name, entry_type in selected:
+            items = self.findItems(name, Qt.MatchExactly)
+            item = next((candidate for candidate in items if candidate.column() == 0), None)
+            if item is None:
+                return
+            modes.append(int(item.data(PERMISSION_MODE) or 0))
+            if entry_type != 'dir':
+                file_count += 1
+                total_file_bytes += int(item.data(SORT_SIZE) or 0)
+        dialog = FilePropertiesDialog(
+            modes,
+            has_directories=any(entry_type == 'dir' for _name, entry_type in selected),
+            file_count=file_count,
+            total_file_bytes=total_file_bytes,
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        paths = [self._remote_full_path(name) for name, _entry_type in selected]
+        self.properties_requested.emit(paths, dialog.permission_change())
 
     def _copy_text(self, text: str) -> None:
         clipboard = QApplication.clipboard()
@@ -1156,7 +1410,14 @@ class RemoteFileTable(_BaseFileTable):
             mtime = float(entry.get('mtime', 0) or 0)
             perm = str(entry.get('perm', '') or '')
             entry_type = 'dir' if entry.get('is_dir') else 'file'
-            self._append_entry_row(name, entry_type, size, mtime, perm)
+            self._append_entry_row(
+                name,
+                entry_type,
+                size,
+                mtime,
+                perm,
+                mode=int(entry.get('mode', 0) or 0),
+            )
         self._end_refresh(sort_column, sort_order)
         self._select_pending_entry()
 
@@ -1433,10 +1694,20 @@ class _FilePanelStatusBar(QWidget):
         self._transfer_button.hide()
         layout.addWidget(self._transfer_button)
 
+        self._property_button = QToolButton()
+        self._property_button.setObjectName('filePanelStatusButton')
+        self._property_button.setAutoRaise(True)
+        self._property_button.setEnabled(False)
+        self._property_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._property_button.setText('⚙')
+        self._property_button.hide()
+        layout.addWidget(self._property_button)
+
         table.status_counts_changed.connect(self._update_counts)
         table.filter_text_changed.connect(self._sync_filter_text)
         table.filter_focus_requested.connect(self.focus_filter)
         table.filter_cancelled.connect(self.hide_filter)
+        table.property_status_changed.connect(self.set_property_status)
         self.file_filter_edit.textChanged.connect(table.set_filter_text)
         self.file_filter_edit.installEventFilter(self)
         table.status_counts_changed.emit(0, 0, 0, 0)
@@ -1516,6 +1787,20 @@ class _FilePanelStatusBar(QWidget):
         self._update_progress_bar_geometry()
         self._progress_bar.set_progress(self._transfer_progress if active else 0.0, active)
 
+    def set_property_status(self, active: bool, done: int, total: int, failed: int) -> None:
+        if not active:
+            self._property_button.hide()
+            self._property_button.setToolTip('')
+            return
+        if total > 0:
+            tooltip = tr('file.properties.progress', done=done, total=total)
+        else:
+            tooltip = tr('file.properties.progress_unknown', done=done)
+        if failed:
+            tooltip = f"{tooltip}\n{tr('file.properties.failed', count=failed)}"
+        self._property_button.setToolTip(tooltip)
+        self._property_button.show()
+
     def apply_layout(self) -> None:
         cfg = get_app_config().file_panel
         font = QFont()
@@ -1525,6 +1810,7 @@ class _FilePanelStatusBar(QWidget):
             self._summary_label,
             self._speed_label,
             self._transfer_button,
+            self._property_button,
         ):
             widget.setFont(font)
         height = max(20, cfg.file_panel_statusbar_font_size + 8)
@@ -1532,6 +1818,7 @@ class _FilePanelStatusBar(QWidget):
         self.file_filter_edit.setFixedHeight(height)
         square = QSize(height, height)
         self._transfer_button.setFixedSize(square)
+        self._property_button.setFixedSize(square)
         self._update_progress_bar_geometry()
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
@@ -1853,7 +2140,28 @@ class RemoteFilePanel(QWidget):
         self._favorites_provider: Optional[Callable[[], Sequence[FavoritePath]]] = None
         self._manage_favorites_handler: Optional[Callable[[], None]] = None
         self._favorites_changed_handler: Optional[Callable[[], None]] = None
+        self._background_tasks: set[asyncio.Task] = set()
         self._build_ui()
+        tasks = self._background_tasks
+        self.destroyed.connect(
+            lambda _obj=None: [task.cancel() for task in list(tasks) if not task.done()]
+        )
+
+    def _track_background_task(self, task: asyncio.Task) -> None:
+        self._background_tasks.add(task)
+
+        def _done(done: asyncio.Task) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error is not None:
+                logger.error(f'Remote file panel task failed: {error}')
+
+        task.add_done_callback(_done)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1927,7 +2235,7 @@ class RemoteFilePanel(QWidget):
         if self._sftp_handler is None:
             self.table.set_path(entry.path)
             return
-        asyncio.create_task(self._navigate_favorite_async(entry))
+        self._track_background_task(asyncio.create_task(self._navigate_favorite_async(entry)))
 
     async def _navigate_favorite_async(self, entry: FavoritePath) -> None:
         try:
@@ -1985,7 +2293,7 @@ class RemoteFilePanel(QWidget):
         if self._sftp_handler is None:
             self.table.set_path(path)
             return
-        asyncio.create_task(self._set_path_resolved_async(path))
+        self._track_background_task(asyncio.create_task(self._set_path_resolved_async(path)))
 
     async def _set_path_resolved_async(self, path: str) -> None:
         try:
@@ -2036,10 +2344,14 @@ class RemoteFilePanel(QWidget):
                 self.table.download_to_requested.disconnect()
                 self.table.delete_requested.disconnect()
                 self.table.rename_requested.disconnect()
+                self.table.properties_requested.disconnect()
                 self.table.mkdir_requested.disconnect()
                 self.table.refresh_requested.disconnect()
                 self._sftp_handler.transfer_status_changed.disconnect(
                     self.statusbar.set_transfer_status,
+                )
+                self._sftp_handler.property_status_changed.disconnect(
+                    self.statusbar.set_property_status,
                 )
             except TypeError:
                 pass
@@ -2052,9 +2364,11 @@ class RemoteFilePanel(QWidget):
         self.table.download_to_requested.connect(handler.download_remote_paths_to)
         self.table.delete_requested.connect(handler.delete_remote_paths)
         self.table.rename_requested.connect(handler.rename_remote)
+        self.table.properties_requested.connect(handler.apply_remote_properties)
         self.table.mkdir_requested.connect(handler.mkdir_remote)
         self.table.set_download_directory_provider(lambda: handler.local_dir)
         handler.transfer_status_changed.connect(self.statusbar.set_transfer_status)
+        handler.property_status_changed.connect(self.statusbar.set_property_status)
         self.table.refresh_requested.connect(
             lambda: handler.refresh_remote(self.table.current_path()),
         )
@@ -2190,11 +2504,21 @@ class FilePanelsContainer(QWidget):
 
     def _on_save_column_widths(self, is_local: bool, widths: dict[str, int]) -> None:
         if is_local:
-            save_file_panel_column_widths(local_column_widths=widths)
+            try:
+                save_file_panel_column_widths(local_column_widths=widths)
+            except OSError as exc:
+                logger.warning(f'Failed to save local file column widths: {exc}')
+                message_warning(self, tr('storage.save_failed_title'), tr('storage.save_config_failed'))
+                return
             for panel in self._panels.values():
                 panel.local_file_panel.apply_column_widths(widths)
             return
-        save_file_panel_column_widths(remote_column_widths=widths)
+        try:
+            save_file_panel_column_widths(remote_column_widths=widths)
+        except OSError as exc:
+            logger.warning(f'Failed to save remote file column widths: {exc}')
+            message_warning(self, tr('storage.save_failed_title'), tr('storage.save_config_failed'))
+            return
         for panel in self._panels.values():
             panel.remote_file_panel.apply_column_widths(widths)
 

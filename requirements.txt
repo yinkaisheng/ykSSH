@@ -1,8 +1,8 @@
-PyQt5>=5.15
-asyncssh>=2.14
-pyte>=0.8
-qasync>=0.27
-cryptography>=42.0
-colorama
-loguru
-pypinyin
+PyQt5>=5.15,<5.16
+asyncssh>=2.14,<3
+pyte>=0.8,<0.9
+qasync>=0.27,<1
+cryptography>=42.0,<50
+colorama>=0.4,<1
+loguru>=0.7,<1
+pypinyin>=0.50,<1

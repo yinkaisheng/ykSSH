@@ -1,10 +1,10 @@
-# YKShell
+# ykSSH
 
-YKShell is a local desktop SSH client built with PyQt5. It provides a WindTerm-like workspace with a session tree, tabbed terminal sessions, and a dual-pane local/remote file manager backed by SFTP.
+ykSSH is a local desktop SSH client built with PyQt5. It provides a WindTerm-like workspace with a session tree, tabbed terminal sessions, and a dual-pane local/remote file manager backed by SFTP.
 
 The project is currently in active development and primarily targets Windows.
 
-![YKShell screenshot](images/screenshot.png)
+![ykSSH screenshot](images/screenshot.png)
 
 ## Features
 
@@ -32,8 +32,8 @@ The project is currently in active development and primarily targets Windows.
 ## Installation
 
 ```powershell
-git clone https://github.com/yinkaisheng/YKShell.git
-cd YKShell
+git clone https://github.com/yinkaisheng/ykSSH.git
+cd ykSSH
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -45,7 +45,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-YKShell stores runtime data under `config/` and writes logs under `logs/`. These directories are intentionally ignored by Git.
+ykSSH stores runtime data under `config/` and writes logs under `logs/`. These directories are intentionally ignored by Git.
 
 ## Configuration And Security
 
@@ -56,6 +56,10 @@ Passwords are not stored in `sessions.json`. They are encrypted with Fernet and 
 - `config/credentials.json`
 - `config/secret.key`
 
+SSH server identities use trust-on-first-use (TOFU) and are stored in
+`config/host_keys.json`. The first connection shows the server fingerprint for
+confirmation. A later fingerprint change blocks the connection.
+
 Private key paths may be stored in session profiles, but private key contents are not copied into the project configuration.
 
 Do not commit files from `config/`, `logs/`, or any file containing real credentials.
@@ -63,7 +67,7 @@ Do not commit files from `config/`, `logs/`, or any file containing real credent
 ## Project Layout
 
 ```text
-YKShell/
+ykSSH/
 ├── main.py                      # Application entry point
 ├── app_info.py                  # App metadata
 ├── log_util.py                  # Logging helpers
@@ -89,12 +93,18 @@ For deeper architecture details, see [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## Validation
 
-There is no automated test suite yet. After making changes, run at least:
+After making changes, run at least:
 
 ```powershell
 python -c "from ui.main_window import MainWindow"
 python -m compileall .
 python main.py
+```
+
+Core storage and SFTP safety checks can also be run with:
+
+```powershell
+python -m unittest discover -s tests -v
 ```
 
 If GUI startup is not available in your environment, run `python -m compileall .` and document the limitation.
