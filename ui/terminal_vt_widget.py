@@ -284,6 +284,7 @@ class TerminalVTWidget(QWidget):
             commit = ""
 
         if commit:
+            self._prepare_for_terminal_input()
             self._record_pending_command_start()
             self.input_received.emit(commit.encode("utf-8"))
             event.accept()
@@ -1511,6 +1512,33 @@ class TerminalVTWidget(QWidget):
         self.input_received.emit(seq)
 
     def wheelEvent(self, event):  # type: ignore[override]
+        # Ctrl + wheel is an explicit fast-scroll gesture. It takes precedence
+        # over remote mouse reporting and moves one visible page per wheel step.
+        if event.modifiers() & Qt.ControlModifier:
+            angle = event.angleDelta()
+            pixel = event.pixelDelta()
+            if angle.y() != 0:
+                dy = int(angle.y())
+                pages = max(1, min(10, int(round(abs(dy) / 120.0))))
+            elif pixel.y() != 0:
+                dy = int(pixel.y())
+                pages = 1
+            else:
+                event.ignore()
+                return
+
+            if not self._in_alt_screen:
+                # Keep one overlapping line between pages so users retain
+                # visual context across each fast-scroll step.
+                page_lines = max(1, int(getattr(self.screen, 'lines', 1)) - 1)
+                self._scroll_view(page_lines * pages if dy > 0 else -page_lines * pages)
+            else:
+                seq = b"\x1b[5~" if dy > 0 else b"\x1b[6~"
+                for _ in range(pages):
+                    self.input_received.emit(seq)
+            event.accept()
+            return
+
         # If remote enabled mouse reporting, send wheel events as mouse buttons 64/65 (SGR 1006).
         if self._mouse_enabled() and not (event.modifiers() & Qt.ShiftModifier):
             angle = event.angleDelta()
@@ -2746,6 +2774,8 @@ class TerminalVTWidget(QWidget):
 
     def _follow_output(self) -> None:
         # Return to bottom (new output follows)
+        if not self._in_alt_screen and self._scroll_lines > 0:
+            self._scroll_view(-self._scroll_lines)
         self._scroll_lines = 0
         try:
             if hasattr(self.screen, "history") and hasattr(self.screen.history, "position"):
@@ -2753,6 +2783,17 @@ class TerminalVTWidget(QWidget):
         except Exception:
             pass
         self._mark_dirty()
+
+    def _scroll_to_history_start(self) -> None:
+        """Jump to the oldest locally available scrollback line."""
+        if self._in_alt_screen:
+            return
+        self._scroll_view(self._max_scroll_lines())
+
+    def _prepare_for_terminal_input(self) -> None:
+        """Return a scrolled main-screen viewport to the newest output."""
+        if not self._in_alt_screen and self._scroll_lines > 0:
+            self._follow_output()
 
     # -------------------------
     # Paste + keys
@@ -2772,6 +2813,22 @@ class TerminalVTWidget(QWidget):
                 event.accept()
                 return
 
+        # Terminal-local scrollback shortcuts. Restrict these to the main
+        # screen so alternate-screen TUIs keep receiving Home/End normally.
+        if (
+            (mods & Qt.ControlModifier)
+            and (mods & Qt.ShiftModifier)
+            and not (mods & (Qt.AltModifier | Qt.MetaModifier))
+            and not self._in_alt_screen
+        ):
+            if key == Qt.Key_Home:
+                self._scroll_to_history_start()
+                event.accept()
+                return
+            if key == Qt.Key_End:
+                self._follow_output()
+                event.accept()
+                return
         # Ctrl+Shift+C / Ctrl+Shift+V
         if (mods & Qt.ControlModifier) and (mods & Qt.ShiftModifier):
             if key == Qt.Key_C:
@@ -2782,6 +2839,18 @@ class TerminalVTWidget(QWidget):
                 self._paste_from_clipboard()
                 event.accept()
                 return
+
+        if key not in (
+            Qt.Key_Shift,
+            Qt.Key_Control,
+            Qt.Key_Alt,
+            Qt.Key_Meta,
+            Qt.Key_AltGr,
+            Qt.Key_CapsLock,
+            Qt.Key_NumLock,
+            Qt.Key_ScrollLock,
+        ):
+            self._prepare_for_terminal_input()
 
         # Ctrl+L
         if (mods & Qt.ControlModifier) and key == Qt.Key_L:
@@ -2808,6 +2877,21 @@ class TerminalVTWidget(QWidget):
 
         home = b"\x1b[H"
         end = b"\x1b[F"
+
+        # Standard readline/zsh/fish Emacs-style word navigation/editing.
+        if (
+            (mods & Qt.AltModifier)
+            and not (mods & (Qt.ControlModifier | Qt.MetaModifier))
+            and key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Delete)
+        ):
+            sequence = {
+                Qt.Key_Left: b"\x1bb",
+                Qt.Key_Right: b"\x1bf",
+                Qt.Key_Delete: b"\x1bd",
+            }[key]
+            self.input_received.emit(sequence)
+            event.accept()
+            return
 
         key_map = {
             Qt.Key_Up: up,
@@ -2996,6 +3080,7 @@ class TerminalVTWidget(QWidget):
             ):
                 return
 
+        self._prepare_for_terminal_input()
         history_text = text.replace("\r\n", "\n").replace("\r", "\n")
         text = history_text.replace("\n", "\r")
         payload = text.encode("utf-8", errors="replace")

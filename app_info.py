@@ -4,4 +4,4 @@ from __future__ import annotations
 
 APP_NAME = 'ykSSH'
 APP_VERSION = '1.0.0'
-GITHUB_URL = 'https://github.com/yinkaisheng/ykSSH'
+GITHUB_URL = 'https://github.com/yinkaisheng/ykssh'

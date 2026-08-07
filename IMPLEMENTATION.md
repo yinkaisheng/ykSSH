@@ -298,7 +298,23 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 连接时创建 `xterm-256color` PTY，尺寸取自 `TerminalVTWidget._calc_cols_rows()`
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
-- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 序列，由远端 shell/readline/zsh/fish 执行向后按词删除；右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
+
+#### 终端快捷键速查
+
+| 快捷键 | 行为 | 处理位置 |
+|---|---|---|
+| `Ctrl+Shift+C` / `Shift+Delete` | 复制终端选区 | 本地终端 |
+| `Ctrl+Shift+V` / `Shift+Insert` | 粘贴 | 本地终端 |
+| `Ctrl+A` / `Ctrl+E` | 移动到当前输入行首/行尾 | 发送给远端 shell |
+| `Alt+Left` / `Alt+Right` | 向左/向右移动一个词 | 发送 `ESC b/f` |
+| `Alt+Backspace` / `Alt+Delete` | 删除前一个/后一个词 | 发送 `ESC DEL` / `ESC d` |
+| `Ctrl+Shift+Home` / `Ctrl+Shift+End` | 跳到最早 scrollback / 返回最新输出 | 仅主屏幕本地处理 |
+| `Ctrl+滚轮` | 每个刻度滚动一屏减一行 | 主屏幕本地处理；备用屏幕发送 PageUp/PageDown |
+
+`Ctrl+Shift+Home/End` 不在备用屏幕中拦截，避免影响 Vim 等 TUI 对 Home/End 的依赖。主屏幕停留在历史位置时，凡是将发送给远端并改变/导航输入的键盘操作（普通输入、IME、粘贴、方向键、按词移动/删除、Backspace/Delete、Ctrl+A/E、Enter 等）都会先恢复最新输出；复制和 scrollback 跳转等纯本地操作不触发恢复。
+
 - 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
 - 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。

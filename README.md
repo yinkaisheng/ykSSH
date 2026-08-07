@@ -2,7 +2,7 @@
 
 ykSSH is a local desktop SSH client built with PyQt5. It provides a WindTerm-like workspace with a session tree, tabbed terminal sessions, and a dual-pane local/remote file manager backed by SFTP.
 
-The project is currently in active development and primarily targets Windows.
+The project is currently in active development and primarily targets Windows and Linux.
 
 ![ykSSH screenshot](images/screenshot.png)
 
@@ -32,7 +32,7 @@ The project is currently in active development and primarily targets Windows.
 ## Installation
 
 ```powershell
-git clone https://github.com/yinkaisheng/ykSSH.git
+git clone https://github.com/yinkaisheng/ykssh.git
 cd ykSSH
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -46,6 +46,28 @@ python main.py
 ```
 
 ykSSH stores runtime data under `config/` and writes logs under `logs/`. These directories are intentionally ignored by Git.
+
+## Terminal Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Shift+C` / `Shift+Delete` | Copy selected terminal text |
+| `Ctrl+Shift+V` / `Shift+Insert` | Paste |
+| `Ctrl+A` / `Ctrl+E` | Move to the start/end of the current shell input line |
+| `Alt+Left` / `Alt+Right` | Move backward/forward by one word |
+| `Alt+Backspace` / `Alt+Delete` | Delete the previous/next word |
+| `Ctrl+Shift+Home` | Jump to the oldest local scrollback content |
+| `Ctrl+Shift+End` | Return to the newest terminal output |
+| `Ctrl+Mouse Wheel` | Fast-scroll by one visible page minus one overlapping line |
+
+The shell editing shortcuts are sent to the remote shell and work with common
+readline, zsh, and fish configurations. Local scrollback shortcuts are only
+intercepted on the terminal main screen, so alternate-screen TUI applications
+such as Vim keep their normal Home/End handling. Pressing Enter while viewing
+older scrollback first returns the viewport to the newest output. Other keys
+which edit or navigate the remote input line—such as arrows, word movement,
+Backspace/Delete, regular text, paste, and IME input—do the same before being
+sent to the remote shell; local copy and scrollback shortcuts do not.
 
 ## Configuration And Security
 

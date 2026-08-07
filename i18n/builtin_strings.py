@@ -143,7 +143,7 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'file.rename': 'Rename',
     'file.properties': 'Properties',
     'file.properties.selected': '{count} item(s) selected',
-    'file.properties.selected_files_size': '{count} item(s) selected, {file_count} file(s), {size} ({bytes} Bytes)',
+    'file.properties.selected_files_size': '{count} item(s) selected ({file_count} file(s), combined size: {size} / {bytes} Bytes)',
     'file.properties.owner': 'Owner',
     'file.properties.group': 'Group',
     'file.properties.others': 'Others',
