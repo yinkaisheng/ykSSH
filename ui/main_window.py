@@ -534,11 +534,11 @@ class MainWindow(QMainWindow):
         terminal.send_command_text(command, execute=True)
         terminal.setFocus(Qt.OtherFocusReason)
 
-    def _jump_to_active_terminal_command(self, command: str, sent_at: str) -> None:
+    def _jump_to_active_terminal_command(self, command: str, sent_at: str, command_start_row: int) -> None:
         terminal = self.terminal_tabs.get_current_terminal()
         if terminal is None or not self._terminal_is_alive(terminal):
             return
-        terminal.scroll_to_command(command, sent_at)
+        terminal.scroll_to_command(command, sent_at, command_start_row)
 
     def _connect_session(self, session_item: SessionItem) -> None:
         logger.info(
@@ -551,7 +551,9 @@ class MainWindow(QMainWindow):
     async def _connect_session_async(self, session_item: SessionItem) -> None:
         tab_id, terminal = self.terminal_tabs.add_terminal_tab(session_item.name)
         terminal.command_submitted.connect(
-            lambda command, sent_at, tid=tab_id: self.session_panel.add_history_command(tid, command, sent_at)
+            lambda command, sent_at, start_row, tid=tab_id: self.session_panel.add_history_command(
+                tid, command, sent_at, start_row
+            )
         )
         self._active_tab_id = tab_id
         self.session_panel.set_active_history_tab(tab_id)

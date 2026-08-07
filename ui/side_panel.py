@@ -162,7 +162,7 @@ class SidePanel(QWidget):
 
     session_connect_requested = pyqtSignal(SessionItem)
     command_send_requested = pyqtSignal(str)
-    history_jump_requested = pyqtSignal(str, str)
+    history_jump_requested = pyqtSignal(str, str, int)
     sessions_changed = pyqtSignal()
 
     def __init__(
@@ -183,6 +183,7 @@ class SidePanel(QWidget):
         self._history_items: List[CommandHistoryItem] = []
         self._active_drawer = DRAWER_SESSIONS
         self._active_history_tab_id: Optional[str] = None
+        self._history_scroll_positions: Dict[str, int] = {}
         self._filter_texts: Dict[str, str] = {
             DRAWER_SESSIONS: '',
             DRAWER_COMMANDS: '',
@@ -349,16 +350,19 @@ class SidePanel(QWidget):
         self._rebuild_history_list()
 
     def set_active_history_tab(self, tab_id: Optional[str]) -> None:
+        self._save_history_scroll_position()
         self._active_history_tab_id = tab_id
         self.reload_history()
 
-    def add_history_command(self, tab_id: str, command: str, sent_at: str) -> None:
-        items = self.history_store.add(tab_id, command, sent_at)
+    def add_history_command(self, tab_id: str, command: str, sent_at: str, command_start_row: int) -> None:
+        items = self.history_store.add(tab_id, command, sent_at, command_start_row)
         if tab_id == self._active_history_tab_id:
+            self._save_history_scroll_position()
             self._history_items = items
             self._rebuild_history_list()
 
     def remove_history_tab(self, tab_id: str) -> None:
+        self._history_scroll_positions.pop(tab_id, None)
         self.history_store.remove_tab(tab_id)
         if tab_id == self._active_history_tab_id:
             self._history_items = []
@@ -392,6 +396,21 @@ class SidePanel(QWidget):
             list_item.setToolTip(_history_tooltip(item))
             self.history_list.addItem(list_item)
         self._filter_history_items(self._filter_texts.get(DRAWER_HISTORY, '').strip().lower())
+        self._restore_history_scroll_position()
+
+    def _save_history_scroll_position(self) -> None:
+        if not self._active_history_tab_id:
+            return
+        self._history_scroll_positions[self._active_history_tab_id] = (
+            self.history_list.verticalScrollBar().value()
+        )
+
+    def _restore_history_scroll_position(self) -> None:
+        if not self._active_history_tab_id:
+            self.history_list.verticalScrollBar().setValue(0)
+            return
+        value = self._history_scroll_positions.get(self._active_history_tab_id, 0)
+        self.history_list.verticalScrollBar().setValue(value)
 
     @staticmethod
     def _history_label(item: CommandHistoryItem) -> str:
@@ -598,7 +617,11 @@ class SidePanel(QWidget):
     def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
         history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
         if history is not None:
-            self.history_jump_requested.emit(history.command, history.sent_at)
+            self.history_jump_requested.emit(
+                history.command,
+                history.sent_at,
+                history.command_start_row,
+            )
 
     def _find_history_by_id(self, item_id: str) -> Optional[CommandHistoryItem]:
         for item in self._history_items:

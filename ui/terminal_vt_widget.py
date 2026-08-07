@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
 
 from i18n import tr as t
 from storage.app_config import get_app_config, get_setting
-from storage.paths import DATA_DIR
+from storage.paths import LOGS_DIR
 from ui.dialog_i18n import ask_yes_no
 from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
 from ui.theme import (
@@ -59,7 +59,7 @@ class TerminalVTWidget(QWidget):
     """
 
     input_received = pyqtSignal(bytes)
-    command_submitted = pyqtSignal(str, str)
+    command_submitted = pyqtSignal(str, str, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -178,17 +178,20 @@ class TerminalVTWidget(QWidget):
         self._is_scrollbar_dragging = False
         self._scrollbar_drag_offset_y = 0.0
 
-        self._debug_log_path = os.path.join(str(DATA_DIR), "terminal_debug.log")
+        self._debug_log_path = os.path.join(str(LOGS_DIR), "terminal_debug.log")
+        self._debug_history_jump_log_path = os.path.join(str(LOGS_DIR), "terminal_history_jump.log")
         self._debug_input_count = 0
         self._debug_after_resize_until = 0.0
         self._debug_enabled = bool(False)
         self._debug_gutter_selection = bool(get_setting("terminal_debug_gutter_selection", False))
+        self._debug_history_jump = bool(get_setting("terminal_debug_history_jump", False))
         self._debug_cell_dump_count = 0
 
     def _debug_log(self, message: str) -> None:
         if not self._debug_enabled:
             return
         try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
             with open(self._debug_log_path, "a", encoding="utf-8") as f:
                 f.write(f"{ts} [TerminalVTWidget] {message}\n")
@@ -203,11 +206,37 @@ class TerminalVTWidget(QWidget):
         if not self._debug_gutter_selection:
             return
         try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
             with open(self._debug_log_path, "a", encoding="utf-8") as f:
                 f.write(f"{ts} [TerminalVTWidget.gutter] {message}\n")
         except Exception:
             pass
+
+    def _debug_history_jump_log(self, message: str) -> None:
+        if not self._debug_history_jump:
+            return
+        try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            with open(self._debug_history_jump_log_path, "a", encoding="utf-8") as f:
+                f.write(f"{ts} [TerminalVTWidget.history-jump] {message}\n")
+        except Exception:
+            pass
+
+    def _debug_history_jump_viewport_sample(self, label: str, limit_rows: int = 8) -> None:
+        if not self._debug_history_jump:
+            return
+        try:
+            rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+            sample_rows = []
+            for y in range(max(0, min(rows, limit_rows))):
+                abs_y = self._visible_y_to_abs_y(y)
+                text = self._line_text(y).rstrip()
+                sample_rows.append(f"{y}/{abs_y}:{text!r}")
+            self._debug_history_jump_log(f"{label} visible_sample={sample_rows}")
+        except Exception as exc:
+            self._debug_history_jump_log(f"{label} visible_sample_error={exc!r}")
 
     def _debug_visible_line_sample(self, y: int, limit: int = 100) -> str:
         try:
@@ -1194,37 +1223,51 @@ class TerminalVTWidget(QWidget):
             old_scroll_lines = self._scroll_lines
             old_top_len = len(top)
             old_bottom_len = len(bottom)
+            remaining = abs(delta_lines)
+            total_applied = 0
             if delta_lines > 0:
-                mid = min(abs(delta_lines), len(top))
-                if mid <= 0:
+                while remaining > 0 and len(top) > 0:
+                    mid = min(remaining, len(top), rows)
+                    if mid <= 0:
+                        break
+                    bottom.extendleft(buffer[y] for y in range(rows - 1, rows - mid - 1, -1))
+                    history = history._replace(position=max(0, history.position - mid))  # type: ignore[attr-defined]
+                    self.screen.history = history
+                    for y in range(rows - 1, mid - 1, -1):
+                        buffer[y] = buffer[y - mid]
+                    for y in range(mid - 1, -1, -1):
+                        buffer[y] = top.pop()
+                    self._scroll_lines += mid
+                    self._viewport_top_row -= mid
+                    total_applied += mid
+                    remaining -= mid
+                if total_applied <= 0:
                     return True
-                bottom.extendleft(buffer[y] for y in range(rows - 1, rows - mid - 1, -1))
-                self.screen.history = history._replace(position=max(0, history.position - mid))  # type: ignore[attr-defined]
-                for y in range(rows - 1, mid - 1, -1):
-                    buffer[y] = buffer[y - mid]
-                for y in range(mid - 1, -1, -1):
-                    buffer[y] = top.pop()
-                self._scroll_lines += mid
-                self._viewport_top_row -= mid
-                self._shift_selection_rows(mid, rows)
+                self._shift_selection_rows(total_applied, rows)
             else:
-                mid = min(abs(delta_lines), len(bottom))
-                if mid <= 0:
+                while remaining > 0 and len(bottom) > 0:
+                    mid = min(remaining, len(bottom), rows)
+                    if mid <= 0:
+                        break
+                    top.extend(buffer[y] for y in range(mid))
+                    history = history._replace(position=min(history.size, history.position + mid))  # type: ignore[attr-defined]
+                    self.screen.history = history
+                    for y in range(rows - mid):
+                        buffer[y] = buffer[y + mid]
+                    for y in range(rows - mid, rows):
+                        buffer[y] = bottom.popleft()
+                    self._scroll_lines = max(0, self._scroll_lines - mid)
+                    self._viewport_top_row += mid
+                    total_applied += mid
+                    remaining -= mid
+                if total_applied <= 0:
                     self._scroll_lines = 0
                     return True
-                top.extend(buffer[y] for y in range(mid))
-                self.screen.history = history._replace(position=min(history.size, history.position + mid))  # type: ignore[attr-defined]
-                for y in range(rows - mid):
-                    buffer[y] = buffer[y + mid]
-                for y in range(rows - mid, rows):
-                    buffer[y] = bottom.popleft()
-                self._scroll_lines = max(0, self._scroll_lines - mid)
-                self._viewport_top_row += mid
-                self._shift_selection_rows(-mid, rows)
+                self._shift_selection_rows(-total_applied, rows)
 
             self._debug_gutter_log(
                 "manual-scroll "
-                f"request={delta_lines}, applied={mid}, rows={rows}, "
+                f"request={delta_lines}, applied={total_applied}, rows={rows}, "
                 f"viewport_top={old_viewport_top}->{self._viewport_top_row}, "
                 f"scroll_lines={old_scroll_lines}->{self._scroll_lines}, "
                 f"history_top={old_top_len}->{len(top)}, history_bottom={old_bottom_len}->{len(bottom)}, "
@@ -2217,7 +2260,7 @@ class TerminalVTWidget(QWidget):
             self._pending_command_start_x = None
             return
         self._command_start_rows.append(start_y)
-        self._command_start_rows = sorted(set(self._command_start_rows))[-500:]
+        self._command_start_rows = sorted(set(self._command_start_rows))[-1000:]
         sent_at = time.strftime("%Y-%m-%d %H:%M:%S")
         self._command_start_times[start_y] = sent_at
         keep = set(self._command_start_rows)
@@ -2278,7 +2321,7 @@ class TerminalVTWidget(QWidget):
         if command and sent_at and (force_history or self._pending_command_was_visible(command)):
             if start_y is not None:
                 self._command_start_commands[start_y] = command
-            self.command_submitted.emit(command, sent_at)
+            self.command_submitted.emit(command, sent_at, int(start_y))
 
     def _visible_command_text_for_history(self, start_y: int | None, typed_command: str) -> str:
         if start_y is None:
@@ -2318,34 +2361,81 @@ class TerminalVTWidget(QWidget):
             payload += b'\r'
         self.input_received.emit(payload)
 
-    def scroll_to_command(self, command: str, sent_at: str) -> bool:
-        if self._in_alt_screen or not sent_at:
-            return False
+    def scroll_to_command(self, command: str, sent_at: str, command_start_row: int = -1) -> bool:
         rows_count = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+        current_top = int(self._viewport_top_row)
+        bottom_top = self._max_scroll_lines()
+        self._debug_history_jump_log(
+            "request "
+            f"command={command!r}, sent_at={sent_at!r}, command_start_row={command_start_row}, "
+            f"rows={rows_count}, current_top={current_top}, bottom_top={bottom_top}, "
+            f"scroll_lines={self._scroll_lines}, in_alt={self._in_alt_screen}, "
+            f"starts={self._command_start_rows}, times={self._command_start_times}, "
+            f"commands={self._command_start_commands}"
+        )
+        if self._in_alt_screen or not sent_at:
+            self._debug_history_jump_log("abort reason=alt-screen-or-missing-time")
+            return False
         if rows_count <= 0:
+            self._debug_history_jump_log("abort reason=no-rows")
             return False
 
-        matches = [
-            row for row in self._command_start_rows
-            if self._command_start_times.get(row) == sent_at
-            and self._command_start_commands.get(row) == command
-        ]
-        if not matches:
+        if command_start_row >= 0:
+            matches = [command_start_row] if command_start_row in self._command_start_rows else []
+        else:
             matches = [
                 row for row in self._command_start_rows
                 if self._command_start_times.get(row) == sent_at
+                and self._command_start_commands.get(row) == command
             ]
+            if not matches:
+                matches = [
+                    row for row in self._command_start_rows
+                    if self._command_start_times.get(row) == sent_at
+                ]
         if not matches:
+            self._debug_history_jump_log("abort reason=no-matching-command-start")
             return False
 
         start_y = matches[-1]
-        bottom_top = max(0, self._history_top_len())
+        actual_sent_at = self._command_start_times.get(start_y)
+        if actual_sent_at != sent_at:
+            self._debug_history_jump_log(
+                "abort reason=time-mismatch "
+                f"start_y={start_y}, expected={sent_at!r}, actual={actual_sent_at!r}"
+            )
+            return False
+        actual_command = self._command_start_commands.get(start_y)
+        if command and actual_command not in (None, command):
+            self._debug_history_jump_log(
+                "abort reason=command-mismatch "
+                f"start_y={start_y}, expected={command!r}, actual={actual_command!r}"
+            )
+            return False
         max_abs_y = bottom_top + rows_count - 1
         if start_y < 0 or start_y > max_abs_y:
+            self._debug_history_jump_log(
+                "abort reason=out-of-range "
+                f"start_y={start_y}, max_abs_y={max_abs_y}, bottom_top={bottom_top}"
+            )
             return False
 
+        self._debug_history_jump_viewport_sample("before-scroll")
         target_top = max(0, min(start_y, bottom_top))
-        self._restore_viewport_top_after_output(target_top)
+        target_scroll = max(0, bottom_top - target_top)
+        before_top = self._viewport_top_row
+        before_scroll = self._scroll_lines
+        self._set_scrollbar_target(target_scroll)
+        self._mark_full_repaint()
+        self.update()
+        self._debug_history_jump_log(
+            "done "
+            f"start_y={start_y}, target_top={target_top}, target_scroll={target_scroll}, "
+            f"viewport_top={before_top}->{self._viewport_top_row}, "
+            f"scroll_lines={before_scroll}->{self._scroll_lines}, "
+            f"history_top={self._history_top_len()}, history_bottom={self._history_bottom_len()}"
+        )
+        self._debug_history_jump_viewport_sample("after-scroll")
         return True
 
     def _command_start_row_for_abs_y(self, abs_y: int) -> int | None:

@@ -20,6 +20,7 @@ else:
     os.chdir(script_path.parent)
 
 from storage.app_config import get_app_config, init_app_config
+from storage.paths import LOGS_DIR
 from i18n import init_i18n, tr
 from ui.dialog_i18n import install_dialog_translations
 from ui.widgets import install_edit_context_menu_translations
@@ -73,7 +74,7 @@ def run_qt_app() -> None:
 
 
 def main() -> None:
-    config_logger(logger, log_dir='logs', log_file='ykshell.log', log_to_stdout=bool(sys.stdout))
+    config_logger(logger, log_dir=str(LOGS_DIR), log_file='ykshell.log', log_to_stdout=bool(sys.stdout))
 
     logger.info('========================================\n')
     logger.info(f'executable={exe_path}, pid={os.getpid()}, working_directory={os.getcwd()}')

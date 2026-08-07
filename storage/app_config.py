@@ -52,6 +52,7 @@ _TERMINAL_SETTING_DEFAULTS: Dict[str, Any] = {
     'terminal_scrollbar_background_color': '#252525',
     'terminal_scrollbar_thumb_color': '#6A6A6A',
     'terminal_debug_gutter_selection': False,
+    'terminal_debug_history_jump': False,
 }
 
 

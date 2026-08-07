@@ -14,6 +14,7 @@ def _resolve_app_dir() -> Path:
 
 APP_DIR = _resolve_app_dir()
 DATA_DIR = APP_DIR / 'config'
+LOGS_DIR = APP_DIR / 'logs'
 CONFIG_FILE = DATA_DIR / 'config.json'
 SESSIONS_FILE = DATA_DIR / 'sessions.json'
 COMMANDS_FILE = DATA_DIR / 'commands.json'

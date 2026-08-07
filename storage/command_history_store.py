@@ -23,14 +23,24 @@ class CommandHistoryStore:
             return []
         return list(self._items_by_tab.get(tab_id, []))
 
-    def add(self, tab_id: Optional[str], command: str, sent_at: str) -> List[CommandHistoryItem]:
+    def add(
+        self,
+        tab_id: Optional[str],
+        command: str,
+        sent_at: str,
+        command_start_row: int,
+    ) -> List[CommandHistoryItem]:
         if not tab_id:
             return []
         items = list(self._items_by_tab.get(tab_id, []))
         command = command.strip()
         if not command:
             return items
-        items.insert(0, CommandHistoryItem(command=command, sent_at=sent_at))
+        items.insert(0, CommandHistoryItem(
+            command=command,
+            sent_at=sent_at,
+            command_start_row=command_start_row,
+        ))
         del items[MAX_COMMAND_HISTORY_ITEMS:]
         self._items_by_tab[tab_id] = items
         return items
