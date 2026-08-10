@@ -6,7 +6,7 @@ import uuid
 from typing import Dict, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QTabWidget, QWidget
+from PyQt5.QtWidgets import QApplication, QTabWidget, QWidget
 
 from i18n import tr
 from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
@@ -35,8 +35,14 @@ class TerminalTabWidget(QTabWidget):
         self._tab_ids: Dict[int, str] = {}
         self._terminals: Dict[str, TerminalVTWidget] = {}
         self._display_titles: Dict[str, str] = {}
+        self._hosts: Dict[str, str] = {}
 
-    def add_terminal_tab(self, title: str, tab_id: Optional[str] = None) -> tuple[str, TerminalVTWidget]:
+    def add_terminal_tab(
+        self,
+        title: str,
+        tab_id: Optional[str] = None,
+        host: str = '',
+    ) -> tuple[str, TerminalVTWidget]:
         tab_id = tab_id or uuid.uuid4().hex
         terminal = TerminalVTWidget()
         index = self.addTab(terminal, title)
@@ -44,6 +50,8 @@ class TerminalTabWidget(QTabWidget):
         self._tab_ids[index] = tab_id
         self._terminals[tab_id] = terminal
         self._display_titles[tab_id] = title
+        if host:
+            self._hosts[tab_id] = host
         self.setCurrentIndex(index)
         return tab_id, terminal
 
@@ -89,12 +97,20 @@ class TerminalTabWidget(QTabWidget):
         index = self.tabBar().tabAt(pos)
         if index < 0:
             return
+        tab_id = self._tab_ids.get(index)
+        host = self._hosts.get(tab_id, '') if tab_id is not None else ''
         menu = ShortcutMenu(self)
         rename_action = menu.addAction(tr('tab.rename'))
         add_menu_key(menu, rename_action, Qt.Key_R)
+        copy_host_action = None
+        if host:
+            copy_host_action = menu.addAction(tr('sessions.copy_host'))
+            add_menu_key(menu, copy_host_action, Qt.Key_H)
         action = exec_menu(menu, self.tabBar().mapToGlobal(pos))
         if action == rename_action:
             self._rename_tab_at_index(index)
+        elif copy_host_action is not None and action == copy_host_action:
+            QApplication.clipboard().setText(host)
 
     def _rename_tab_at_index(self, index: int) -> None:
         tab_id = self._tab_ids.get(index)
@@ -126,6 +142,7 @@ class TerminalTabWidget(QTabWidget):
         if tab_id is not None:
             self._terminals.pop(tab_id, None)
             self._display_titles.pop(tab_id, None)
+            self._hosts.pop(tab_id, None)
         self._rebuild_tab_id_map()
         if widget is not None:
             widget.deleteLater()

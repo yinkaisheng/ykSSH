@@ -718,12 +718,18 @@ class SidePanel(QWidget):
             menu.addSeparator()
             connect_action = None
             edit_action = None
+            copy_host_action = None
+            forget_host_key_action = None
         else:
             connect_action = menu.addAction(tr('sessions.connect'))
             add_menu_key(menu, connect_action, Qt.Key_C)
             edit_action = menu.addAction(tr('sessions.edit'))
             add_menu_key(menu, edit_action, Qt.Key_E)
             session = self._find_session_by_tree(item)
+            copy_host_action = None
+            if session is not None and session.host:
+                copy_host_action = menu.addAction(tr('sessions.copy_host'))
+                add_menu_key(menu, copy_host_action, Qt.Key_H)
             forget_host_key_action = None
             if session is not None and self.host_keys.has(session.host, session.port):
                 forget_host_key_action = menu.addAction(tr('sessions.forget_host_key'))
@@ -783,6 +789,10 @@ class SidePanel(QWidget):
                 self._on_item_double_clicked(item, 0)
             elif action == edit_action:
                 self._edit_session(item)
+            elif copy_host_action is not None and action == copy_host_action:
+                session = self._find_session_by_tree(item)
+                if session is not None and session.host:
+                    QApplication.clipboard().setText(session.host)
             elif forget_host_key_action is not None and action == forget_host_key_action:
                 self._forget_host_key(item)
             elif action == rename_action:

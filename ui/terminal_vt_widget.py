@@ -30,8 +30,8 @@ except ImportError:  # pragma: no cover
 from i18n import tr as t
 from storage.app_config import get_app_config, get_setting
 from storage.paths import LOGS_DIR
-from ui.dialog_i18n import ask_yes_no
 from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
+from ui.prompt_dialog import prompt_multiline_confirm
 from ui.theme import (
     terminal_font_family_css,
     normalize_terminal_font_family,
@@ -3072,13 +3072,15 @@ class TerminalVTWidget(QWidget):
         bracketed = bool(get_setting("terminal_bracketed_paste", True)) and self._bracketed_paste_mode
 
         if confirm_multiline and ("\n" in text or "\r" in text):
-            preview = text[:800] + ("\n…" if len(text) > 800 else "")
-            if not ask_yes_no(
+            edited = prompt_multiline_confirm(
                 self,
                 t("dialog.paste_confirm.title"),
-                t("dialog.paste_confirm.text", preview=preview),
-            ):
+                t("dialog.paste_confirm.text"),
+                text,
+            )
+            if edited is None:
                 return
+            text = edited
 
         self._prepare_for_terminal_input()
         history_text = text.replace("\r\n", "\n").replace("\r", "\n")

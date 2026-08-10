@@ -594,7 +594,10 @@ class MainWindow(QMainWindow):
         self._track_background_task(asyncio.create_task(self._connect_session_async(session_item)))
 
     async def _connect_session_async(self, session_item: SessionItem) -> None:
-        tab_id, terminal = self.terminal_tabs.add_terminal_tab(session_item.name)
+        tab_id, terminal = self.terminal_tabs.add_terminal_tab(
+            session_item.name,
+            host=session_item.host,
+        )
         terminal.command_submitted.connect(
             lambda command, sent_at, start_row, tid=tab_id: self.session_panel.add_history_command(
                 tid, command, sent_at, start_row

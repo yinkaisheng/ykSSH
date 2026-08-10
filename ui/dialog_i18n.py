@@ -24,6 +24,8 @@ from i18n.translator import DEFAULT_LOCALE
 _DIALOG_BUTTON_BOX_SPECS = {
     QDialogButtonBox.Ok: ('dialog.ok', 'O'),
     QDialogButtonBox.Cancel: ('dialog.cancel', 'Esc'),
+    QDialogButtonBox.Yes: ('dialog.yes', 'Y'),
+    QDialogButtonBox.No: ('dialog.no', 'N'),
     QDialogButtonBox.Apply: ('dialog.apply', 'A'),
     QDialogButtonBox.Save: ('dialog.save', 'S'),
     QDialogButtonBox.Close: ('dialog.close', 'Esc'),
@@ -49,6 +51,7 @@ _FILE_DIALOG_BUTTON_KEYS = {
 }
 
 _INSTALLED = False
+_SHORTCUT_OVERRIDE_PROPERTY = 'yksshDialogShortcutOverride'
 
 
 def _use_mnemonic_labels() -> bool:
@@ -77,6 +80,17 @@ def _dialog_button_label(i18n_key: str, hint: Optional[str]) -> str:
     return f'{base}({display})'
 
 
+def _dialog_shortcut_hint_label(i18n_key: str, hint: Optional[str]) -> str:
+    """Show an underlined hint without registering a competing Qt mnemonic."""
+    base = tr(i18n_key)
+    if not hint or len(hint) != 1:
+        return base
+    for index, char in enumerate(base):
+        if char.lower() == hint.lower():
+            return f'{base[:index]}{char}\u0332{base[index + 1:]}'
+    return f'{base}({hint.upper()}\u0332)'
+
+
 def _effective_shortcut(hint: Optional[str]) -> Optional[QKeySequence]:
     if not hint:
         return None
@@ -96,8 +110,15 @@ def _configure_dialog_button(
     i18n_key: str,
     hint: Optional[str],
 ) -> None:
-    button.setText(_dialog_button_label(i18n_key, hint))
-    shortcut = _effective_shortcut(hint)
+    shortcut_override = button.property(_SHORTCUT_OVERRIDE_PROPERTY)
+    if isinstance(shortcut_override, str):
+        # Explicit shortcut owners (for example a dialog-level QShortcut)
+        # must not compete with the button mnemonic or its own shortcut.
+        button.setText(_dialog_shortcut_hint_label(i18n_key, hint))
+        shortcut = QKeySequence(shortcut_override)
+    else:
+        button.setText(_dialog_button_label(i18n_key, hint))
+        shortcut = _effective_shortcut(hint)
     if shortcut is not None:
         button.setShortcut(shortcut)
 

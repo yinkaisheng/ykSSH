@@ -323,8 +323,9 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
 - `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `logs/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - `terminal.terminal_debug_history_jump` 打开时，历史命令单击定位会把请求参数、命令标记、时间/命令校验结果、跳转前后 viewport/scrollback 状态写入 `logs/terminal_history_jump.log`，用于排查 History 定位异常。
-- 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`T` 上传/下载传输、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
+- 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`H` 复制 Host（Session 树叶子 / 终端 Tab）、`T` 上传/下载传输、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
 - 粘贴时仅在配置允许且远端显式开启 `DECSET ?2004` bracketed paste 模式后才发送 `ESC[200~...ESC[201~` 包装；普通 shell 密码提示（如 `sudo`）不发送该包装，避免控制序列被当作密码字符。
+- 多行粘贴且 `terminal_paste_confirm_multiline` 开启时，弹出可编辑确认框（完整文本、`QPlainTextEdit`）；用户可修改后点「是」或按 `Alt+Y` 粘贴编辑结果，按 `Alt+N` 取消；快捷键在编辑框聚焦时仍有效；对话框可拖动改大小，初始尺寸按内容在屏占比上限内自动扩展。
 
 ### 6.5 连接生命周期
 
@@ -654,6 +655,7 @@ sequenceDiagram
 | 终端主题 | VT 配色未完全跟随 app theme |
 | 远程目录首次加载 | 可能需二次刷新（async 缓存时序） |
 | terminal_vt_widget.py | 从 nebula-shell 移植，可能有 PyQt5 兼容边角 |
+| 无换行输出后的输入行重绘 | 复现示例：远端执行 `echo -n "helloworld"`，Shell 提示符会紧接在 `helloworld` 后；随后粘贴 `Content-Type: application/json`，再按任意方向键，readline 可能按“提示符位于第 0 列”重绘并覆盖该行旧输出。WindTerm、MobaXterm 同样可复现，属于远端 readline 的通用行为，暂不在客户端做非标准修正；建议让命令输出以换行结束（如 `curl -w '\n'`） |
 | 凭据与密钥同目录 | 能读 `config/` 即等价可读全部 Session 密码 |
 | secret.key / credentials.json 权限 | 目前仅文档警告，尚未做跨平台 ACL / chmod 硬化 |
 | 收藏按钮图标 | 当前使用 Unicode 星标，后续可改为 QStyle/icon font 以提升跨平台一致性 |
@@ -662,6 +664,7 @@ sequenceDiagram
 | 本地文件 IO | 上传读文件、目录遍历、本地大小统计、本地删除/重命名/新建目录仍有同步 IO，待 `asyncio.to_thread` 或分片让出事件循环 |
 | 本地链接上传 | 为避免递归环和越出用户选择目录，符号链接与 Windows 目录联接默认跳过；直接选择链接上传会提示不支持 |
 | Tab 重命名 | 右键 Tab 重命名仅修改当前运行时显示标题，不持久化到 `sessions.json` |
+| Tab / Session 复制 Host | 右键「复制 Host」将 Session 的 `host` 原样写入剪贴板（不含端口）；Tab 侧在创建时缓存 host，断连后仍可复制 |
 | 密码为空 | 密码认证 Session 若未保存密码，不会弹窗补录；连接时按无密码参数尝试并由 SSH 认证失败返回错误 |
 | 加密私钥口令 | 公钥认证目前只保存私钥路径，尚未提供加密私钥的口令输入与安全存储 |
 

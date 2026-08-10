@@ -20,7 +20,7 @@ THEME_COLOR_DOCS: Dict[str, str] = {
     'text_secondary': 'Inactive tabs, subtle labels, tab close buttons',
     'text_disabled': 'Disabled menu items and controls',
     'background_hover': 'Generic hover background (buttons, scrollbars, splitters)',
-    'background_menu_hover': 'Context menu and list item hover/selection background',
+    'background_menu_hover': 'List item hover/selection background',
     'background_toggle_hover': 'Unchecked checkbox/toggle hover background',
     'highlight': 'Primary actions: Send button, checked boxes/radios, text selection',
     'highlight_hover': 'Hover state for highlight controls',
