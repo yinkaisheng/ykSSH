@@ -66,6 +66,7 @@ terminal.close_tab=关闭标签
 terminal.connecting=连接中…
 terminal.connected=已连接
 terminal.disconnected=已断开
+terminal.reconnect_hint=按 Enter 重新连接
 terminal.connection_error=连接错误：{error}
 terminal.host_key_title=未知的 SSH 服务器
 terminal.host_key_first_seen=此前未信任过此服务器。\n\n服务器：{host}:{port}\n密钥类型：{algorithm}\n指纹：{fingerprint}\n\n是否信任此服务器并继续连接？

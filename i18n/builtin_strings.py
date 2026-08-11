@@ -75,6 +75,7 @@ BUILTIN_STRINGS: Dict[str, str] = {
     'terminal.connecting': 'Connecting…',
     'terminal.connected': 'Connected',
     'terminal.disconnected': 'Disconnected',
+    'terminal.reconnect_hint': 'Press Enter to reconnect',
     'terminal.connection_error': 'Connection error: {error}',
     'terminal.host_key_title': 'Unknown SSH Server',
     'terminal.host_key_first_seen': 'This server has not been trusted before.\n\nServer: {host}:{port}\nKey type: {algorithm}\nFingerprint: {fingerprint}\n\nTrust this server and continue?',

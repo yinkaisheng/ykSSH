@@ -60,10 +60,12 @@ class TerminalVTWidget(QWidget):
 
     input_received = pyqtSignal(bytes)
     command_submitted = pyqtSignal(str, str, int)
+    reconnect_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self._reconnect_enabled = False
         self.setFocusPolicy(Qt.StrongFocus)
         # Enable IME (e.g. Chinese/Japanese/Korean input methods). Without this, some platforms/IMEs
         # will consume letter/navigation keys during composition and the terminal appears "dead".
@@ -782,6 +784,13 @@ class TerminalVTWidget(QWidget):
     # -------------------------
     # Public API (compatible with legacy TerminalWidget)
     # -------------------------
+    def set_reconnect_enabled(self, enabled: bool) -> None:
+        """When enabled, Enter requests reconnect instead of sending CR to SSH."""
+        self._reconnect_enabled = bool(enabled)
+
+    def is_reconnect_enabled(self) -> bool:
+        return self._reconnect_enabled
+
     def write_text(self, text: str) -> None:
         if not self._is_alive():
             return
@@ -2923,6 +2932,10 @@ class TerminalVTWidget(QWidget):
             return
 
         if key in (Qt.Key_Return, Qt.Key_Enter):
+            if self._reconnect_enabled:
+                self.reconnect_requested.emit()
+                event.accept()
+                return
             self._commit_command_start(check_continuation=True)
             self.input_received.emit(b"\r")
             event.accept()

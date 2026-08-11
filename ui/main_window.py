@@ -88,6 +88,8 @@ class MainWindow(QMainWindow):
         self._closing_after_transfer_confirm = False
         self._close_in_progress = False
         self._connect_tasks: dict[str, asyncio.Task] = {}
+        self._tab_sessions: dict[str, SessionItem] = {}
+        self._tabs_ever_connected: set[str] = set()
         self._background_tasks: set[asyncio.Task] = set()
         self._session_save_timer = QTimer(self)
         self._session_save_timer.setSingleShot(True)
@@ -355,6 +357,9 @@ class MainWindow(QMainWindow):
         )
 
     def _session_item_for_tab(self, tab_id: str) -> Optional[SessionItem]:
+        session = self._tab_sessions.get(tab_id)
+        if session is not None:
+            return session
         ssh = self.connection_manager.get_session(tab_id)
         if ssh is None:
             return None
@@ -603,6 +608,10 @@ class MainWindow(QMainWindow):
                 tid, command, sent_at, start_row
             )
         )
+        terminal.reconnect_requested.connect(
+            lambda tid=tab_id: self._on_terminal_reconnect_requested(tid)
+        )
+        self._tab_sessions[tab_id] = session_item
         self._active_tab_id = tab_id
         self.session_panel.set_active_history_tab(tab_id)
         terminal.setFocus(Qt.OtherFocusReason)
@@ -610,11 +619,63 @@ class MainWindow(QMainWindow):
         panel = self.file_panels.create_panel(tab_id, initial_local_path=local_path)
         self.file_panels.show_panel(tab_id)
         self._register_files_panel(tab_id, panel)
+        await self._open_session_on_tab(tab_id, session_item, terminal)
+
+    def _on_terminal_reconnect_requested(self, tab_id: str) -> None:
+        terminal = self.terminal_tabs.get_terminal(tab_id)
+        if terminal is None or not self._terminal_is_alive(terminal):
+            return
+        if not terminal.is_reconnect_enabled():
+            return
+        connect_task = self._connect_tasks.get(tab_id)
+        if connect_task is not None and not connect_task.done():
+            return
+        session_item = self._tab_sessions.get(tab_id)
+        if session_item is None:
+            return
+        # Disable immediately so rapid Enter presses cannot spawn concurrent reconnects
+        # before _open_session_on_tab registers the connect task.
+        terminal.set_reconnect_enabled(False)
+        logger.info(
+            'Reconnect session requested: '
+            f'tab_id={tab_id}, session_id={session_item.id}, host={session_item.host}'
+        )
+        self._track_background_task(
+            asyncio.create_task(self._reconnect_session_async(tab_id))
+        )
+
+    async def _reconnect_session_async(self, tab_id: str) -> None:
+        session_item = self._tab_sessions.get(tab_id)
+        terminal = self.terminal_tabs.get_terminal(tab_id)
+        if session_item is None or terminal is None or not self._terminal_is_alive(terminal):
+            return
+        terminal.set_reconnect_enabled(False)
+        await self._open_session_on_tab(tab_id, session_item, terminal)
+
+    def _enable_reconnect_ui(self, terminal: TerminalVTWidget) -> None:
+        if not self._terminal_is_alive(terminal) or terminal.is_reconnect_enabled():
+            return
+        terminal.write_text(tr('terminal.reconnect_hint') + '\r\n')
+        terminal.set_reconnect_enabled(True)
+
+    async def _open_session_on_tab(
+        self,
+        tab_id: str,
+        session_item: SessionItem,
+        terminal: TerminalVTWidget,
+    ) -> None:
+        terminal.set_reconnect_enabled(False)
         terminal.write_text(tr('terminal.connecting') + '\r\n')
 
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._connect_tasks[tab_id] = current_task
+
         def _on_connected() -> None:
+            self._tabs_ever_connected.add(tab_id)
             if not self._terminal_is_alive(terminal):
                 return
+            terminal.set_reconnect_enabled(False)
             terminal.write_text(tr('terminal.connected') + '\r\n')
             self._track_background_task(
                 asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item))
@@ -627,14 +688,20 @@ class MainWindow(QMainWindow):
             if handler is not None:
                 handler.cancel_transfers()
             terminal.write_text('\r\n' + tr('terminal.disconnected') + '\r\n')
+            # Connect/reconnect failures emit disconnected before the exception
+            # handler writes the error line; defer the hint until after that.
+            connect_in_flight = (
+                current_task is not None
+                and self._connect_tasks.get(tab_id) is current_task
+                and not current_task.done()
+            )
+            if tab_id in self._tabs_ever_connected and not connect_in_flight:
+                self._enable_reconnect_ui(terminal)
             if self._active_tab_id == tab_id:
                 panel = self.file_panels.get_panel(tab_id)
                 if panel is not None:
                     panel.remote_file_panel.clear_remote()
 
-        current_task = asyncio.current_task()
-        if current_task is not None:
-            self._connect_tasks[tab_id] = current_task
         try:
             await self.connection_manager.open_tab(
                 tab_id,
@@ -663,9 +730,13 @@ class MainWindow(QMainWindow):
                     expected=exc.expected,
                     actual=exc.actual,
                 ) + '\r\n')
+                if tab_id in self._tabs_ever_connected:
+                    self._enable_reconnect_ui(terminal)
         except HostKeyRejectedError:
             if self._terminal_is_alive(terminal):
                 terminal.write_text(tr('terminal.host_key_rejected') + '\r\n')
+                if tab_id in self._tabs_ever_connected:
+                    self._enable_reconnect_ui(terminal)
         except Exception as exc:
             logger.warning(
                 'Connect session failed: '
@@ -674,6 +745,8 @@ class MainWindow(QMainWindow):
             )
             if self._terminal_is_alive(terminal):
                 terminal.write_text(tr('terminal.connection_error', error=str(exc)) + '\r\n')
+                if tab_id in self._tabs_ever_connected:
+                    self._enable_reconnect_ui(terminal)
         finally:
             if self._connect_tasks.get(tab_id) is current_task:
                 self._connect_tasks.pop(tab_id, None)
@@ -726,7 +799,11 @@ class MainWindow(QMainWindow):
             panel.remote_file_panel.set_path(remote_path)
             await self.connection_manager.refresh_remote_list(tab_id, remote_path)
         else:
-            await self.connection_manager.refresh_remote_list(tab_id, handler.remote_dir)
+            # Reconnect: clear_remote() emptied the path bar; restore last remote dir.
+            remote_dir = (handler.remote_dir or remote_path or '/').strip() or '/'
+            handler.set_remote_dir(remote_dir)
+            panel.remote_file_panel.set_path(remote_dir)
+            await self.connection_manager.refresh_remote_list(tab_id, remote_dir)
         if self._active_tab_id != tab_id or self.file_panels.get_panel(tab_id) is None:
             return
         self._attach_file_panel(tab_id)
@@ -734,6 +811,8 @@ class MainWindow(QMainWindow):
 
     def _on_tab_closed(self, tab_id: str) -> None:
         was_active = self._active_tab_id == tab_id
+        self._tab_sessions.pop(tab_id, None)
+        self._tabs_ever_connected.discard(tab_id)
         handler = self._sftp_handlers.pop(tab_id, None)
         local_dialog = self._local_favorites_dialogs.pop(tab_id, None)
         if local_dialog is not None:

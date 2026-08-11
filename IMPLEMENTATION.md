@@ -298,6 +298,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 连接时创建 `xterm-256color` PTY，尺寸取自 `TerminalVTWidget._calc_cols_rows()`
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
+- 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。
 - 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
 
