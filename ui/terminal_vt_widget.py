@@ -16,6 +16,7 @@ from PyQt5.QtGui import (
     QFontMetrics,
     QFontMetricsF,
     QPainter,
+    QPen,
     QGuiApplication,
     QInputMethodEvent,
     QPixmap,
@@ -33,6 +34,7 @@ from storage.paths import LOGS_DIR
 from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
 from ui.prompt_dialog import prompt_multiline_confirm
 from ui.theme import (
+    active_theme_palette,
     terminal_font_family_css,
     normalize_terminal_font_family,
     normalize_terminal_font_size,
@@ -275,6 +277,14 @@ class TerminalVTWidget(QWidget):
 
         return super().event(event)
 
+    def focusInEvent(self, event) -> None:  # type: ignore[override]
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:  # type: ignore[override]
+        super().focusOutEvent(event)
+        self.update()
+
     def inputMethodEvent(self, event: QInputMethodEvent) -> None:  # type: ignore[override]
         """
         Handle IME commit strings (e.g. when a user types using a CJK input method).
@@ -405,6 +415,10 @@ class TerminalVTWidget(QWidget):
 
     def _scrollbar_thumb_bg(self) -> QColor:
         return self._setting_color("terminal_scrollbar_thumb_color", "#6A6A6A")
+
+    def _focus_border_color(self) -> QColor:
+        color = QColor(getattr(active_theme_palette(), "terminal_focus_border", "#f0a030"))
+        return color if color.isValid() else QColor("#f0a030")
 
     def _is_alive(self) -> bool:
         if sip is None:
@@ -654,7 +668,7 @@ class TerminalVTWidget(QWidget):
             pass
 
         try:
-            display = getattr(self._main_screen, "display", [])
+            display = self._safe_display_lines_for_screen(self._main_screen)
             if not display or rows <= 0:
                 return False
             bottom_idx = min(rows, len(display)) - 1
@@ -672,7 +686,7 @@ class TerminalVTWidget(QWidget):
         except Exception:
             pass
         try:
-            display = getattr(self._main_screen, "display", [])
+            display = self._safe_display_lines_for_screen(self._main_screen)
             limit = min(rows, len(display))
             for y in range(limit - 1, -1, -1):
                 if display[y].strip():
@@ -1057,7 +1071,7 @@ class TerminalVTWidget(QWidget):
             return
         if not self._in_alt_screen:
             return
-        display = getattr(self.screen, "display", [])
+        display = self._safe_display_lines()
         buffer = getattr(self.screen, "buffer", None)
         if buffer is None:
             return
@@ -1944,21 +1958,58 @@ class TerminalVTWidget(QWidget):
     def _cell_span(self, line: Any, x: int, cols: int) -> int:
         return 2 if self._is_wide_leading_cell(line, x, cols) else 1
 
-    def _line_from_buffer(self, y: int) -> Any:
+    def _line_from_screen_buffer(self, screen: Any, y: int) -> Any:
         try:
-            rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+            rows = int(getattr(screen, "lines", self._calc_cols_rows()[1]) or 0)
             if y < 0 or y >= rows:
                 return None
         except Exception:
             if y < 0:
                 return None
-        buffer = getattr(self.screen, "buffer", None)
+        buffer = getattr(screen, "buffer", None)
         if buffer is None:
             return None
         try:
             return buffer[y]
         except Exception:
             return None
+
+    def _line_from_buffer(self, y: int) -> Any:
+        return self._line_from_screen_buffer(self.screen, y)
+
+    def _safe_display_line_for_screen(self, screen: Any, y: int, cols: int) -> str:
+        """Build one display line from pyte buffer; avoids Screen.display on empty cells."""
+        if cols <= 0:
+            return ""
+        line = self._line_from_screen_buffer(screen, y)
+        if line is None:
+            return ""
+        chars: list[str] = []
+        x = 0
+        while x < cols:
+            if self._is_wide_continuation_cell(line, x):
+                x += 1
+                continue
+            ch = self._cell_data(line, x)
+            if not ch:
+                x += 1
+                continue
+            chars.append(ch)
+            x += self._cell_span(line, x, cols)
+        return "".join(chars)
+
+    def _safe_display_lines_for_screen(self, screen: Any) -> list[str]:
+        try:
+            rows = int(getattr(screen, "lines", 0) or 0)
+            cols = int(getattr(screen, "columns", self._calc_cols_rows()[0]) or 0)
+        except Exception:
+            return []
+        if rows <= 0:
+            return []
+        return [self._safe_display_line_for_screen(screen, y, cols) for y in range(rows)]
+
+    def _safe_display_lines(self) -> list[str]:
+        return self._safe_display_lines_for_screen(self.screen)
 
     def _render_lines(
         self,
@@ -1970,8 +2021,6 @@ class TerminalVTWidget(QWidget):
         clear_line: bool,
     ) -> None:
         painter.setFont(self.font())
-        # Best-effort access to pyte buffer; fallback to plain display strings.
-        display = getattr(self.screen, "display", [])
         buffer = getattr(self.screen, "buffer", None)
         cursor = getattr(self.screen, "cursor", None)
         cx = int(getattr(cursor, "x", -1)) if cursor else -1
@@ -1984,7 +2033,11 @@ class TerminalVTWidget(QWidget):
         text_origin_x = self._text_origin_x()
         screen_cols = int(getattr(self.screen, 'columns', widget_cols) or widget_cols)
         cols = min(widget_cols, screen_cols)
-        rows = min(len(display), widget_rows)
+        try:
+            screen_rows = int(getattr(self.screen, "lines", widget_rows) or widget_rows)
+        except Exception:
+            screen_rows = widget_rows
+        rows = min(screen_rows, widget_rows)
         for y in sorted(line_nums):
             if y < 0 or y >= rows:
                 continue
@@ -1996,11 +2049,9 @@ class TerminalVTWidget(QWidget):
             # cannot leave stale pixels in the next row after scrolling.
             painter.save()
             painter.setClipRect(row_rect)
-            line_str = display[y] if y < len(display) else ""
-            # If we can't access per-cell attributes, draw plain text.
+            # Cell-level drawing needs pyte's buffer. Without it, leave the
+            # cleared row blank rather than calling Screen.display.
             if buffer is None:
-                painter.setPen(self._default_fg)
-                painter.drawText(QPointF(text_origin_x, y * self._cell_h + self._ascent), line_str)
                 painter.restore()
                 continue
 
@@ -2156,6 +2207,13 @@ class TerminalVTWidget(QWidget):
 
         if overlay_lines:
             self._render_lines(p, overlay_lines, include_selection=True, include_cursor=True, clear_line=False)
+        if self.hasFocus():
+            pen = QPen(self._focus_border_color())
+            pen.setWidth(1)
+            pen.setJoinStyle(Qt.MiterJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
         p.end()
         dt_ms = (time.perf_counter() - t0) * 1000.0
         if dt_ms > 20 or time.monotonic() < self._debug_after_resize_until:
@@ -2390,8 +2448,9 @@ class TerminalVTWidget(QWidget):
         command = (command or '').strip()
         if not command:
             return
+        self._prepare_for_terminal_input()
         payload_text = command.replace('\r\n', '\n').replace('\r', '\n')
-        self._append_pending_command_text(payload_text, force_history=True)
+        self._append_pending_command_text(payload_text, force_history=execute)
         payload = payload_text.replace('\n', '\r').encode('utf-8', errors='replace')
         if execute:
             self._commit_command_start()

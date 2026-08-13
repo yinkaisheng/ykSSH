@@ -57,6 +57,7 @@ class ThemePalette:
     table_grid: str
     title_bar_background: str
     window_border: str
+    terminal_focus_border: str
 
 
 ThemePalette.__doc__ = format_theme_palette_doc()

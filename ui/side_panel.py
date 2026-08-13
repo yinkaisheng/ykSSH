@@ -77,6 +77,8 @@ def _session_tooltip(session: SessionItem) -> str:
         lines.append(f"{tr('sessions.local_path')}: {session.local_path}")
     if session.remote_path:
         lines.append(f"{tr('sessions.remote_path')}: {session.remote_path}")
+    if session.info:
+        lines.append(f"{tr('sessions.info')}: {session.info}")
     return '\n'.join(lines)
 
 
@@ -165,7 +167,7 @@ class SidePanel(QWidget):
     """Left drawer panel for sessions, quick commands, and command history."""
 
     session_connect_requested = pyqtSignal(SessionItem)
-    command_send_requested = pyqtSignal(str)
+    command_send_requested = pyqtSignal(str, bool)
     history_jump_requested = pyqtSignal(str, str, int)
     sessions_changed = pyqtSignal()
 
@@ -247,6 +249,8 @@ class SidePanel(QWidget):
 
         self.history_list = QListWidget()
         self.history_list.setObjectName('CommandHistoryList')
+        self.history_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.history_list.customContextMenuRequested.connect(self._show_history_context_menu)
         self.history_list.itemClicked.connect(self._on_history_item_clicked)
         self.history_list.itemDoubleClicked.connect(self._on_history_item_double_clicked)
         layout.addWidget(self.history_list, 1)
@@ -648,12 +652,12 @@ class SidePanel(QWidget):
             return
         command = self._find_command_by_tree(item)
         if command is not None and not command.is_folder():
-            self.command_send_requested.emit(command.command)
+            self.command_send_requested.emit(command.command, False)
 
     def _on_history_item_double_clicked(self, item: QListWidgetItem) -> None:
         history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
         if history is not None:
-            self.command_send_requested.emit(history.command)
+            self.command_send_requested.emit(history.command, False)
 
     def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
         history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
@@ -862,10 +866,11 @@ class SidePanel(QWidget):
             add_menu_key(menu, collapse_action, Qt.Key_L)
             menu.addSeparator()
             send_action = None
+            send_exec_action = None
+            copy_action = None
             edit_action = None
         else:
-            send_action = menu.addAction(tr('commands.send'))
-            add_menu_key(menu, send_action, Qt.Key_S)
+            send_action, send_exec_action, copy_action = self._add_command_dispatch_actions(menu)
             edit_action = menu.addAction(tr('sessions.edit'))
             add_menu_key(menu, edit_action, Qt.Key_E)
             add_folder_action = None
@@ -921,13 +926,55 @@ class SidePanel(QWidget):
                 self._delete_command_item(item, confirm=True)
         else:
             if action == send_action:
-                self._on_command_item_double_clicked(item, 0)
+                self._emit_command_to_terminal(item, execute=False)
+            elif action == send_exec_action:
+                self._emit_command_to_terminal(item, execute=True)
+            elif action == copy_action:
+                self._copy_command_from_tree_item(item)
             elif action == edit_action:
                 self._edit_command(item)
             elif action == rename_action:
                 self._rename_command_item(item)
             elif action == delete_action:
                 self._delete_command_item(item, confirm=True)
+
+    def _add_command_dispatch_actions(self, menu: ShortcutMenu):
+        send_action = menu.addAction(tr('commands.send'))
+        add_menu_key(menu, send_action, Qt.Key_S)
+        send_exec_action = menu.addAction(tr('commands.send_and_execute'))
+        add_menu_key(menu, send_exec_action, Qt.Key_T)
+        copy_action = menu.addAction(tr('commands.copy_command'))
+        add_menu_key(menu, copy_action, Qt.Key_C)
+        return send_action, send_exec_action, copy_action
+
+    def _emit_command_to_terminal(self, item: QTreeWidgetItem, *, execute: bool) -> None:
+        command = self._find_command_by_tree(item)
+        if command is not None and not command.is_folder() and command.command:
+            self.command_send_requested.emit(command.command, execute)
+
+    def _copy_command_from_tree_item(self, item: QTreeWidgetItem) -> None:
+        command = self._find_command_by_tree(item)
+        if command is not None and not command.is_folder() and command.command:
+            QApplication.clipboard().setText(command.command)
+
+    def _show_history_context_menu(self, pos) -> None:
+        item = self.history_list.itemAt(pos)
+        if item is None:
+            return
+        history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
+        if history is None:
+            return
+        menu = ShortcutMenu(self)
+        send_action, send_exec_action, copy_action = self._add_command_dispatch_actions(menu)
+        action = exec_menu(menu, self.history_list.viewport().mapToGlobal(pos))
+        if action == send_action:
+            self.command_send_requested.emit(history.command, False)
+        elif action == send_exec_action:
+            self.command_send_requested.emit(history.command, True)
+        elif action == copy_action:
+            if history.command:
+                QApplication.clipboard().setText(history.command)
+
     def _expand_recursive(self, item: QTreeWidgetItem) -> None:
         item.setExpanded(True)
         for i in range(item.childCount()):
@@ -1087,6 +1134,7 @@ class SidePanel(QWidget):
         session.key_path = updated.key_path
         session.local_path = updated.local_path
         session.remote_path = updated.remote_path
+        session.info = updated.info
         password = dialog.get_password()
         if session.auth_type != AUTH_PASSWORD:
             self._save_credential_result(self.keyring.delete_password(session.id))

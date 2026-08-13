@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -114,8 +115,16 @@ class SessionDialog(QDialog):
         self.remote_path_edit = QLineEdit()
         self.remote_path_edit.setPlaceholderText(tr('sessions.path_home_hint'))
 
+        self.info_edit = QPlainTextEdit()
+        self.info_edit.setTabChangesFocus(True)
+        info_line = self.info_edit.fontMetrics().lineSpacing()
+        self.info_edit.setMinimumHeight(info_line * 2 + 16)
+        info_label = QLabel(tr('sessions.info'))
+        info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+
         form.addRow(tr('sessions.local_path'), local_row)
         form.addRow(tr('sessions.remote_path'), self.remote_path_edit)
+        form.addRow(info_label, self.info_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         translate_button_box(buttons)
@@ -165,6 +174,7 @@ class SessionDialog(QDialog):
         self.key_path_edit.setText(session.key_path)
         self.local_path_edit.setText(_normalize_local_path(session.local_path))
         self.remote_path_edit.setText(session.remote_path)
+        self.info_edit.setPlainText(session.info)
         if self._initial_password:
             self.password_edit.setText(self._initial_password)
 
@@ -192,6 +202,7 @@ class SessionDialog(QDialog):
             key_path=self.key_path_edit.text().strip(),
             local_path=_normalize_local_path(self.local_path_edit.text()),
             remote_path=self.remote_path_edit.text().strip(),
+            info=self.info_edit.toPlainText().rstrip(),
         )
 
     def get_password(self) -> str:

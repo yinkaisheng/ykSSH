@@ -40,6 +40,7 @@ THEME_COLOR_DOCS: Dict[str, str] = {
     'table_grid': 'Table grid lines and list dividers',
     'title_bar_background': 'Custom title bar background',
     'window_border': 'Frameless main window outer border color',
+    'terminal_focus_border': '1px border on the terminal widget while it has focus',
 }
 
 THEME_COLOR_KEY_ORDER = tuple(THEME_COLOR_DOCS.keys())
@@ -110,6 +111,7 @@ DEFAULT_THEMES: Dict[str, ThemeColorDict] = {
         'table_grid': '#eee8d5',
         'title_bar_background': '#e0dac8',
         'window_border': '#839496',
+        'terminal_focus_border': '#cb4b16',
     },
     'light': {
         'background_primary': '#f5f5f5',
@@ -142,6 +144,7 @@ DEFAULT_THEMES: Dict[str, ThemeColorDict] = {
         'table_grid': '#eeeeee',
         'title_bar_background': '#dcdcdc',
         'window_border': '#c8c8c8',
+        'terminal_focus_border': '#e67e22',
     },
     'dark': {
         'background_primary': '#2d2d2d',
@@ -174,6 +177,7 @@ DEFAULT_THEMES: Dict[str, ThemeColorDict] = {
         'table_grid': '#404040',
         'title_bar_background': '#383838',
         'window_border': '#505050',
+        'terminal_focus_border': '#f0a030',
     },
 }
 

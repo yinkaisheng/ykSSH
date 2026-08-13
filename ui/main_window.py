@@ -577,11 +577,11 @@ class MainWindow(QMainWindow):
         if session is not None:
             self._connect_session(session)
 
-    def _send_command_to_active_terminal(self, command: str) -> None:
+    def _send_command_to_active_terminal(self, command: str, execute: bool = True) -> None:
         terminal = self.terminal_tabs.get_current_terminal()
         if terminal is None or not self._terminal_is_alive(terminal):
             return
-        terminal.send_command_text(command, execute=True)
+        terminal.send_command_text(command, execute=execute)
         terminal.setFocus(Qt.OtherFocusReason)
 
     def _jump_to_active_terminal_command(self, command: str, sent_at: str, command_start_row: int) -> None:

@@ -196,7 +196,7 @@ asyncio.set_event_loop(loop)
 | 类型 | 判定 | 字段 |
 |------|------|------|
 | 分组（folder） | `host` 为空 | `id`, `name`, `children[]` |
-| Session（leaf） | `host` 非空 | 上述 + `host`, `port`, `username`, `auth_type`, `key_path`, `local_path`, `remote_path`, `local_favorites[]`, `remote_favorites[]` |
+| Session（leaf） | `host` 非空 | 上述 + `host`, `port`, `username`, `auth_type`, `key_path`, `local_path`, `remote_path`, `info`, `local_favorites[]`, `remote_favorites[]` |
 
 - 密码 **不** 写入 `sessions.json`，仅存 `config/credentials.json`（Fernet 加密，密钥在 `config/secret.key`）。
 - 树 UI 使用 `FavoriteTreeWidget`；CRUD / 拖拽后 `_sync_data_model()` 同步回 `List[SessionItem]` 并由 `SessionProfileStore` 持久化。
@@ -316,15 +316,16 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 
 `Ctrl+Shift+Home/End` 不在备用屏幕中拦截，避免影响 Vim 等 TUI 对 Home/End 的依赖。主屏幕停留在历史位置时，凡是将发送给远端并改变/导航输入的键盘操作（普通输入、IME、粘贴、方向键、按词移动/删除、Backspace/Delete、Ctrl+A/E、Enter 等）都会先恢复最新输出；复制和 scrollback 跳转等纯本地操作不触发恢复。
 
+- 终端获得焦点时绘制 1px 高亮边框，颜色由当前主题 `themes.<name>.terminal_focus_border` 配置（solarized `#cb4b16` / light `#e67e22` / dark `#f0a030`）。
 - 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
 - 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
-- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记并记录本地命令发送时间；普通键盘输入仅在当前终端行可见回显出命令时，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令由客户端主动发送，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
-- 左侧 History 抽屉按 `tab_id` 记住各自列表 scrollbar 位置，切换 Tab 时会恢复当前 Tab 历史列表上次滚动位置。历史项保存对应终端命令块的 `command_start_row` 绝对行号；单击某条历史时，会在当前活动终端中直接按该绝对行号滚动到对应命令块；如果对应命令已被 `clear` 清掉或已经不在 scrollback 中，则忽略跳转。历史命令双击会把该命令发送到当前活动终端并执行。
+- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记并记录本地命令发送时间；普通键盘输入仅在当前终端行可见回显出命令时，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令右键「发送并执行」由客户端主动执行，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
+- 左侧 History 抽屉按 `tab_id` 记住各自列表 scrollbar 位置，切换 Tab 时会恢复当前 Tab 历史列表上次滚动位置。历史项保存对应终端命令块的 `command_start_row` 绝对行号；单击某条历史时，会在当前活动终端中直接按该绝对行号滚动到对应命令块；如果对应命令已被 `clear` 清掉或已经不在 scrollback 中，则忽略跳转。快捷命令或历史命令双击只把命令填入当前活动终端（不发送 CR），终端获得焦点，需用户按 Enter 才执行。命令树与历史列表右键提供「发送」（填入不执行）和「发送并执行」；调用后终端获得焦点。命令树叶子与历史项另有「复制命令」，将命令文本写入剪贴板。
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
 - `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `logs/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - `terminal.terminal_debug_history_jump` 打开时，历史命令单击定位会把请求参数、命令标记、时间/命令校验结果、跳转前后 viewport/scrollback 状态写入 `logs/terminal_history_jump.log`，用于排查 History 定位异常。
-- 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`H` 复制 Host（Session 树叶子 / 终端 Tab）、`T` 上传/下载传输、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
+- 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`C` 复制命令（快捷命令树叶子 / 历史项）、`H` 复制 Host（Session 树叶子 / 终端 Tab）、`T` 上传/下载传输或发送并执行（快捷命令 / 历史）、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 发送（快捷命令 / 历史）或保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
 - 粘贴时仅在配置允许且远端显式开启 `DECSET ?2004` bracketed paste 模式后才发送 `ESC[200~...ESC[201~` 包装；普通 shell 密码提示（如 `sudo`）不发送该包装，避免控制序列被当作密码字符。
 - 多行粘贴且 `terminal_paste_confirm_multiline` 开启时，弹出可编辑确认框（完整文本、`QPlainTextEdit`）；用户可修改后点「是」或按 `Alt+Y` 粘贴编辑结果，按 `Alt+N` 取消；快捷键在编辑框聚焦时仍有效；对话框可拖动改大小，初始尺寸按内容在屏占比上限内自动扩展。
 
@@ -512,7 +513,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 | 文件 | 说明 |
 |------|------|
 | `config.json` | 主题、语言、终端/UI 字体、窗口尺寸、Session 树宽度与垂直 splitter 比例 |
-| `sessions.json` | Session 树（主机、端口、用户名、本地/远程路径等，无密码） |
+| `sessions.json` | Session 树（主机、端口、用户名、本地/远程路径、备注等，无密码） |
 | `commands.json` | 快捷命令树 |
 | `credentials.json` | Fernet 加密后的 Session 密码 |
 | `secret.key` | 解密密码所需的本地密钥 |
@@ -540,6 +541,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - 运行时色板：`ui/theme.py` → `ThemePalette` dataclass
 - QSS 由 `build_stylesheet(palette)` 动态生成
 - Tab Bar 样式：`tab_background`（非激活）、`tab_selected_background`（激活）、`tab_hover_background`（悬停）
+- 终端焦点边框：`terminal_focus_border`（终端控件获得焦点时的 1px 描边）
 - **动态垂直 padding（文字居中）：** Session 过滤框与文件面板路径 `QLineEdit` 按控件高度与 `QFontMetrics.lineSpacing` 计算 `filter_edit_pad_y` / `file_panel_toolbar_pad_y`，控件外框高度不变、仅调整内部 padding
 - 导航按钮样式：`#filePanelNavButton`（正方形 flat 按钮）
 - 终端配色尚未完全跟随 app theme（已知限制）
