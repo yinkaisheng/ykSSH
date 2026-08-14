@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 
 from core.connection_manager import ConnectionManager
 from core.path_resolver import resolve_local_path
-from core.sftp_ui_handler import SftpUiHandler
+from ui.sftp_ui_handler import SftpUiHandler
 from core.ssh_session import HostKeyChangedError, HostKeyRejectedError
 from i18n import register_retranslator, set_language, tr
 from log_util import logger

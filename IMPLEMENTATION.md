@@ -94,8 +94,7 @@ ykSSH/
 │   ├── terminal_port.py         # connection 层使用的终端能力协议
 │   ├── path_resolver.py         # 本地/远程初始路径解析
 │   ├── file_permissions.py      # 本地/远程权限字符串格式化
-│   ├── sftp_service.py          # SFTP 异步 CRUD（listdir/upload/…）
-│   └── sftp_ui_handler.py       # 文件面板 UI ↔ SFTP 桥接
+│   └── sftp_service.py          # SFTP 异步 CRUD（listdir/upload/…）
 │
 ├── storage/
 │   ├── paths.py                 # config/ 路径常量
@@ -121,6 +120,7 @@ ykSSH/
 │
 └── ui/
     ├── main_window.py           # 主窗口：布局、连接生命周期、Tab 切换
+    ├── sftp_ui_handler.py       # 文件面板 UI ↔ core.sftp_service 桥接
     ├── window_title_bar.py      # 无边框标题栏 + 菜单（见 §5.1）
     ├── side_panel.py            # 左侧抽屉容器及 Session/快捷命令树
     ├── command_dialog.py        # 快捷命令编辑对话框

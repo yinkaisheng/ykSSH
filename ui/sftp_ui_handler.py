@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Qt bridge from file panel signals to asynchronous SFTP operations."""
 from __future__ import annotations
 
 import asyncio
