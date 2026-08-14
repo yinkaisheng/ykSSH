@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
 
@@ -20,6 +19,13 @@ from storage.appearance_defaults import (
     _APPEARANCE_INT_BOUNDS,
     _APPEARANCE_INT_DEFAULTS,
     default_appearance,
+)
+from models.app_config import (
+    AppConfig,
+    AppearanceConfig,
+    FilePanelConfig,
+    SidePanelConfig,
+    WindowConfig,
 )
 from models.favorite_path import FavoritePath, favorite_paths_from_raw, favorite_paths_to_raw
 from storage.file_panel_defaults import (
@@ -60,25 +66,6 @@ _TERMINAL_SETTING_DEFAULTS: Dict[str, Any] = {
 }
 
 
-@dataclass(frozen=True)
-class AppearanceConfig:
-    theme: str
-    ui_font_size_px: int
-    table_font_size_px: int
-    status_font_size_px: int
-    session_tree_font_size_px: int
-    session_tree_row_height_px: int
-    filter_edit_height: int
-    filter_edit_font_size: int
-    ui_font_families_win: Tuple[str, ...]
-    terminal_font_family: str
-    terminal_font_size_px: int
-    terminal_font_size_min: int
-    terminal_font_size_max: int
-    terminal_font_families: Tuple[str, ...]
-    terminal_font_fallbacks: Tuple[str, ...]
-
-
 DEFAULT_WINDOW_BORDER_WIDTH = 1
 _MAX_WINDOW_BORDER_WIDTH = 8
 DEFAULT_TITLE_BAR_HEIGHT = 32
@@ -90,54 +77,6 @@ _MAX_TAB_BAR_HEIGHT = 48
 DEFAULT_SESSION_TREE_WIDTH = 280
 _MIN_SESSION_TREE_WIDTH = 120
 _MAX_SESSION_TREE_WIDTH = 800
-
-
-@dataclass(frozen=True)
-class WindowConfig:
-    border_width: int = DEFAULT_WINDOW_BORDER_WIDTH
-    title_bar_height: int = DEFAULT_TITLE_BAR_HEIGHT
-    tab_bar_height: int = DEFAULT_TAB_BAR_HEIGHT
-    width: Optional[int] = None
-    height: Optional[int] = None
-    session_tree_width: Optional[int] = None
-    vertical_splitter: Optional[float] = None
-
-
-@dataclass(frozen=True)
-class FilePanelConfig:
-    local_column_widths: Dict[str, int]
-    remote_column_widths: Dict[str, int]
-    header_height_px: int
-    row_height_px: int
-    file_panel_toolbar_height: int
-    file_panel_toolbar_font_size: int
-    file_panel_statusbar_font_size: int
-    file_panel_favorites_menu_font_size: int
-    folder_name_bold: bool
-    local_favorites: Tuple[FavoritePath, ...]
-    local_favorites_dialog_width: int
-    local_favorites_dialog_height: int
-    remote_favorites_dialog_width: int
-    remote_favorites_dialog_height: int
-
-
-@dataclass(frozen=True)
-class SidePanelConfig:
-    session_edit_dialog_width: int
-    session_edit_dialog_height: int
-    command_edit_dialog_width: int
-    command_edit_dialog_height: int
-
-
-@dataclass(frozen=True)
-class AppConfig:
-    language: str
-    themes: Dict[str, Dict[str, str]]
-    appearance: AppearanceConfig
-    terminal: Dict[str, Any]
-    window: WindowConfig
-    file_panel: FilePanelConfig
-    side_panel: SidePanelConfig
 
 
 _config_cache: Optional[AppConfig] = None

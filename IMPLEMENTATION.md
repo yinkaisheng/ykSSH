@@ -86,6 +86,7 @@ ykSSH/
 │
 ├── models/
 │   ├── session_item.py          # SessionItem 树节点 dataclass
+│   ├── app_config.py            # config.json 类型化只读模型
 │   └── favorite_path.py         # FavoritePath（path + note）
 │
 ├── core/
