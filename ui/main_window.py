@@ -948,6 +948,8 @@ class MainWindow(QMainWindow):
                 terminal_font_family=settings.family,
                 terminal_font_size_px=settings.size,
                 language=settings.language,
+                editor_path=settings.editor_path,
+                remote_large_file_mb=settings.remote_large_file_mb,
             )
         except OSError as exc:
             logger.warning(f'Failed to save app preferences: {exc}')
@@ -964,6 +966,8 @@ class MainWindow(QMainWindow):
             appearance.terminal_font_size_px,
             appearance.terminal_font_family,
             get_app_config().language,
+            get_app_config().editor.executable_path,
+            get_app_config().editor.remote_large_file_mb,
             on_save=self._save_settings,
         )
 

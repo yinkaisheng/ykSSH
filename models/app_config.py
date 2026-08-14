@@ -66,6 +66,12 @@ class SidePanelConfig:
 
 
 @dataclass(frozen=True)
+class EditorConfig:
+    executable_path: str
+    remote_large_file_mb: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     language: str
     themes: Dict[str, Dict[str, str]]
@@ -74,3 +80,4 @@ class AppConfig:
     window: WindowConfig
     file_panel: FilePanelConfig
     side_panel: SidePanelConfig
+    editor: EditorConfig

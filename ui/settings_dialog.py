@@ -6,7 +6,15 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from PyQt5.QtGui import QFontDatabase
-from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from i18n import get_language, list_languages, register_retranslator, tr, unregister_retranslator
 from storage.app_config import get_app_config
@@ -17,7 +25,7 @@ from ui.dialog_common import (
     refresh_combo_items,
     select_combo_by_data,
 )
-from ui.dialog_i18n import translate_button_box
+from ui.dialog_i18n import get_open_file_name, translate_button_box
 from ui.theme import (
     THEME_OPTIONS,
     ThemeName,
@@ -35,6 +43,8 @@ class AppSettings:
     size: int
     family: str
     language: str
+    editor_path: str
+    remote_large_file_mb: int
 
 
 def _select_body_font_family(combo: ArrowComboBox, family: str) -> None:
@@ -52,6 +62,8 @@ def prompt_app_settings(
     current_size: int,
     current_family: str,
     current_language: str,
+    current_editor_path: str,
+    current_remote_large_file_mb: int,
     *,
     on_save: Optional[Callable[[AppSettings], None]] = None,
     min_width: int = 400,
@@ -62,6 +74,8 @@ def prompt_app_settings(
         size=current_size,
         family=normalize_terminal_font_family(current_family),
         language=current_language or get_language(),
+        editor_path=current_editor_path,
+        remote_large_file_mb=current_remote_large_file_mb,
     )
     last_saved = initial
 
@@ -104,12 +118,47 @@ def prompt_app_settings(
     spin.setMinimumWidth(120)
     size_label = add_form_field(grid, 3, tr('settings.editor_font_size'), spin)
 
+    editor_field = QWidget()
+    editor_layout = QHBoxLayout(editor_field)
+    editor_layout.setContentsMargins(0, 0, 0, 0)
+    editor_layout.setSpacing(4)
+    editor_edit = QLineEdit(initial.editor_path)
+    editor_browse = QPushButton(tr('settings.browse'))
+    editor_layout.addWidget(editor_edit, 1)
+    editor_layout.addWidget(editor_browse)
+    editor_label = add_form_field(grid, 4, tr('settings.default_editor'), editor_field)
+
+    remote_size_spin = GlyphSpinBox()
+    remote_size_spin.setRange(1, 10240)
+    remote_size_spin.setValue(initial.remote_large_file_mb)
+    remote_size_spin.setSuffix(' MiB')
+    remote_size_label = add_form_field(
+        grid,
+        5,
+        tr('settings.remote_edit_large_file'),
+        remote_size_spin,
+    )
+
+    def browse_editor() -> None:
+        selected, _ = get_open_file_name(
+            dialog,
+            tr('settings.select_editor'),
+            editor_edit.text().strip(),
+            tr('settings.executable_filter'),
+        )
+        if selected:
+            editor_edit.setText(selected)
+
+    editor_browse.clicked.connect(browse_editor)
+
     def current_settings() -> AppSettings:
         return AppSettings(
             theme=normalize_theme_name(theme_combo.currentData()),
             size=spin.value(),
             family=normalize_terminal_font_family(family_combo.currentText()),
             language=language_combo.currentData(),
+            editor_path=editor_edit.text().strip(),
+            remote_large_file_mb=remote_size_spin.value(),
         )
 
     buttons = QDialogButtonBox(
@@ -147,6 +196,8 @@ def prompt_app_settings(
     language_combo.currentIndexChanged.connect(lambda _i: update_apply_enabled())
     family_combo.currentIndexChanged.connect(lambda _i: update_apply_enabled())
     spin.valueChanged.connect(lambda _v: update_apply_enabled())
+    editor_edit.textChanged.connect(lambda _text: update_apply_enabled())
+    remote_size_spin.valueChanged.connect(lambda _v: update_apply_enabled())
 
     def retranslate_settings_dialog() -> None:
         dialog.setWindowTitle(tr('settings.title'))
@@ -154,6 +205,9 @@ def prompt_app_settings(
         language_label.setText(tr('settings.language'))
         family_label.setText(tr('settings.editor_font_family'))
         size_label.setText(tr('settings.editor_font_size'))
+        editor_label.setText(tr('settings.default_editor'))
+        editor_browse.setText(tr('settings.browse'))
+        remote_size_label.setText(tr('settings.remote_edit_large_file'))
         refresh_combo_items(
             theme_combo,
             [(tr(f'theme.{theme_name}'), theme_name) for theme_name in THEME_OPTIONS],

@@ -23,6 +23,7 @@ from storage.appearance_defaults import (
 from models.app_config import (
     AppConfig,
     AppearanceConfig,
+    EditorConfig,
     FilePanelConfig,
     SidePanelConfig,
     WindowConfig,
@@ -37,6 +38,12 @@ from storage.file_panel_defaults import (
     _FILE_PANEL_INT_DEFAULTS,
     clamp_column_width,
     default_file_panel,
+)
+from storage.editor_defaults import (
+    DEFAULT_EDITOR_PATH,
+    DEFAULT_REMOTE_EDIT_LARGE_FILE_MB,
+    MAX_REMOTE_EDIT_LARGE_FILE_MB,
+    MIN_REMOTE_EDIT_LARGE_FILE_MB,
 )
 from storage.side_panel_defaults import (
     _SIDE_PANEL_INT_BOUNDS,
@@ -329,6 +336,29 @@ def _side_panel_to_config(side_panel: Dict[str, int]) -> SidePanelConfig:
     )
 
 
+def _normalize_editor(raw: Any) -> Dict[str, Any]:
+    raw = raw if isinstance(raw, dict) else {}
+    executable_path = raw.get('executable_path', DEFAULT_EDITOR_PATH)
+    if not isinstance(executable_path, str):
+        executable_path = DEFAULT_EDITOR_PATH
+    return {
+        'executable_path': executable_path.strip(),
+        'remote_large_file_mb': _clamp_int(
+            raw.get('remote_large_file_mb'),
+            DEFAULT_REMOTE_EDIT_LARGE_FILE_MB,
+            MIN_REMOTE_EDIT_LARGE_FILE_MB,
+            MAX_REMOTE_EDIT_LARGE_FILE_MB,
+        ),
+    }
+
+
+def _editor_to_config(editor: Dict[str, Any]) -> EditorConfig:
+    return EditorConfig(
+        executable_path=editor['executable_path'],
+        remote_large_file_mb=editor['remote_large_file_mb'],
+    )
+
+
 def _normalize_window(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     normalized: Dict[str, Any] = {
@@ -390,6 +420,7 @@ def _normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized['window'] = _normalize_window(raw.get('window'))
     normalized['file_panel'] = _normalize_file_panel(raw.get('file_panel'))
     normalized['side_panel'] = _normalize_side_panel(raw.get('side_panel'))
+    normalized['editor'] = _normalize_editor(raw.get('editor'))
     return normalized
 
 
@@ -403,6 +434,7 @@ def _default_config() -> Dict[str, Any]:
         'window': _normalize_window({}),
         'file_panel': _normalize_file_panel({}),
         'side_panel': _normalize_side_panel({}),
+        'editor': _normalize_editor({}),
     }
 
 
@@ -415,6 +447,7 @@ def _to_app_config(data: Dict[str, Any]) -> AppConfig:
         window=_window_to_config(data.get('window', _normalize_window({}))),
         file_panel=_file_panel_to_config(data.get('file_panel', _normalize_file_panel({}))),
         side_panel=_side_panel_to_config(data.get('side_panel', _normalize_side_panel({}))),
+        editor=_editor_to_config(data.get('editor', _normalize_editor({}))),
     )
 
 
@@ -445,6 +478,8 @@ def _config_needs_save(raw: Dict[str, Any], normalized: Dict[str, Any]) -> bool:
     if raw.get('file_panel') != normalized['file_panel']:
         return True
     if raw.get('side_panel') != normalized['side_panel']:
+        return True
+    if raw.get('editor') != normalized['editor']:
         return True
     return False
 
@@ -515,6 +550,8 @@ def save_app_preferences(
     terminal_font_family: str,
     terminal_font_size_px: int,
     language: str,
+    editor_path: str,
+    remote_large_file_mb: int,
     path: Path = CONFIG_FILE,
 ) -> AppConfig:
     global _config_cache, _raw_config_cache
@@ -542,6 +579,10 @@ def save_app_preferences(
     data = dict(_raw_config_cache)
     data['appearance'] = appearance
     data['language'] = _normalize_language(language)
+    data['editor'] = _normalize_editor({
+        'executable_path': editor_path,
+        'remote_large_file_mb': remote_large_file_mb,
+    })
     _save_config(path, data)
     _raw_config_cache = data
     _config_cache = _to_app_config(data)

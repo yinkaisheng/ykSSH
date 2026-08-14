@@ -103,6 +103,7 @@ ykSSH/
 │   ├── appearance_defaults.py   # 外观与字体配置默认值
 │   ├── file_panel_defaults.py   # 文件面板配置默认值及列宽工具
 │   ├── side_panel_defaults.py   # 侧栏对话框尺寸默认值
+│   ├── editor_defaults.py       # 外部编辑器与远端大文件阈值默认值
 │   ├── theme_defaults.py        # 三套主题默认色值
 │   ├── session_profile_store.py # sessions.json（Session 树）
 │   ├── command_store.py         # commands.json（快捷命令树）
