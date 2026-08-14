@@ -90,8 +90,8 @@ _COMMON_RENAME_SUFFIXES = frozenset({
 })
 
 
-from ui.file_panel.tables import (
-    _BaseFileTable,
+from ui.file_panel.base_table import _BaseFileTable
+from ui.file_panel.local_table import (
     _is_local_root,
     _list_windows_drives,
     _windows_drive_root,

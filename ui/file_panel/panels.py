@@ -97,11 +97,8 @@ from ui.file_panel.helpers import (
     _apply_file_panel_toolbar_layout,
     _file_table_header_labels,
 )
-from ui.file_panel.tables import (
-    LocalFileTable,
-    RemoteFileTable,
-    _remote_parent_and_name,
-)
+from ui.file_panel.local_table import LocalFileTable
+from ui.file_panel.remote_table import RemoteFileTable, _remote_parent_and_name
 from ui.file_panel.widgets import (
     _FileNavToolbar,
     _FilePanelStatusBar,

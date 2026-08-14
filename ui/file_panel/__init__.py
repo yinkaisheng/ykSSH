@@ -10,7 +10,8 @@ from ui.file_panel.panels import (
     LocalFilePanel,
     RemoteFilePanel,
 )
-from ui.file_panel.tables import LocalFileTable, RemoteFileTable
+from ui.file_panel.local_table import LocalFileTable
+from ui.file_panel.remote_table import RemoteFileTable
 
 __all__ = [
     'EqualSplitSplitter',
