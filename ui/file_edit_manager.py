@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import os
 import posixpath
+import re
 import shutil
 import tempfile
 import time
@@ -33,6 +34,12 @@ from ui.dialog_i18n import (
 )
 
 FileSignature = tuple[int, int]
+
+_WINDOWS_RESERVED_NAMES = {
+    'CON', 'PRN', 'AUX', 'NUL',
+    *(f'COM{index}' for index in range(1, 10)),
+    *(f'LPT{index}' for index in range(1, 10)),
+}
 
 
 @dataclass
@@ -415,10 +422,23 @@ class FileEditManager(QObject):
 
     def _temp_path(self, tab_id: str, remote_path: str) -> str:
         digest = hashlib.sha256(f'{tab_id}\0{remote_path}'.encode('utf-8')).hexdigest()[:20]
-        name = posixpath.basename(remote_path.rstrip('/')) or 'remote-file'
+        name = self._safe_temp_name(posixpath.basename(remote_path.rstrip('/')))
         directory = self._runtime_dir / digest
         directory.mkdir(parents=True, exist_ok=True)
         return str(directory / name)
+
+    @staticmethod
+    def _safe_temp_name(remote_name: str) -> str:
+        """Map a POSIX filename to a portable local filename while retaining its suffix."""
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', remote_name or '')
+        name = name.rstrip(' .') or 'remote-file'
+        if name.split('.', 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
+            name = f'_{name}'
+        if len(name) > 180:
+            suffix = ''.join(Path(name).suffixes[-2:])[-32:]
+            stem_length = max(1, 180 - len(suffix))
+            name = f'{name[:stem_length]}{suffix}'
+        return name
 
     def _cleanup_stale_temp_dirs(self) -> None:
         try:

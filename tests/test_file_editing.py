@@ -131,6 +131,13 @@ class FileTableEditShortcutTests(unittest.TestCase):
         self.assertEqual(normalized['executable_path'], 'C:/Tools/editor.exe')
         self.assertEqual(normalized['remote_large_file_mb'], 1)
 
+    def test_remote_temp_name_is_portable_and_keeps_suffix(self) -> None:
+        self.assertEqual(
+            FileEditManager._safe_temp_name('report:2026?.tar.gz'),
+            'report_2026_.tar.gz',
+        )
+        self.assertEqual(FileEditManager._safe_temp_name('CON.txt'), '_CON.txt')
+
 
 class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
