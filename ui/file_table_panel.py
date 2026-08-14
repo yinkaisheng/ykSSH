@@ -43,7 +43,7 @@ from storage.app_config import get_app_config, save_file_panel_column_widths
 from ui.theme import active_theme_palette
 from ui.dialog_i18n import ask_yes_no, message_warning
 from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
-from ui.file_panel_defaults import (
+from storage.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
     FILE_TABLE_COLUMNS,

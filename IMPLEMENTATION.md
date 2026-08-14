@@ -99,6 +99,10 @@ ykSSH/
 ├── storage/
 │   ├── paths.py                 # config/ 路径常量
 │   ├── app_config.py            # config.json 读写与 normalize
+│   ├── appearance_defaults.py   # 外观与字体配置默认值
+│   ├── file_panel_defaults.py   # 文件面板配置默认值及列宽工具
+│   ├── side_panel_defaults.py   # 侧栏对话框尺寸默认值
+│   ├── theme_defaults.py        # 三套主题默认色值
 │   ├── session_profile_store.py # sessions.json（Session 树）
 │   ├── command_store.py         # commands.json（快捷命令树）
 │   ├── command_history_store.py # 内存历史命令（按运行时 Tab 分桶）
@@ -125,10 +129,6 @@ ykSSH/
     ├── file_table_panel.py      # 文件面板全套组件（见 §6.3）
     ├── favorites_dialog.py      # 本地/远端收藏管理（非模态）
     ├── theme.py                 # QSS 生成与应用（含动态 padding）
-    ├── theme_defaults.py        # 三套主题默认色值
-    ├── file_panel_defaults.py   # 文件面板列宽/行高/工具栏/文件夹粗体默认值
-    ├── side_panel_defaults.py   # Session/快捷命令编辑对话框默认尺寸
-    ├── appearance_defaults.py   # 外观默认值（UI/终端字体、过滤框高度等）
     ├── dialog_common.py         # 对话框布局辅助
     ├── dialog_i18n.py           # QMessageBox 等翻译
     ├── prompt_dialog.py         # 文本输入框
@@ -550,7 +550,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 ## 9. 主题系统
 
-- 默认色值：`ui/theme_defaults.py`（solarized / light / dark）
+- 默认色值：`storage/theme_defaults.py`（solarized / light / dark）
 - 运行时色板：`ui/theme.py` → `ThemePalette` dataclass
 - QSS 由 `build_stylesheet(palette)` 动态生成
 - Tab Bar 样式：`tab_background`（非激活）、`tab_selected_background`（激活）、`tab_hover_background`（悬停）
@@ -559,7 +559,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - 导航按钮样式：`#filePanelNavButton`（正方形 flat 按钮）
 - 终端配色尚未完全跟随 app theme（已知限制）
 
-修改主题色：同时更新 `ui/theme_defaults.py` 与用户 `config/config.json` 中的 `themes.*`。
+修改主题色：同时更新 `storage/theme_defaults.py` 与用户 `config/config.json` 中的 `themes.*`。
 
 ### 9.1 运行日志
 

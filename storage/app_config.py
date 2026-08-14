@@ -11,7 +11,7 @@ from i18n.translator import DEFAULT_LOCALE, list_languages
 from log_util import logger
 from storage.paths import CONFIG_FILE
 from storage.json_io import atomic_write_json
-from ui.appearance_defaults import (
+from storage.appearance_defaults import (
     DEFAULT_TERMINAL_FONT_FAMILIES,
     DEFAULT_TERMINAL_FONT_FAMILY,
     DEFAULT_TERMINAL_FONT_FALLBACKS,
@@ -22,7 +22,7 @@ from ui.appearance_defaults import (
     default_appearance,
 )
 from models.favorite_path import FavoritePath, favorite_paths_from_raw, favorite_paths_to_raw
-from ui.file_panel_defaults import (
+from storage.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
     FILE_TABLE_COLUMNS,
@@ -32,11 +32,11 @@ from ui.file_panel_defaults import (
     clamp_column_width,
     default_file_panel,
 )
-from ui.side_panel_defaults import (
+from storage.side_panel_defaults import (
     _SIDE_PANEL_INT_BOUNDS,
     _SIDE_PANEL_INT_DEFAULTS,
 )
-from ui.theme_defaults import DEFAULT_THEMES, DEFAULT_THEME_NAMES, merge_theme_colors
+from storage.theme_defaults import DEFAULT_THEMES, DEFAULT_THEME_NAMES, merge_theme_colors
 
 CONFIG_VERSION = 1
 

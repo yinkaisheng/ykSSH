@@ -10,7 +10,7 @@ from PyQt5.QtGui import QFont, QColor, QFontMetrics
 from PyQt5.QtWidgets import QApplication
 
 from storage.app_config import get_app_config
-from ui.theme_defaults import (
+from storage.theme_defaults import (
     DEFAULT_THEMES,
     THEME_COLOR_DOCS,
     ThemeColorDict,
