@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -18,7 +18,9 @@ from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox, QSpin
 
 from ui.file_edit_manager import FileEditManager, _RemoteEditSession
 from ui.file_panel.local_table import LocalFileTable
+from ui.file_panel.panels import FilesPanel
 from ui.file_panel.remote_table import RemoteFileTable
+from ui.sftp_ui_handler import SftpUiHandler
 from ui.settings_dialog import prompt_app_settings
 from storage.app_config import _normalize_editor
 
@@ -71,6 +73,57 @@ class FileTableEditShortcutTests(unittest.TestCase):
 
             self.assertEqual(emitted, [([str(file_path)], True)])
 
+    def test_f3_uses_system_associated_application(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            file_path = Path(directory) / 'sample.wav'
+            file_path.write_bytes(b'RIFF')
+            table = LocalFileTable(initial_path=directory)
+            table.refresh()
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is not None and item.text() == 'sample.wav':
+                    table.setCurrentItem(item)
+                    item.setSelected(True)
+
+            emitted = []
+            table.edit_requested.connect(
+                lambda paths, configured: emitted.append((paths, configured)),
+            )
+            table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F3, Qt.NoModifier))
+
+            self.assertEqual(emitted, [([str(file_path)], False)])
+
+    def test_escape_from_rename_restores_table_focus_for_next_f2(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            file_path = Path(directory) / 'sample.py'
+            file_path.write_text('sample', encoding='utf-8')
+            table = LocalFileTable(initial_path=directory)
+            table.refresh()
+            table.show()
+            table.activateWindow()
+            table.setFocus(Qt.OtherFocusReason)
+            self.app.processEvents()
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is not None and item.text() == 'sample.py':
+                    table.setCurrentItem(item)
+                    item.setSelected(True)
+
+            table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F2, Qt.NoModifier))
+            first_edit = table._inline_rename_edit
+            self.assertIsNotNone(first_edit)
+            first_edit.keyPressEvent(
+                QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+            )
+            self.app.processEvents()
+
+            self.assertIsNone(table._inline_rename_edit)
+            self.assertTrue(table.hasFocus())
+
+            table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F2, Qt.NoModifier))
+            self.assertIsNotNone(table._inline_rename_edit)
+            self.assertIsNot(table._inline_rename_edit, first_edit)
+
     def test_remote_f4_emits_only_file_paths(self) -> None:
         table = RemoteFileTable()
         table.set_path('/tmp')
@@ -91,6 +144,153 @@ class FileTableEditShortcutTests(unittest.TestCase):
         table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F4, Qt.NoModifier))
 
         self.assertEqual(emitted, [(['/tmp/remote.txt'], True)])
+
+    def test_remote_f3_uses_system_associated_application(self) -> None:
+        table = RemoteFileTable()
+        table.set_path('/tmp')
+        table.set_list_callback(lambda _path: [
+            {'name': 'remote.wav', 'is_dir': False, 'size': 4},
+        ])
+        table.refresh()
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is not None and item.text() == 'remote.wav':
+                table.setCurrentItem(item)
+                item.setSelected(True)
+
+        emitted = []
+        table.edit_requested.connect(
+            lambda paths, configured: emitted.append((paths, configured)),
+        )
+        table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F3, Qt.NoModifier))
+
+        self.assertEqual(emitted, [(['/tmp/remote.wav'], False)])
+
+    def test_enter_opens_selected_files_with_system_association(self) -> None:
+        table = RemoteFileTable()
+        table.set_path('/tmp')
+        table.set_list_callback(lambda _path: [
+            {'name': 'folder', 'is_dir': True},
+            {'name': 'a.wav', 'is_dir': False, 'size': 4},
+            {'name': 'b.txt', 'is_dir': False, 'size': 3},
+        ])
+        table.refresh()
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is not None and item.text() in ('folder', 'a.wav', 'b.txt'):
+                item.setSelected(True)
+
+        emitted = []
+        table.edit_requested.connect(
+            lambda paths, configured: emitted.append((paths, configured)),
+        )
+        table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
+
+        self.assertEqual(emitted, [(['/tmp/a.wav', '/tmp/b.txt'], False)])
+
+    def test_arrow_keys_navigate_remote_directories(self) -> None:
+        table = RemoteFileTable()
+        table.set_path('/tmp')
+        table.set_list_callback(lambda _path: [
+            {'name': 'folder', 'is_dir': True},
+        ])
+        table.refresh()
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is not None and item.text() == 'folder':
+                table.setCurrentItem(item)
+                item.setSelected(True)
+
+        table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Right, Qt.NoModifier))
+        self.assertEqual(table.current_path(), '/tmp/folder')
+
+        table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Left, Qt.NoModifier))
+        self.assertEqual(table.current_path(), '/tmp')
+
+        table.keyPressEvent(
+            QKeyEvent(QEvent.KeyPress, Qt.Key_Left, Qt.ControlModifier)
+        )
+        self.assertEqual(table.current_path(), '/')
+
+    def test_alt_enter_opens_properties_for_selection(self) -> None:
+        table = RemoteFileTable()
+        table.set_path('/tmp')
+        table.set_list_callback(lambda _path: [
+            {'name': 'a.txt', 'is_dir': False, 'size': 3},
+        ])
+        table.refresh()
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is not None and item.text() == 'a.txt':
+                table.setCurrentItem(item)
+                item.setSelected(True)
+        properties = Mock()
+        table._properties = properties
+
+        table.keyPressEvent(
+            QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.AltModifier)
+        )
+
+        properties.assert_called_once_with()
+
+    def test_file_panel_focus_shortcuts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            panel = FilesPanel(initial_local_path=directory)
+            panel.show()
+            panel.activateWindow()
+            remote_table = panel.remote_file_panel.table
+            remote_table.show()
+            local_table = panel.local_file_panel.table
+            local_table.setFocus(Qt.OtherFocusReason)
+            self.app.processEvents()
+            self.assertTrue(local_table.property('panelFocused'))
+            self.assertFalse(remote_table.property('panelFocused'))
+
+            local_table.keyPressEvent(
+                QKeyEvent(QEvent.KeyPress, Qt.Key_Up, Qt.ControlModifier)
+            )
+            self.app.processEvents()
+            local_path_edit = panel.local_file_panel.path_edit
+            self.assertTrue(local_path_edit.hasFocus())
+            self.assertEqual(local_path_edit.selectedText(), local_path_edit.text())
+
+            local_path_edit.keyPressEvent(
+                QKeyEvent(QEvent.KeyPress, Qt.Key_Down, Qt.ControlModifier)
+            )
+            self.assertTrue(local_table.hasFocus())
+
+            local_table.keyPressEvent(
+                QKeyEvent(QEvent.KeyPress, Qt.Key_Right, Qt.AltModifier)
+            )
+            self.app.processEvents()
+            self.assertTrue(remote_table.hasFocus())
+            self.assertFalse(local_table.property('panelFocused'))
+            self.assertTrue(remote_table.property('panelFocused'))
+
+            remote_table.keyPressEvent(
+                QKeyEvent(QEvent.KeyPress, Qt.Key_Left, Qt.AltModifier)
+            )
+            self.app.processEvents()
+            self.assertTrue(local_table.hasFocus())
+            self.assertTrue(local_table.property('panelFocused'))
+            self.assertFalse(remote_table.property('panelFocused'))
+
+            panel.hide()
+            panel.deleteLater()
+            self.app.processEvents()
+
+    def test_configured_remote_path_does_not_replace_remote_home(self) -> None:
+        handler = SftpUiHandler('tab-a', object(), lambda: None)
+
+        initialized = handler.try_init_session_paths(
+            'C:\\work',
+            '/srv/project',
+            '/home/alice',
+        )
+
+        self.assertTrue(initialized)
+        self.assertEqual(handler.remote_dir, '/srv/project')
+        self.assertEqual(handler.remote_home, '/home/alice')
 
     def test_settings_dialog_contains_editor_controls(self) -> None:
         captured = []
@@ -154,7 +354,10 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
         self.parent.deleteLater()
 
     async def test_reopening_remote_file_reuses_download(self) -> None:
-        async def fake_download(_sftp, _remote_path: str, local_path: str) -> None:
+        async def fake_download(
+            _sftp, _remote_path: str, local_path: str, *, tab_id: str
+        ) -> None:
+            del tab_id
             Path(local_path).parent.mkdir(parents=True, exist_ok=True)
             Path(local_path).write_text('data', encoding='utf-8')
 
@@ -173,7 +376,10 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_reopening_remote_file_refreshes_changed_remote_copy(self) -> None:
         contents = iter(('old1', 'new2'))
 
-        async def fake_download(_sftp, _remote_path: str, local_path: str) -> None:
+        async def fake_download(
+            _sftp, _remote_path: str, local_path: str, *, tab_id: str
+        ) -> None:
+            del tab_id
             Path(local_path).parent.mkdir(parents=True, exist_ok=True)
             Path(local_path).write_text(next(contents), encoding='utf-8')
 
@@ -231,7 +437,10 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.sftp.attrs = SimpleNamespace(size=8, mtime=20.0, permissions=0o100644)
 
-        async def fake_download(_sftp, _remote_path: str, target: str) -> None:
+        async def fake_download(
+            _sftp, _remote_path: str, target: str, *, tab_id: str
+        ) -> None:
+            del tab_id
             Path(target).write_text('remote', encoding='utf-8')
 
         with (

@@ -602,7 +602,7 @@ class SidePanel(QWidget):
             collapse_action = None
             menu.addSeparator()
         rename_action = menu.addAction(tr('sessions.rename'))
-        add_menu_key(menu, rename_action, Qt.Key_R)
+        add_menu_key(menu, rename_action, Qt.Key_F2)
         delete_action = menu.addAction(tr('sessions.delete'))
         add_menu_key(menu, delete_action, Qt.Key_D)
         menu.addSeparator()
@@ -739,7 +739,7 @@ class SidePanel(QWidget):
             menu.addSeparator()
 
         rename_action = menu.addAction(tr('sessions.rename'))
-        add_menu_key(menu, rename_action, Qt.Key_R)
+        add_menu_key(menu, rename_action, Qt.Key_F2)
         delete_action = menu.addAction(tr('sessions.delete'))
         add_menu_key(menu, delete_action, Qt.Key_D)
         menu.addSeparator()

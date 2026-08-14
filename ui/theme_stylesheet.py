@@ -628,6 +628,14 @@ QTableWidget::item:selected:!active {{
     color: {p.text_primary};
 }}
 
+QTableWidget#fileTable[panelFocused="false"]::item:selected {{
+    background-color: {p.file_table_inactive_selected_background};
+}}
+
+QTableWidget#fileTable[panelFocused="true"]::item:selected {{
+    background-color: {p.table_selected_background};
+}}
+
 QTableWidget#headerTable::item {{
     padding: 1px 4px;
     border: none;
@@ -644,7 +652,7 @@ QTableWidget#headerTable::item:selected:!active {{
 }}
 
 QTableWidget QLineEdit#tableCellEditor {{
-    padding: 1px 4px;
+    padding: 0px 4px;
     margin: 0px;
     border: none;
     background-color: {p.background_primary};
@@ -778,6 +786,17 @@ QCheckBox#sslVerifyCheck::indicator:checked {{
 }}
 
 QCheckBox#sslVerifyCheck::indicator:checked:hover {{
+    background-color: {p.highlight_hover};
+    border-color: {p.highlight_hover};
+}}
+
+QCheckBox#sslVerifyCheck::indicator:indeterminate {{
+    image: none;
+    background-color: {p.highlight};
+    border-color: {p.highlight};
+}}
+
+QCheckBox#sslVerifyCheck::indicator:indeterminate:hover {{
     background-color: {p.highlight_hover};
     border-color: {p.highlight_hover};
 }}

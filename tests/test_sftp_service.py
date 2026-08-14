@@ -14,6 +14,7 @@ from core.sftp_service import (
     LocalSymlinkUnsupported,
     _ensure_local_dir,
     _ensure_remote_dir,
+    _sftp_log_context,
     upload,
 )
 
@@ -38,7 +39,8 @@ class SftpMergeTests(unittest.IsolatedAsyncioTestCase):
         async def conflict(*_args):
             self.fail('directory merge must not ask for an overwrite decision')
 
-        result = await _ensure_remote_dir(sftp, '/target', 'source', conflict)
+        with _sftp_log_context('test-tab'):
+            result = await _ensure_remote_dir(sftp, '/target', 'source', conflict)
         self.assertTrue(result)
         self.assertFalse(sftp.created)
 
@@ -52,14 +54,15 @@ class SftpMergeTests(unittest.IsolatedAsyncioTestCase):
             async def conflict(*_args):
                 self.fail('directory merge must not ask for an overwrite decision')
 
-            result = await _ensure_local_dir(None, '/source', str(target), conflict)
+            with _sftp_log_context('test-tab'):
+                result = await _ensure_local_dir(None, '/source', str(target), conflict)
             self.assertTrue(result)
             self.assertEqual(marker.read_text(encoding='utf-8'), 'keep')
 
     async def test_selected_local_symlink_is_rejected(self) -> None:
         with patch('core.sftp_service._is_local_link', return_value=True):
             with self.assertRaises(LocalSymlinkUnsupported):
-                await upload(None, 'local-link', '/target')
+                await upload(None, 'local-link', '/target', tab_id='test-tab')
 
 
 if __name__ == '__main__':

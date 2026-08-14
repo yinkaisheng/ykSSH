@@ -7,8 +7,10 @@ import inspect
 import os
 import shutil
 import stat
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Iterator, Literal
 
 import asyncssh
 
@@ -29,6 +31,21 @@ ConflictHandler = Callable[[str, str, bool], TransferDecision | Awaitable[Transf
 ProgressHandler = Callable[[str, str, int, int], None]
 
 _COPY_CHUNK_SIZE = 256 * 1024
+_SFTP_TAB_ID: ContextVar[str] = ContextVar('sftp_tab_id', default='unbound')
+
+
+@contextmanager
+def _sftp_log_context(tab_id: str) -> Iterator[None]:
+    """Bind the owning terminal tab to logs emitted by one SFTP operation."""
+    token = _SFTP_TAB_ID.set(tab_id)
+    try:
+        yield
+    finally:
+        _SFTP_TAB_ID.reset(token)
+
+
+def _log_id() -> str:
+    return f'tab_id={_SFTP_TAB_ID.get()}'
 
 
 @dataclass(frozen=True)
@@ -39,12 +56,22 @@ class _RemoteEntry:
     mtime: float = 0.0
 
 
-async def listdir(sftp: asyncssh.SFTPClient, path: str) -> list[dict[str, Any]]:
+async def listdir(
+    sftp: asyncssh.SFTPClient,
+    path: str,
+    *,
+    tab_id: str,
+) -> list[dict[str, Any]]:
+    with _sftp_log_context(tab_id):
+        return await _listdir(sftp, path)
+
+
+async def _listdir(sftp: asyncssh.SFTPClient, path: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     try:
         names = await sftp.listdir(path)
     except asyncssh.SFTPError as exc:
-        logger.warning(f'SFTP listdir failed for {path}: {exc}')
+        logger.warning(f'SFTP listdir failed: {_log_id()}, path={path}, error={exc}')
         return entries
 
     for name in sorted(names):
@@ -74,12 +101,25 @@ async def upload(
     remote_path: str,
     progress_handler: ProgressHandler | None = None,
     conflict_handler: ConflictHandler | None = None,
+    *,
+    tab_id: str,
+) -> None:
+    with _sftp_log_context(tab_id):
+        await _upload(sftp, local_path, remote_path, progress_handler, conflict_handler)
+
+
+async def _upload(
+    sftp: asyncssh.SFTPClient,
+    local_path: str,
+    remote_path: str,
+    progress_handler: ProgressHandler | None,
+    conflict_handler: ConflictHandler | None,
 ) -> None:
     local_path = os.path.abspath(local_path)
     if _is_local_link(local_path):
         raise LocalSymlinkUnsupported(local_path)
     if os.path.isdir(local_path):
-        logger.info(f'SFTP upload directory start: local={local_path}, remote={remote_path}')
+        logger.info(f'SFTP upload directory start: {_log_id()}, local={local_path}, remote={remote_path}')
         await _upload_dir(
             sftp,
             local_path,
@@ -88,11 +128,11 @@ async def upload(
             conflict_handler,
             visited_dirs=set(),
         )
-        logger.info(f'SFTP upload directory done: local={local_path}, remote={remote_path}')
+        logger.info(f'SFTP upload directory done: {_log_id()}, local={local_path}, remote={remote_path}')
         return
-    logger.info(f'SFTP upload file start: local={local_path}, remote={remote_path}')
+    logger.info(f'SFTP upload file start: {_log_id()}, local={local_path}, remote={remote_path}')
     await _upload_file(sftp, local_path, remote_path, progress_handler, conflict_handler)
-    logger.info(f'SFTP upload file done: local={local_path}, remote={remote_path}')
+    logger.info(f'SFTP upload file done: {_log_id()}, local={local_path}, remote={remote_path}')
 
 
 async def download(
@@ -101,10 +141,23 @@ async def download(
     local_path: str,
     progress_handler: ProgressHandler | None = None,
     conflict_handler: ConflictHandler | None = None,
+    *,
+    tab_id: str,
+) -> None:
+    with _sftp_log_context(tab_id):
+        await _download(sftp, remote_path, local_path, progress_handler, conflict_handler)
+
+
+async def _download(
+    sftp: asyncssh.SFTPClient,
+    remote_path: str,
+    local_path: str,
+    progress_handler: ProgressHandler | None,
+    conflict_handler: ConflictHandler | None,
 ) -> None:
     attrs = await sftp.lstat(remote_path)
     if await _remote_entry_is_dir(sftp, remote_path, attrs):
-        logger.info(f'SFTP download directory start: remote={remote_path}, local={local_path}')
+        logger.info(f'SFTP download directory start: {_log_id()}, remote={remote_path}, local={local_path}')
         await _download_dir(
             sftp,
             remote_path,
@@ -113,11 +166,11 @@ async def download(
             conflict_handler,
             visited_dirs=set(),
         )
-        logger.info(f'SFTP download directory done: remote={remote_path}, local={local_path}')
+        logger.info(f'SFTP download directory done: {_log_id()}, remote={remote_path}, local={local_path}')
         return
-    logger.info(f'SFTP download file start: remote={remote_path}, local={local_path}')
+    logger.info(f'SFTP download file start: {_log_id()}, remote={remote_path}, local={local_path}')
     await _download_file(sftp, remote_path, local_path, progress_handler, conflict_handler)
-    logger.info(f'SFTP download file done: remote={remote_path}, local={local_path}')
+    logger.info(f'SFTP download file done: {_log_id()}, remote={remote_path}, local={local_path}')
 
 
 async def _upload_dir(
@@ -130,7 +183,7 @@ async def _upload_dir(
 ) -> None:
     canonical_dir = os.path.realpath(local_dir)
     if canonical_dir in visited_dirs:
-        logger.warning(f'SFTP upload skipped recursive local directory: local={local_dir}')
+        logger.warning(f'SFTP upload skipped recursive local directory: {_log_id()}, local={local_dir}')
         return
     visited_dirs.add(canonical_dir)
     if not await _ensure_remote_dir(sftp, remote_dir, local_dir, conflict_handler):
@@ -139,7 +192,7 @@ async def _upload_dir(
         local_child = os.path.join(local_dir, name)
         remote_child = _remote_join(remote_dir, name)
         if _is_local_link(local_child):
-            logger.warning(f'SFTP upload skipped local symlink or junction: local={local_child}')
+            logger.warning(f'SFTP upload skipped local symlink or junction: {_log_id()}, local={local_child}')
             continue
         if os.path.isdir(local_child):
             await _upload_dir(
@@ -207,7 +260,7 @@ async def _download_dir(
 ) -> None:
     canonical_dir = await _remote_realpath(sftp, remote_dir)
     if canonical_dir in visited_dirs:
-        logger.warning(f'SFTP download skipped recursive symlink directory: remote={remote_dir}')
+        logger.warning(f'SFTP download skipped recursive symlink directory: {_log_id()}, remote={remote_dir}')
         return
     visited_dirs.add(canonical_dir)
     if not await _ensure_local_dir(sftp, remote_dir, local_dir, conflict_handler):
@@ -288,7 +341,7 @@ async def _remote_file_start_offset(
         raise TransferCancelled()
     if decision == 'overwrite':
         if is_dir:
-            await delete_path(sftp, remote_path)
+            await _delete(sftp, remote_path)
         return 0
     if is_dir:
         return None
@@ -335,19 +388,19 @@ async def _ensure_remote_dir(
     try:
         attrs = await sftp.lstat(remote_dir)
     except asyncssh.SFTPError:
-        logger.info(f'SFTP create remote directory: remote={remote_dir}')
+        logger.info(f'SFTP create remote directory: {_log_id()}, remote={remote_dir}')
         await sftp.makedirs(remote_dir, exist_ok=True)
         return True
     target_is_dir = stat.S_ISDIR(attrs.permissions or 0)
     if target_is_dir:
-        logger.info(f'SFTP merge into remote directory: remote={remote_dir}, source={local_source}')
+        logger.info(f'SFTP merge into remote directory: {_log_id()}, remote={remote_dir}, source={local_source}')
         return True
     decision = await _resolve_conflict(local_source, remote_dir, False, conflict_handler)
     if decision == 'cancel':
         raise TransferCancelled()
     if decision == 'overwrite':
-        logger.info(f'SFTP overwrite remote path with directory: remote={remote_dir}, source={local_source}')
-        await delete_path(sftp, remote_dir)
+        logger.info(f'SFTP overwrite remote path with directory: {_log_id()}, remote={remote_dir}, source={local_source}')
+        await _delete(sftp, remote_dir)
         await sftp.makedirs(remote_dir, exist_ok=True)
         return True
     return False
@@ -370,17 +423,17 @@ async def _ensure_local_dir(
             return True
         return False
     if not os.path.exists(local_dir):
-        logger.info(f'Create local directory for download: local={local_dir}')
+        logger.info(f'Create local directory for download: {_log_id()}, local={local_dir}')
         os.makedirs(local_dir, exist_ok=True)
         return True
     if os.path.isdir(local_dir):
-        logger.info(f'Merge download into local directory: local={local_dir}, source={remote_source}')
+        logger.info(f'Merge download into local directory: {_log_id()}, local={local_dir}, source={remote_source}')
         return True
     decision = await _resolve_conflict(remote_source, local_dir, False, conflict_handler)
     if decision == 'cancel':
         raise TransferCancelled()
     if decision == 'overwrite':
-        logger.info(f'Overwrite local path with directory for download: local={local_dir}, source={remote_source}')
+        logger.info(f'Overwrite local path with directory for download: {_log_id()}, local={local_dir}, source={remote_source}')
         os.remove(local_dir)
         os.makedirs(local_dir, exist_ok=True)
         return True
@@ -493,7 +546,7 @@ async def _set_remote_mtime(
     try:
         await sftp.utime(path, (atime if atime is not None else mtime, mtime))
     except Exception as exc:
-        logger.warning(f'failed to set remote mtime for {path}: {exc}')
+        logger.warning(f'Failed to set remote mtime: {_log_id()}, path={path}, error={exc}')
 
 
 def _set_local_mtime(path: str, mtime: float) -> None:
@@ -502,10 +555,20 @@ def _set_local_mtime(path: str, mtime: float) -> None:
     try:
         os.utime(path, (mtime, mtime))
     except OSError as exc:
-        logger.warning(f'failed to set local mtime for {path}: {exc}')
+        logger.warning(f'Failed to set local mtime: {_log_id()}, path={path}, error={exc}')
 
 
-async def delete(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
+async def delete(
+    sftp: asyncssh.SFTPClient,
+    remote_path: str,
+    *,
+    tab_id: str,
+) -> None:
+    with _sftp_log_context(tab_id):
+        await _delete(sftp, remote_path)
+
+
+async def _delete(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
     """Delete a remote path. Symlinks are removed without following the target."""
     try:
         attrs = await sftp.lstat(remote_path)
@@ -513,27 +576,40 @@ async def delete(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
         raise exc
     mode = attrs.permissions or 0
     if stat.S_ISLNK(mode):
-        logger.info(f'SFTP delete symlink: remote={remote_path}')
+        logger.info(f'SFTP delete symlink: {_log_id()}, remote={remote_path}')
         await sftp.remove(remote_path)
         return
     if stat.S_ISDIR(mode):
-        logger.info(f'SFTP delete directory: remote={remote_path}')
+        logger.info(f'SFTP delete directory: {_log_id()}, remote={remote_path}')
         for entry in await _remote_entries(sftp, remote_path, follow_symlink_dirs=False):
-            await delete(sftp, entry.path)
+            await _delete(sftp, entry.path)
         await sftp.rmdir(remote_path)
         return
-    logger.info(f'SFTP delete file: remote={remote_path}')
+    logger.info(f'SFTP delete file: {_log_id()}, remote={remote_path}')
     await sftp.remove(remote_path)
 
 
-async def rename(sftp: asyncssh.SFTPClient, old_path: str, new_path: str) -> None:
-    logger.info(f'SFTP rename: old={old_path}, new={new_path}')
-    await sftp.rename(old_path, new_path)
+async def rename(
+    sftp: asyncssh.SFTPClient,
+    old_path: str,
+    new_path: str,
+    *,
+    tab_id: str,
+) -> None:
+    with _sftp_log_context(tab_id):
+        logger.info(f'SFTP rename: {_log_id()}, old={old_path}, new={new_path}')
+        await sftp.rename(old_path, new_path)
 
 
-async def mkdir(sftp: asyncssh.SFTPClient, remote_path: str) -> None:
-    logger.info(f'SFTP mkdir: remote={remote_path}')
-    await sftp.mkdir(remote_path)
+async def mkdir(
+    sftp: asyncssh.SFTPClient,
+    remote_path: str,
+    *,
+    tab_id: str,
+) -> None:
+    with _sftp_log_context(tab_id):
+        logger.info(f'SFTP mkdir: {_log_id()}, remote={remote_path}')
+        await sftp.mkdir(remote_path)
 
 
 delete_path = delete

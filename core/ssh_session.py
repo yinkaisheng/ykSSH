@@ -38,8 +38,14 @@ class SSHSession(QObject):
     data_received = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, parent: QObject = None, host_key_store: HostKeyStore | None = None) -> None:
+    def __init__(
+        self,
+        tab_id: str,
+        parent: QObject = None,
+        host_key_store: HostKeyStore | None = None,
+    ) -> None:
         super().__init__(parent)
+        self.tab_id = tab_id
         self._conn: asyncssh.SSHClientConnection | None = None
         self._process: asyncssh.SSHClientProcess | None = None
         self._sftp: asyncssh.SFTPClient | None = None
@@ -102,7 +108,7 @@ class SSHSession(QObject):
         try:
             logger.info(
                 'SSH connecting: '
-                f'session_id={session_item.id}, name={session_item.name}, '
+                f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
                 f'host={session_item.host}, port={session_item.port}, '
                 f'username={session_item.username}, auth_type={session_item.auth_type}'
             )
@@ -163,7 +169,8 @@ class SSHSession(QObject):
             self._read_task = asyncio.create_task(self._read_loop())
             logger.info(
                 'SSH connected: '
-                f'session_id={session_item.id}, host={session_item.host}, '
+                f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, '
                 f'port={session_item.port}, cols={cols}, rows={rows}'
             )
             self.connected.emit()
@@ -173,7 +180,8 @@ class SSHSession(QObject):
         except Exception as exc:
             logger.warning(
                 'SSH connect failed: '
-                f'session_id={session_item.id}, host={session_item.host}, '
+                f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, '
                 f'port={session_item.port}, error={exc}'
             )
             await self.disconnect()
@@ -188,7 +196,8 @@ class SSHSession(QObject):
         if session_item is not None:
             logger.info(
                 'SSH disconnecting: '
-                f'session_id={session_item.id}, host={session_item.host}, port={session_item.port}'
+                f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, port={session_item.port}'
             )
         try:
             current_task = asyncio.current_task()
@@ -199,7 +208,7 @@ class SSHSession(QObject):
                 except asyncio.CancelledError:
                     pass
                 except Exception as exc:
-                    logger.warning(f'SSH read task cleanup error: {exc}')
+                    logger.warning(f'SSH read task cleanup error: tab_id={self.tab_id}, error={exc}')
                 self._read_task = None
 
             if self._process is not None:
@@ -207,14 +216,14 @@ class SSHSession(QObject):
                     self._process.close()
                     await self._process.wait_closed()
                 except Exception as exc:
-                    logger.warning(f'SSH process close error: {exc}')
+                    logger.warning(f'SSH process close error: tab_id={self.tab_id}, error={exc}')
                 self._process = None
 
             if self._sftp is not None:
                 try:
                     self._sftp.exit()
                 except Exception as exc:
-                    logger.warning(f'SFTP exit error: {exc}')
+                    logger.warning(f'SFTP exit error: tab_id={self.tab_id}, error={exc}')
                 self._sftp = None
 
             if self._conn is not None:
@@ -222,14 +231,15 @@ class SSHSession(QObject):
                     self._conn.close()
                     await self._conn.wait_closed()
                 except Exception as exc:
-                    logger.warning(f'SSH connection close error: {exc}')
+                    logger.warning(f'SSH connection close error: tab_id={self.tab_id}, error={exc}')
                 self._conn = None
 
             self.disconnected.emit()
             if session_item is not None:
                 logger.info(
                     'SSH disconnected: '
-                    f'session_id={session_item.id}, host={session_item.host}, port={session_item.port}'
+                    f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                    f'host={session_item.host}, port={session_item.port}'
                 )
         finally:
             self._disconnecting = False
@@ -245,7 +255,7 @@ class SSHSession(QObject):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f'SSH read loop error: {exc}')
+            logger.warning(f'SSH read loop error: tab_id={self.tab_id}, error={exc}')
             self.error.emit(str(exc))
         finally:
             if self._conn is not None and not self._disconnecting:
@@ -260,7 +270,7 @@ class SSHSession(QObject):
             text = data.decode('utf-8', errors='replace')
             self._process.stdin.write(text)
         except Exception as exc:
-            logger.warning(f'SSH write failed: {exc}')
+            logger.warning(f'SSH write failed: tab_id={self.tab_id}, error={exc}')
 
     async def resize(self, cols: int, rows: int) -> None:
         self._cols = cols

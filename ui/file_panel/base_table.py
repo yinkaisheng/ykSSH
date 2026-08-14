@@ -114,12 +114,17 @@ class _BaseFileTable(QTableWidget):
     favorites_menu_requested = pyqtSignal()
     property_status_changed = pyqtSignal(bool, int, int, int)
     edit_requested = pyqtSignal(list, bool)
+    path_focus_requested = pyqtSignal()
+    peer_panel_focus_requested = pyqtSignal()
 
     DEFAULT_SORT_COLUMN = 0
     DEFAULT_SORT_ORDER = Qt.AscendingOrder
+    PEER_FOCUS_KEY: int | None = None
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
+        self.setObjectName('fileTable')
+        self.setProperty('panelFocused', False)
         self.setHorizontalHeader(_FileTableHeaderView(self))
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -139,10 +144,39 @@ class _BaseFileTable(QTableWidget):
         self.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.itemSelectionChanged.connect(self._emit_status_counts)
 
+    def focusInEvent(self, event) -> None:  # type: ignore[override]
+        self._set_panel_focused(True)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # type: ignore[override]
+        self._set_panel_focused(False)
+        super().focusOutEvent(event)
+
+    def _set_panel_focused(self, focused: bool) -> None:
+        if bool(self.property('panelFocused')) == focused:
+            return
+        self.setProperty('panelFocused', focused)
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+        self.viewport().update()
+
     def set_filter_edit_focused(self, focused: bool) -> None:
         self._filter_edit_focused = focused
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_Up and event.modifiers() == Qt.ControlModifier:
+            self.path_focus_requested.emit()
+            event.accept()
+            return
+        if (
+            self.PEER_FOCUS_KEY is not None
+            and event.key() == self.PEER_FOCUS_KEY
+            and event.modifiers() == Qt.AltModifier
+        ):
+            self.peer_panel_focus_requested.emit()
+            event.accept()
+            return
         if event.key() == Qt.Key_F and event.modifiers() & Qt.ControlModifier:
             # Ctrl + F
             self.filter_focus_requested.emit()
@@ -157,12 +191,37 @@ class _BaseFileTable(QTableWidget):
             self._rename()
             event.accept()
             return
+        if event.key() == Qt.Key_F3 and not event.modifiers():
+            if self._edit_selected(use_configured_editor=False):
+                event.accept()
+                return
         if event.key() == Qt.Key_F4 and not event.modifiers():
             if self._edit_selected(use_configured_editor=True):
                 event.accept()
                 return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and event.modifiers() == Qt.AltModifier:
+            if self._has_actionable_selection():
+                self._properties()
+                event.accept()
+                return
+        if event.key() == Qt.Key_Left and event.modifiers() == Qt.ControlModifier:
+            self._go_to_root()
+            event.accept()
+            return
+        if event.key() == Qt.Key_Right and not event.modifiers():
+            if self._activate_current_directory():
+                event.accept()
+                return
+        if event.key() == Qt.Key_Left and not event.modifiers():
+            if self._can_go_to_parent():
+                self._go_to_parent()
+                event.accept()
+                return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
             if self._activate_current_directory():
+                event.accept()
+                return
+            if self._edit_selected(use_configured_editor=False):
                 event.accept()
                 return
         if event.key() == Qt.Key_Delete and event.modifiers() in (Qt.NoModifier, Qt.ShiftModifier):
@@ -193,6 +252,9 @@ class _BaseFileTable(QTableWidget):
         raise NotImplementedError
 
     def _rename(self) -> None:
+        raise NotImplementedError
+
+    def _properties(self) -> None:
         raise NotImplementedError
 
     def _edit_selected(self, *, use_configured_editor: bool) -> bool:
@@ -271,12 +333,19 @@ class _BaseFileTable(QTableWidget):
     def _close_inline_rename(self) -> None:
         edit = self._inline_rename_edit
         item = self._inline_rename_item
+        restore_focus = edit is not None and edit.restore_table_focus
         self._inline_rename_edit = None
         self._inline_rename_item = None
         if item is not None and item.tableWidget() is self and item.row() >= 0:
             self.removeCellWidget(item.row(), 0)
         if edit is not None:
             edit.deleteLater()
+        if restore_focus:
+            QTimer.singleShot(0, self._restore_focus_after_inline_rename)
+
+    def _restore_focus_after_inline_rename(self) -> None:
+        if self._inline_rename_edit is None:
+            self.setFocus(Qt.OtherFocusReason)
 
     def _context_menu_row_at(self, pos) -> int | None:
         index = self.indexAt(pos)
@@ -316,6 +385,15 @@ class _BaseFileTable(QTableWidget):
     def _go_to_parent(self) -> None:
         if self._can_go_to_parent():
             self._enter_directory('..')
+
+    def _go_to_root(self) -> None:
+        raise NotImplementedError
+
+    def _has_actionable_selection(self) -> bool:
+        return any(
+            self.item(row, 0) is not None and self.item(row, 0).text() != '..'
+            for row in {index.row() for index in self.selectedIndexes()}
+        )
 
     def _is_blank_area_at(self, pos) -> bool:
         if not self.indexAt(pos).isValid():

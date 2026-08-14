@@ -110,12 +110,17 @@ class SftpUiHandler(QObject):
             parent, name = _remote_parent_and_name(probe)
             return parent, name, True if probe == text else None
 
-    def try_init_session_paths(self, local_path: str, remote_path: str) -> bool:
+    def try_init_session_paths(
+        self,
+        local_path: str,
+        remote_path: str,
+        remote_home: str,
+    ) -> bool:
+        self._remote_home = remote_home or '/'
         if self._paths_initialized:
             return False
         self._local_dir = local_path
         self._remote_dir = remote_path or '/'
-        self._remote_home = self._remote_dir
         self._paths_initialized = True
         return True
 
@@ -381,6 +386,7 @@ class SftpUiHandler(QObject):
                         remote,
                         self._make_progress_handler('upload'),
                         self._make_conflict_handler('upload'),
+                        tab_id=self.tab_id,
                     )
                     logger.info(f'Upload item done: tab_id={self.tab_id}, local={local}, remote={remote}')
                 except TransferCancelled:
@@ -394,7 +400,7 @@ class SftpUiHandler(QObject):
                     logger.info(f'Upload batch cancelled: tab_id={self.tab_id}, remote_dir={remote_dir}')
                     raise
                 except Exception as exc:
-                    logger.warning(f'upload failed: {exc}')
+                    logger.warning(f'Upload failed: tab_id={self.tab_id}, error={exc}')
                     await self._warn(str(exc))
             self._cm.invalidate_remote_cache(self.tab_id)
             await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
@@ -458,6 +464,7 @@ class SftpUiHandler(QObject):
                         local,
                         self._make_progress_handler('download'),
                         self._make_conflict_handler('download'),
+                        tab_id=self.tab_id,
                     )
                     logger.info(f'Download item done: tab_id={self.tab_id}, remote={remote}, local={local}')
                 except TransferCancelled:
@@ -468,7 +475,7 @@ class SftpUiHandler(QObject):
                     logger.info(f'Download batch cancelled: tab_id={self.tab_id}, local_dir={local_dir}')
                     raise
                 except Exception as exc:
-                    logger.warning(f'download failed: {exc}')
+                    logger.warning(f'Download failed: tab_id={self.tab_id}, error={exc}')
                     await self._warn(str(exc))
             self._on_refresh_ui()
             if user_cancelled:
@@ -501,13 +508,13 @@ class SftpUiHandler(QObject):
         try:
             for remote in remote_paths:
                 try:
-                    await delete_path(sftp, remote)
+                    await delete_path(sftp, remote, tab_id=self.tab_id)
                     logger.info(f'Remote delete item done: tab_id={self.tab_id}, remote={remote}')
                 except asyncio.CancelledError:
                     logger.info(f'Remote delete batch cancelled: tab_id={self.tab_id}')
                     raise
                 except Exception as exc:
-                    logger.warning(f'delete failed: {exc}')
+                    logger.warning(f'Delete failed: tab_id={self.tab_id}, error={exc}')
                     await self._warn(str(exc))
             self._cm.invalidate_remote_cache(self.tab_id)
             await self._cm.refresh_remote_list(self.tab_id, self._remote_dir)
@@ -557,7 +564,10 @@ class SftpUiHandler(QObject):
                     attrs = await sftp.lstat(path)
                 except Exception as exc:
                     failed += 1
-                    logger.warning(f'Remote properties stat failed: path={path}, error={exc}')
+                    logger.warning(
+                        f'Remote properties stat failed: tab_id={self.tab_id}, '
+                        f'path={path}, error={exc}'
+                    )
                     return
                 mode = int(attrs.permissions or 0)
                 targets.append((path, mode))
@@ -568,7 +578,10 @@ class SftpUiHandler(QObject):
                     entries = await sftp.readdir(path)
                 except Exception as exc:
                     failed += 1
-                    logger.warning(f'Remote properties list failed: path={path}, error={exc}')
+                    logger.warning(
+                        f'Remote properties list failed: tab_id={self.tab_id}, '
+                        f'path={path}, error={exc}'
+                    )
                     return
                 for entry in entries:
                     name = str(entry.filename)
@@ -589,7 +602,9 @@ class SftpUiHandler(QObject):
                     await sftp.chmod(path, change.apply(mode), follow_symlinks=False)
                     return True
                 except Exception as exc:
-                    logger.warning(f'Remote chmod failed: path={path}, error={exc}')
+                    logger.warning(
+                        f'Remote chmod failed: tab_id={self.tab_id}, path={path}, error={exc}'
+                    )
                     return False
 
             done = 0
@@ -623,11 +638,14 @@ class SftpUiHandler(QObject):
         old_path = f'{base}/{old_name}' if base else f'/{old_name}'
         new_path = f'{base}/{new_name}' if base else f'/{new_name}'
         try:
-            await rename(sftp, old_path, new_path)
+            await rename(sftp, old_path, new_path, tab_id=self.tab_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f'rename failed: old={old_path}, new={new_path}, error={exc}')
+            logger.warning(
+                f'Rename failed: tab_id={self.tab_id}, old={old_path}, '
+                f'new={new_path}, error={exc}'
+            )
             await self._warn(str(exc))
             return
         self._cm.invalidate_remote_cache(self.tab_id)
@@ -649,11 +667,11 @@ class SftpUiHandler(QObject):
         base = self._remote_dir.rstrip('/') or ''
         path = f'{base}/{name}' if base else f'/{name}'
         try:
-            await mkdir(sftp, path)
+            await mkdir(sftp, path, tab_id=self.tab_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f'mkdir failed: remote={path}, error={exc}')
+            logger.warning(f'Mkdir failed: tab_id={self.tab_id}, remote={path}, error={exc}')
             await self._warn(str(exc))
             return
         self._cm.invalidate_remote_cache(self.tab_id)

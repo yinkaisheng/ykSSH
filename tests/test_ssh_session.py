@@ -19,6 +19,7 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             probe = AsyncMock(side_effect=RuntimeError('probe stopped'))
             session = SSHSession(
+                'test-tab',
                 host_key_store=HostKeyStore(Path(temp_dir) / 'host_keys.json')
             )
             item = SessionItem(host='example.com', port=2222, username='user')
@@ -34,7 +35,7 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
             key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
             store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
             store.trust('192.0.2.10', 22, key)
-            session = SSHSession(host_key_store=store)
+            session = SSHSession('test-tab', host_key_store=store)
             item = SessionItem(host='192.0.2.10', port=22, username='user')
             connect = AsyncMock(side_effect=RuntimeError('connect stopped'))
 

@@ -31,7 +31,7 @@ The project is currently in active development and primarily targets Windows and
 
 ## Installation
 
-ykSSH requires **Python 3.10 or newer**. Python 3.9 and earlier are not supported.
+ykSSH requires **Python 3.10 or newer**.
 
 ```powershell
 git clone https://github.com/yinkaisheng/ykssh.git
@@ -53,6 +53,7 @@ ykSSH stores runtime data under `config/` and writes logs under `logs/`. These d
 
 | Shortcut | Action |
 |---|---|
+| `Ctrl+L` | Focus the current terminal when focus is elsewhere; when the terminal already has focus, send `Ctrl+L` to the remote shell to clear the screen |
 | `Ctrl+Shift+C` / `Shift+Delete` | Copy selected terminal text |
 | `Ctrl+Shift+V` / `Shift+Insert` | Paste |
 | `Ctrl+A` / `Ctrl+E` | Move to the start/end of the current shell input line |
@@ -70,6 +71,37 @@ older scrollback first returns the viewport to the newest output. Other keys
 which edit or navigate the remote input line—such as arrows, word movement,
 Backspace/Delete, regular text, paste, and IME input—do the same before being
 sent to the remote shell; local copy and scrollback shortcuts do not.
+
+## File Panel Shortcuts
+
+These shortcuts apply while a local or remote file table has focus unless noted otherwise.
+
+| Shortcut | Action |
+|---|---|
+| Type text / `Ctrl+F` | Filter the current file list; `Esc` clears the active filter |
+| `Ctrl+D` | Open the favorites menu; press `1`–`9` or `0` to choose one of the first ten paths |
+| `F2` | Rename the single selected file or folder; `Esc` cancels and `Enter` confirms |
+| `F3` | Open selected files with their system-associated applications; folders are ignored |
+| `F4` | Open selected files with the configured editor; falls back to system association if unavailable |
+| `Enter` | Enter a single selected folder; otherwise open selected files with their system-associated applications |
+| `Right` | Enter the single selected folder |
+| `Left` | Go to the parent directory |
+| `Ctrl+Left` | Go to the current local drive/share root or remote `/` |
+| `Alt+Enter` | Show properties for the selected items |
+| `Home` / `End` | Select and reveal the first/last visible row |
+| `Ctrl+Up` | Focus the path field and select the entire path |
+| `Ctrl+Down` | From the path field, return focus to its file table |
+| `Alt+Right` | From the local table, focus the remote table |
+| `Alt+Left` | From the remote table, focus the local table |
+| `Delete` | Local: move to Recycle Bin; remote: confirm and delete |
+| `Shift+Delete` | Permanently delete locally; delete remotely without confirmation |
+
+## Application Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+,` | Open Settings when focus is outside the terminal; when the terminal has focus, the key is sent to the remote session |
+| `Ctrl+L` | Return focus to the current connected terminal from elsewhere in the application |
 
 ## Configuration And Security
 

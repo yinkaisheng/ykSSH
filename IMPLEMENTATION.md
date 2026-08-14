@@ -246,11 +246,11 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 | 本地非 Windows / 远端 | `/` → `~` → 收藏 → 刷新 |
 
 - 按钮为正方形（边长 = `file_panel.file_panel_toolbar_height`）。
-- 远端 `~` 使用 `SftpUiHandler.remote_home`（连接时由 Session `remote_path` 初始化，缺省 `/`）。
+- 远端 `~` 使用连接用户的真实主目录：连接后以 SFTP `realpath('.')`/用户信息解析并写入 `SftpUiHandler.remote_home`；Session 配置的 `remote_path` 只作为首次打开目录和 Shell `cd` 目标，不再覆盖 `~`。
 - 本地 `~` 为 `os.path.expanduser('~')`；Windows 下 `/` 跳转到当前路径所在盘根（如 `D:\`）。
 - 工具栏与 Table 间距：`_FILE_PANEL_TOOLBAR_TABLE_SPACING`（4px）。
 - 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；中文名称额外支持按拼音首字母过滤（如 `zw` 匹配“中文测试”），首字符为单个多音汉字或后接非汉字时允许首字母多音变体（如“长”和“长abc.txt”可用 `c`/`z`，而“长度”按默认读音 `cd`）；ESC 或路径变化清除过滤。
-- 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。当前行单选且为文件夹时，Enter 进入该目录。
+- 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。Enter 在当前行单选文件夹时进入该目录，否则使用系统关联程序打开所选文件（多选时忽略文件夹）。
 - 本地文件 table：**Delete** → 回收站（无确认）；**Shift+Delete** → 永久删除（无确认）。右键菜单默认「移到回收站」；按住 **Shift** 再右键则显示「永久删除」并弹确认（对齐资源管理器习惯）。远端 Delete 弹确认后删除，Shift+Delete 直接删除。
 - 本地/远端文件可通过右键菜单或文件表格获得焦点时按 **F2** 重命名，名称列显示行内 `QLineEdit`：文件按常见单/复合后缀智能选中名称部分（如 `abc.test.tar.gz` 选中 `abc.test`），未知后缀或目录选中全名；**Esc** 取消，**Enter** 或编辑框失焦提交。
 - 本地/远端右键「属性」可编辑权限：对话框显示选择项目数；存在直接选中的文件时额外显示文件数、文件总大小和精确字节数，只有文件夹时不显示大小（不递归统计文件夹内容）。Unix/远端显示 owner/group/others 的 rwx；Windows 本地因 `os.chmod` 只能可靠控制只读标志，按资源管理器习惯仅显示单一“只读”选项（取消即恢复可写）。多选时权限位以三态显示：半选表示各项目值不一致并保持原值，用户点击后只在勾选/取消间切换；选中目录时可递归应用。本地递归通过 `asyncio.to_thread` 后台执行；远端先通过 SFTP 枚举且不跟随 symlink，再以每批 16 项并发 `chmod(..., follow_symlinks=False)`。执行期间文件面板 statusbar 显示齿轮图标，tooltip 显示已处理/总数及失败数，完成后刷新列表。
@@ -308,7 +308,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
 - 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。
-- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
 
 #### 终端快捷键速查
@@ -318,6 +318,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 | `Ctrl+Shift+C` / `Shift+Delete` | 复制终端选区 | 本地终端 |
 | `Ctrl+Shift+V` / `Shift+Insert` | 粘贴 | 本地终端 |
 | `Ctrl+A` / `Ctrl+E` | 移动到当前输入行首/行尾 | 发送给远端 shell |
+| `Ctrl+L` | 焦点不在终端时切回当前终端；焦点已在终端时清屏 | 焦点外：`MainWindow.eventFilter`；焦点在终端：发送给远端 |
 | `Alt+Left` / `Alt+Right` | 向左/向右移动一个词 | 发送 `ESC b/f` |
 | `Alt+Backspace` / `Alt+Delete` | 删除前一个/后一个词 | 发送 `ESC DEL` / `ESC d` |
 | `Ctrl+Shift+Home` / `Ctrl+Shift+End` | 跳到最早 scrollback / 返回最新输出 | 仅主屏幕本地处理 |
@@ -334,7 +335,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
 - `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `logs/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - `terminal.terminal_debug_history_jump` 打开时，历史命令单击定位会把请求参数、命令标记、时间/命令校验结果、跳转前后 viewport/scrollback 状态写入 `logs/terminal_history_jump.log`，用于排查 History 定位异常。
-- 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`C` 复制命令（快捷命令树叶子 / 历史项）、`H` 复制 Host（Session 树叶子 / 终端 Tab）、`T` 上传/下载传输或发送并执行（快捷命令 / 历史）、`E` 重命名/编辑、`D` 删除、`X` 剪切/清屏、`S` 发送（快捷命令 / 历史）或保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
+- 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`C` 复制命令（快捷命令树叶子 / 历史项）、`H` 复制 Host（Session 树叶子 / 终端 Tab）、`T` 上传/下载传输或发送并执行（快捷命令 / 历史）、`F2` 重命名、`F3`/`F4` 使用系统关联程序/配置编辑器打开、`E` 编辑 Session/快捷命令、`D` 删除、`X` 剪切/清屏、`S` 发送（快捷命令 / 历史）或保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
 - 粘贴时仅在配置允许且远端显式开启 `DECSET ?2004` bracketed paste 模式后才发送 `ESC[200~...ESC[201~` 包装；普通 shell 密码提示（如 `sudo`）不发送该包装，避免控制序列被当作密码字符。
 - 多行粘贴且 `terminal_paste_confirm_multiline` 开启时，弹出可编辑确认框（完整文本、`QPlainTextEdit`）；用户可修改后点「是」或按 `Alt+Y` 粘贴编辑结果，按 `Alt+N` 取消；快捷键在编辑框聚焦时仍有效；对话框可拖动改大小，初始尺寸按内容在屏占比上限内自动扩展。
 
@@ -388,7 +389,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - 认证：`AUTH_PASSWORD`（密码来自 CredentialStore）或 `AUTH_PUBLIC_KEY`（`key_path`）
 - 同时打开 Shell process 与 SFTP client
 - Signal：`connected` / `disconnected` / `data_received` / `error`
-- 若远端主动断开或读循环结束，`ConnectionManager` 会移除对应 `_sessions` / 远端缓存并断开 Qt signal，MainWindow 会取消该 Tab 的 SFTP 任务并清空远端文件面板；用户需要关闭当前 Tab 后重新连接。
+- 若远端主动断开或读循环结束，`ConnectionManager` 会移除对应 `_sessions` / 远端缓存并断开 Qt signal，MainWindow 会取消该 Tab 的 SFTP 任务并清空远端文件面板；曾成功连接的终端进入可重连模式，可按 Enter 在原 Tab 中重连，首次连接失败则不启用该模式。
 
 `ConnectionManager.cd_shell()`：向交互式 Shell 写入 `cd <path>\r`（延迟 150ms 等待 banner），使终端工作目录与文件面板远端路径一致。
 
@@ -571,6 +572,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - QSS 由 `build_stylesheet(palette)` 动态生成
 - Tab Bar 样式：`tab_background`（非激活）、`tab_selected_background`（激活）、`tab_hover_background`（悬停）
 - 终端焦点边框：`terminal_focus_border`（终端控件获得焦点时的 1px 描边）
+- 文件表格非焦点选中行：`file_table_inactive_selected_background`（焦点表格仍使用 `table_selected_background`）
 - **动态垂直 padding（文字居中）：** Session 过滤框与文件面板路径 `QLineEdit` 按控件高度与 `QFontMetrics.lineSpacing` 计算 `filter_edit_pad_y` / `file_panel_toolbar_pad_y`，控件外框高度不变、仅调整内部 padding
 - 导航按钮样式：`#filePanelNavButton`（正方形 flat 按钮）
 - 终端配色尚未完全跟随 app theme（已知限制）
@@ -584,6 +586,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 关键操作会写日志，便于排查连接与文件管理问题：
 
 - SSH：创建连接 Tab、开始连接、连接成功/失败、断开连接、关闭 Tab。
+- SSH、SFTP、远程文件和远程编辑日志至少携带 `tab_id`、`session_id`、`name` 之一；Tab 创建后以 `tab_id` 作为跨 `MainWindow → ConnectionManager → SSHSession/SftpUiHandler → sftp_service` 的主追踪键，建连关键日志同时记录 `session_id` 与 `name`。递归 SFTP 操作通过异步上下文继承同一 `tab_id`。
 - 文件传输：上传/下载批次开始、单项完成、批次完成、取消、冲突选择、覆盖/续传相关目标处理。
 - 文件管理：本地新建/重命名/删除/移动到回收站，远端新建/重命名/递归删除。
 - 关闭流程：传输中关闭 Tab 或退出程序时，记录用户取消或确认中断。
@@ -619,11 +622,18 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - **表格空白区双击**（最后一行下方或最右列右侧）：非根目录时跳转上级（`_BaseFileTable.mouseDoubleClickEvent`）
 - 路径栏回车 / 导航工具栏按钮：`set_path` 跳转并刷新
 - Home / End：跳转并滚动到当前可见行的第一行 / 最后一行（过滤后只在可见行范围内跳转）
-- F4：使用配置的编辑器打开选中文件；编辑器未配置或路径无效时回退系统文件关联。多选中的目录会被忽略。
+- F3：使用系统文件关联程序打开选中文件（例如音频文件由系统关联播放器打开）。
+- F4：使用配置的编辑器打开选中文件；编辑器未配置或路径无效时回退系统文件关联。F3/F4 均会显示在本地及远程文件右键菜单中，多选中的目录会被忽略。
+- Enter：单选文件夹时进入该文件夹；否则使用系统关联程序打开选中的文件，多选时忽略文件夹。
+- Right：单选文件夹时进入该文件夹；Left：进入父目录；Ctrl+Left：进入本地当前盘符/共享根目录或远端 `/`。
+- Alt+Enter：打开当前所选本地或远端项目的属性对话框。
+- Ctrl+Up：从文件表格切换到上方路径输入框并全选路径；路径输入框内按 Ctrl+Down 返回文件表格。
+- 本地表格 Alt+Right：聚焦远端表格；远端表格 Alt+Left：聚焦本地表格。
 
 ### 显示
 
 - `file_panel.folder_name_bold`：文件夹名（含 `..`）是否粗体
+- 文件表格失焦时使用当前主题的 `file_table_inactive_selected_background` 绘制选中行，以区分当前获得焦点的本地/远端面板。
 
 ### 列宽
 
@@ -633,15 +643,15 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 - 在未选中行上右键会先清空旧选择并选中鼠标所在行；在已选中行上右键保留当前多选；空白区右键不改变选择。
 
-- **远程：** 刷新、新建目录；有选中项时：使用系统关联/配置编辑器打开、复制文件名、复制路径、复制父路径、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
-- **本地：** 刷新、新建目录；有选中项时：使用系统关联/配置编辑器打开、复制、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
+- **远程：** 刷新、新建目录；有选中项时：使用系统关联程序/配置编辑器打开、复制文件名、复制路径、复制父路径、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
+- **本地：** 刷新、新建目录；有选中项时：使用系统关联程序/配置编辑器打开、复制、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
 - 编辑动作只处理文件并忽略目录；实际文件达到 3 个时先统一确认。
 
 ### 远端文件编辑
 
 - `FileEditManager` 将远端文件下载到系统临时目录的本次运行隔离子目录；远端文件名会映射为 Windows 可接受的安全文件名并保留常见扩展名。下载后将临时文件 mtime 对齐到远端 mtime；同一 Tab 的同一路径重复打开时会重新读取远端 size/mtime，仅在远端签名未变化时复用临时副本，远端已变化则覆盖下载最新副本后再打开。
 - 下载前逐文件读取远端 size/mtime；任一文件超过 `editor.remote_large_file_mb` 时统一列出大文件并确认。
-- 所有临时文件由一个 `QFileSystemWatcher` 监听，并使用一个 700ms 防抖定时器合并编辑器的连续写入和原子替换事件，不创建逐文件线程或轮询任务。
+- 所有临时文件由一个 `QFileSystemWatcher` 监听，并使用一个 800ms 防抖定时器合并编辑器的连续写入和原子替换事件，不创建逐文件线程或轮询任务。
 - 只有本地临时文件内容签名（size + mtime_ns）变化时才提示同步；同步确认框会请求前台显示并在其生命周期内临时置顶，避免被外部编辑器遮挡；拒绝后保持监控，下一次保存会再次提示。
 - 上传前比较下载时记录的远端 size/mtime。远端已变化时可覆盖远端、重新下载并放弃本地修改，或取消同步。
 - Tab/程序关闭时不对普通未同步修改追加提示；只有上传同步正在进行时复用文件传输中断确认。关闭后尽力删除本次运行临时目录，启动时清理超过 7 天的遗留目录；文件变化会刷新运行目录时间，降低多实例误清理风险。

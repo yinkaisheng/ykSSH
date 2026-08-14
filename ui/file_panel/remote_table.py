@@ -37,7 +37,6 @@ from PyQt5.QtWidgets import (
 
 from core.file_permissions import PermissionChange, format_local_permission
 from i18n import tr
-from log_util import logger
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
 from ui.theme import active_theme_palette
@@ -117,6 +116,7 @@ class RemoteFileTable(_BaseFileTable):
     mkdir_requested = pyqtSignal(str)
     refresh_requested = pyqtSignal()
     properties_requested = pyqtSignal(list, object)
+    PEER_FOCUS_KEY = Qt.Key_Left
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
@@ -137,6 +137,9 @@ class RemoteFileTable(_BaseFileTable):
 
     def _is_at_root(self) -> bool:
         return _is_remote_root(self._current_path)
+
+    def _go_to_root(self) -> None:
+        self.set_path('/')
 
     def _selected_entries(self) -> list[tuple[str, str]]:
         rows = sorted({idx.row() for idx in self.selectedIndexes()})
@@ -181,13 +184,21 @@ class RemoteFileTable(_BaseFileTable):
             menu.addSeparator()
             file_paths = self._selected_file_paths(selected)
             if file_paths:
-                menu.addAction(
-                    tr('file.edit_system'),
-                    lambda: self.edit_requested.emit(file_paths, False),
+                add_menu_key(
+                    menu,
+                    menu.addAction(
+                        tr('file.edit_system'),
+                        lambda: self.edit_requested.emit(file_paths, False),
+                    ),
+                    Qt.Key_F3,
                 )
-                menu.addAction(
-                    tr('file.edit_configured'),
-                    lambda: self.edit_requested.emit(file_paths, True),
+                add_menu_key(
+                    menu,
+                    menu.addAction(
+                        tr('file.edit_configured'),
+                        lambda: self.edit_requested.emit(file_paths, True),
+                    ),
+                    Qt.Key_F4,
                 )
                 menu.addSeparator()
             add_menu_key(menu, menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected)), Qt.Key_C)
@@ -205,7 +216,7 @@ class RemoteFileTable(_BaseFileTable):
                 Qt.Key_B,
             )
             if len(selected) == 1:
-                add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
+                add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_F2)
             add_menu_key(menu, menu.addAction(tr('file.properties'), self._properties), Qt.Key_O)
             add_menu_key(menu, menu.addAction(tr('file.delete'), self._delete_selected), Qt.Key_D)
         else:
@@ -216,17 +227,12 @@ class RemoteFileTable(_BaseFileTable):
     def _mkdir(self) -> None:
         name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
         if name:
-            logger.info(f'Remote mkdir selection: current_path={self._current_path}, name={name}')
             self.mkdir_requested.emit(name)
 
     def _rename(self) -> None:
         self._start_inline_rename(self._rename_remote)
 
     def _rename_remote(self, old_name: str, new_name: str) -> None:
-        logger.info(
-            'Remote rename selection: '
-            f'current_path={self._current_path}, old_name={old_name}, new_name={new_name}'
-        )
         self._pending_select_name = new_name
         self.rename_requested.emit(old_name, new_name)
 
@@ -284,7 +290,6 @@ class RemoteFileTable(_BaseFileTable):
         if not selected:
             return
         paths = [self._remote_full_path(name) for name, _ in selected]
-        logger.info(f'Remote download selection: count={len(paths)}, paths={paths}')
         self.download_requested.emit(paths)
 
     def _download_selected_to_other(self, selected: list[tuple[str, str]] | None = None) -> None:
@@ -299,10 +304,6 @@ class RemoteFileTable(_BaseFileTable):
         if not directory:
             return
         paths = [self._remote_full_path(name) for name, _ in selected]
-        logger.info(
-            'Remote download to other selection: '
-            f'count={len(paths)}, local_dir={directory}, paths={paths}'
-        )
         self.download_to_requested.emit(paths, directory)
 
     def _delete_selected(self) -> None:
@@ -311,7 +312,6 @@ class RemoteFileTable(_BaseFileTable):
             return
         if ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
             paths = [self._remote_full_path(name) for name, _ in selected]
-            logger.info(f'Remote delete selection confirmed: count={len(paths)}, paths={paths}')
             self.delete_requested.emit(paths)
 
     def _handle_delete_key(self, *, permanent: bool) -> bool:
@@ -320,10 +320,6 @@ class RemoteFileTable(_BaseFileTable):
             return False
         if permanent or ask_yes_no(self, tr('file.delete'), tr('file.confirm_delete')):
             paths = [self._remote_full_path(name) for name, _ in selected]
-            logger.info(
-                'Remote delete key selection: '
-                f'count={len(paths)}, permanent={permanent}, paths={paths}'
-            )
             self.delete_requested.emit(paths)
         return True
 

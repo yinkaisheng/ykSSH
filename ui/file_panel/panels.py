@@ -66,6 +66,19 @@ _FILE_TABLE_COLUMN_LABEL_KEYS = {
     'Permissions': 'file.perm',
 }
 
+
+class _FilePathEdit(QLineEdit):
+    """Path editor which returns focus to its file table with Ctrl+Down."""
+
+    table_focus_requested = pyqtSignal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_Down and event.modifiers() == Qt.ControlModifier:
+            self.table_focus_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 SORT_RANK = Qt.UserRole + 1
 SORT_NAME = Qt.UserRole + 2
 SORT_SIZE = Qt.UserRole + 3
@@ -138,11 +151,15 @@ class LocalFilePanel(QWidget):
         header.setContentsMargins(0, 0, 0, 0)
         self._label = QLabel(tr('file.local'))
         header.addWidget(self._label)
-        self.path_edit = QLineEdit()
+        self.path_edit = _FilePathEdit()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         header.addWidget(self.path_edit, 1)
 
         self.table = LocalFileTable(initial_path=self._initial_path)
+        self.table.path_focus_requested.connect(self._focus_path_edit)
+        self.path_edit.table_focus_requested.connect(
+            lambda: self.table.setFocus(Qt.ShortcutFocusReason)
+        )
         self._nav_toolbar = _FileNavToolbar(self, local=True)
         self._nav_toolbar.set_path_provider(self.table.current_path)
         self._nav_toolbar.set_navigate_handler(self.table.set_path)
@@ -248,6 +265,10 @@ class LocalFilePanel(QWidget):
         if path:
             self.table.set_path(path)
 
+    def _focus_path_edit(self) -> None:
+        self.path_edit.setFocus(Qt.ShortcutFocusReason)
+        self.path_edit.selectAll()
+
     def current_path(self) -> str:
         return self.table.current_path()
 
@@ -307,6 +328,8 @@ class RemoteFilePanel(QWidget):
         )
 
     def _track_background_task(self, task: asyncio.Task) -> None:
+        assert self._sftp_handler is not None
+        tab_id = self._sftp_handler.tab_id
         self._background_tasks.add(task)
 
         def _done(done: asyncio.Task) -> None:
@@ -318,7 +341,7 @@ class RemoteFilePanel(QWidget):
             except asyncio.CancelledError:
                 return
             if error is not None:
-                logger.error(f'Remote file panel task failed: {error}')
+                logger.error(f'Remote file panel task failed: tab_id={tab_id}, error={error}')
 
         task.add_done_callback(_done)
 
@@ -332,11 +355,15 @@ class RemoteFilePanel(QWidget):
         header.setContentsMargins(0, 0, 0, 0)
         self._label = QLabel(tr('file.remote'))
         header.addWidget(self._label)
-        self.path_edit = QLineEdit()
+        self.path_edit = _FilePathEdit()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         header.addWidget(self.path_edit, 1)
 
         self.table = RemoteFileTable()
+        self.table.path_focus_requested.connect(self._focus_path_edit)
+        self.path_edit.table_focus_requested.connect(
+            lambda: self.table.setFocus(Qt.ShortcutFocusReason)
+        )
         self._nav_toolbar = _FileNavToolbar(self, local=False)
         self._nav_toolbar.set_path_provider(self.table.current_path)
         self._nav_toolbar.set_navigate_handler(self.table.set_path)
@@ -400,7 +427,10 @@ class RemoteFilePanel(QWidget):
         try:
             directory, select_name, is_file = await self._sftp_handler.resolve_remote_navigation_target(entry.path)
         except Exception as exc:
-            logger.warning(f'Remote favorite path resolve failed: path={entry.path}, error={exc}')
+            logger.warning(
+                f'Remote favorite path resolve failed: tab_id={self._sftp_handler.tab_id}, '
+                f'path={entry.path}, error={exc}'
+            )
             self.table.set_path(entry.path)
             return
         if is_file is not None and entry.is_file != is_file:
@@ -439,6 +469,10 @@ class RemoteFilePanel(QWidget):
         if path:
             self.table.set_path(path)
 
+    def _focus_path_edit(self) -> None:
+        self.path_edit.setFocus(Qt.ShortcutFocusReason)
+        self.path_edit.selectAll()
+
     def _remote_refresh(self) -> None:
         if self._sftp_handler is not None:
             self._sftp_handler.refresh_remote(self.table.current_path())
@@ -458,7 +492,10 @@ class RemoteFilePanel(QWidget):
         try:
             directory, select_name, _is_file = await self._sftp_handler.resolve_remote_navigation_target(path)
         except Exception as exc:
-            logger.warning(f'Remote favorite path resolve failed: path={path}, error={exc}')
+            logger.warning(
+                f'Remote favorite path resolve failed: tab_id={self._sftp_handler.tab_id}, '
+                f'path={path}, error={exc}'
+            )
             self.table.set_path(path)
             return
         self.table.set_path(directory, select_name=select_name)
@@ -573,6 +610,12 @@ class FilesPanel(QWidget):
         )
         self.remote_file_panel = RemoteFilePanel(
             on_save_column_widths=self._on_save_column_widths,
+        )
+        self.local_file_panel.table.peer_panel_focus_requested.connect(
+            lambda: self.remote_file_panel.table.setFocus(Qt.ShortcutFocusReason)
+        )
+        self.remote_file_panel.table.peer_panel_focus_requested.connect(
+            lambda: self.local_file_panel.table.setFocus(Qt.ShortcutFocusReason)
         )
 
         self.file_splitter.addWidget(self.local_file_panel)

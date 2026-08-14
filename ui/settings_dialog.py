@@ -66,7 +66,7 @@ def prompt_app_settings(
     current_remote_large_file_mb: int,
     *,
     on_save: Callable[[AppSettings], None] | None = None,
-    min_width: int = 400,
+    min_width: int = 600,
 ) -> AppSettings | None:
     dialog = create_dialog(parent, tr('settings.title'), min_width=min_width)
     initial = AppSettings(

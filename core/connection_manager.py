@@ -79,9 +79,9 @@ class ConnectionManager(QObject):
             return []
         cache = self._remote_cache.setdefault(tab_id, {})
         try:
-            entries = await listdir(sftp, path)
+            entries = await listdir(sftp, path, tab_id=tab_id)
         except Exception as exc:
-            logger.warning(f'Remote list failed: {exc}')
+            logger.warning(f'Remote list failed: tab_id={tab_id}, path={path}, error={exc}')
             return cache.get(path, [])
         cache[path] = entries
         self.remote_list_updated.emit(tab_id)
@@ -136,7 +136,7 @@ class ConnectionManager(QObject):
             f'host={session_item.host}, port={session_item.port}, username={session_item.username}'
         )
 
-        ssh = SSHSession(self, self.host_keys)
+        ssh = SSHSession(tab_id, self, self.host_keys)
         self._sessions[tab_id] = ssh
         self._terminals[tab_id] = terminal
         self._tab_titles[tab_id] = session_item.name

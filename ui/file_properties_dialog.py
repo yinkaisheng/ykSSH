@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 from i18n import register_retranslator, tr, unregister_retranslator
 from core.file_permissions import PermissionChange
 from ui.dialog_i18n import translate_button_box
+from ui.widgets import AccentCheckBox
 
 
 _PERMISSION_BITS = (
@@ -39,7 +40,15 @@ def _format_property_size(size: int) -> str:
     return f'{size / (1024 * 1024 * 1024):.1f} GB'
 
 
-class _PermissionCheckBox(QCheckBox):
+class _ThemedCheckBox(AccentCheckBox):
+    """Theme-aware checkbox which remains keyboard focusable in dialogs."""
+
+    def __init__(self, text: str = '', parent: QWidget = None) -> None:
+        super().__init__(text, parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+
+class _PermissionCheckBox(_ThemedCheckBox):
     """Show a mixed state initially but cycle user clicks between on and off."""
 
     def nextCheckState(self) -> None:  # type: ignore[override]
@@ -107,7 +116,7 @@ class FilePropertiesDialog(QDialog):
                 self._checks[bit] = check
             layout.addLayout(grid)
 
-        self._recursive_check = QCheckBox()
+        self._recursive_check = _ThemedCheckBox()
         self._recursive_check.setVisible(has_directories)
         layout.addWidget(self._recursive_check)
 

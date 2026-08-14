@@ -55,7 +55,7 @@ class _RemoteEditSession:
 class FileEditManager(QObject):
     """Coordinate editor launches and all remote temporary-file sessions."""
 
-    _DEBOUNCE_MS = 700
+    _DEBOUNCE_MS = 800
     _STALE_TEMP_SECONDS = 7 * 24 * 60 * 60
 
     def __init__(
@@ -162,7 +162,9 @@ class FileEditManager(QObject):
             try:
                 attrs = await sftp.stat(remote_path)
             except Exception as exc:
-                logger.warning(f'Remote edit stat failed: path={remote_path}, error={exc}')
+                logger.warning(
+                    f'Remote edit stat failed: tab_id={tab_id}, path={remote_path}, error={exc}'
+                )
                 continue
             metadata.append((remote_path, self._remote_signature(attrs)))
 
@@ -197,11 +199,13 @@ class FileEditManager(QObject):
             if existing is not None and os.path.isfile(existing.local_path):
                 if existing.remote_signature != remote_signature:
                     try:
-                        await download(sftp, remote_path, existing.local_path)
-                        self._set_local_mtime(existing.local_path, remote_signature)
+                        await download(
+                            sftp, remote_path, existing.local_path, tab_id=tab_id
+                        )
+                        self._set_local_mtime(existing.local_path, remote_signature, tab_id)
                     except Exception as exc:
                         logger.warning(
-                            f'Remote edit refresh download failed: '
+                            f'Remote edit refresh download failed: tab_id={tab_id}, '
                             f'path={remote_path}, error={exc}'
                         )
                         await message_warning_async(
@@ -223,11 +227,14 @@ class FileEditManager(QObject):
                 continue
             local_path = self._temp_path(tab_id, remote_path)
             try:
-                await download(sftp, remote_path, local_path)
-                self._set_local_mtime(local_path, remote_signature)
+                await download(sftp, remote_path, local_path, tab_id=tab_id)
+                self._set_local_mtime(local_path, remote_signature, tab_id)
                 local_signature = self._local_signature(local_path)
             except Exception as exc:
-                logger.warning(f'Remote edit download failed: path={remote_path}, error={exc}')
+                logger.warning(
+                    f'Remote edit download failed: tab_id={tab_id}, '
+                    f'path={remote_path}, error={exc}'
+                )
                 await message_warning_async(
                     self._dialog_parent,
                     tr('file.edit_remote_title'),
@@ -376,7 +383,12 @@ class FileEditManager(QObject):
                     tr('file.edit_remote_changed_body'),
                 )
                 if decision == QMessageBox.No:
-                    await download(sftp, session.remote_path, session.local_path)
+                    await download(
+                        sftp,
+                        session.remote_path,
+                        session.local_path,
+                        tab_id=session.tab_id,
+                    )
                     session.remote_signature = self._remote_signature(
                         await sftp.stat(session.remote_path)
                     )
@@ -387,7 +399,12 @@ class FileEditManager(QObject):
                     return
                 if decision != QMessageBox.Yes:
                     return
-            await upload(sftp, session.local_path, session.remote_path)
+            await upload(
+                sftp,
+                session.local_path,
+                session.remote_path,
+                tab_id=session.tab_id,
+            )
             session.remote_signature = self._remote_signature(await sftp.stat(session.remote_path))
             await self._refresh_remote_parent(session)
             logger.info(
@@ -396,7 +413,10 @@ class FileEditManager(QObject):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f'Remote edit sync failed: path={session.remote_path}, error={exc}')
+            logger.warning(
+                f'Remote edit sync failed: tab_id={session.tab_id}, '
+                f'path={session.remote_path}, error={exc}'
+            )
             await message_warning_async(
                 self._dialog_parent,
                 tr('file.edit_sync_title'),
@@ -420,7 +440,7 @@ class FileEditManager(QObject):
 
     def _task_done(self, task: asyncio.Task) -> None:
         self._tasks.discard(task)
-        self._task_tabs.pop(task, None)
+        tab_id = self._task_tabs.pop(task, None)
         if task.cancelled():
             return
         try:
@@ -428,7 +448,7 @@ class FileEditManager(QObject):
         except asyncio.CancelledError:
             return
         if error is not None:
-            logger.error(f'File edit task failed: error={error}')
+            logger.error(f'File edit task failed: tab_id={tab_id}, error={error}')
 
     async def _remove_sessions(self, predicate) -> None:
         sessions = [session for session in self._sessions.values() if predicate(session)]
@@ -495,14 +515,21 @@ class FileEditManager(QObject):
         return int(attrs.size or 0), int(float(attrs.mtime or 0) * 1_000_000_000)
 
     @staticmethod
-    def _set_local_mtime(path: str, remote_signature: FileSignature) -> None:
+    def _set_local_mtime(
+        path: str,
+        remote_signature: FileSignature,
+        tab_id: str,
+    ) -> None:
         remote_mtime_ns = remote_signature[1]
         if remote_mtime_ns <= 0:
             return
         try:
             os.utime(path, ns=(remote_mtime_ns, remote_mtime_ns))
         except OSError as exc:
-            logger.warning(f'Remote edit local mtime update failed: path={path}, error={exc}')
+            logger.warning(
+                f'Remote edit local mtime update failed: tab_id={tab_id}, '
+                f'path={path}, error={exc}'
+            )
 
     @staticmethod
     def _format_size(size: int) -> str:

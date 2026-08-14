@@ -353,7 +353,12 @@ class _InlineRenameEdit(QLineEdit):
     def __init__(self, name: str, entry_type: str, parent: QWidget = None) -> None:
         super().__init__(name, parent)
         self.setObjectName('tableCellEditor')
+        # QLineEdit's native text baseline sits lower than the table item text
+        # on Windows. Shift the full-height text rect upward without reducing
+        # its height, so descenders such as p/y/g are not clipped.
+        self.setTextMargins(0, -2, 0, 2)
         self._finished = False
+        self.restore_table_focus = False
         if entry_type == 'file':
             self.setSelection(0, _rename_selection_length(name))
         else:
@@ -361,11 +366,11 @@ class _InlineRenameEdit(QLineEdit):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:
-            self._finish(commit=False)
+            self._finish(commit=False, restore_focus=True)
             event.accept()
             return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            self._finish(commit=True)
+            self._finish(commit=True, restore_focus=True)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -374,10 +379,11 @@ class _InlineRenameEdit(QLineEdit):
         self._finish(commit=True)
         super().focusOutEvent(event)
 
-    def _finish(self, *, commit: bool) -> None:
+    def _finish(self, *, commit: bool, restore_focus: bool = False) -> None:
         if self._finished:
             return
         self._finished = True
+        self.restore_table_focus = restore_focus
         if commit:
             self.rename_committed.emit(self.text())
         else:

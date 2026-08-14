@@ -56,6 +56,18 @@ def _paint_check_mark(painter: QPainter, rect: QRect) -> None:
     painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
 
 
+def _paint_partial_check_mark(painter: QPainter, rect: QRect) -> None:
+    side = min(rect.width(), rect.height())
+    margin = side * 0.24
+    y = rect.center().y()
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(check_mark_color())
+    pen.setWidthF(max(1.8, side * 0.14))
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(QPointF(rect.x() + margin, y), QPointF(rect.x() + side - margin, y))
+
+
 def _paint_triangle(
     painter: QPainter,
     cx: float,
@@ -223,7 +235,8 @@ class AccentCheckBox(QCheckBox):
 
     def paintEvent(self, event: 'QPaintEvent') -> None:
         super().paintEvent(event)
-        if not self.isChecked():
+        state = self.checkState()
+        if state == Qt.Unchecked:
             return
 
         opt = QStyleOptionButton()
@@ -236,7 +249,10 @@ class AccentCheckBox(QCheckBox):
 
         painter = QPainter(self)
         try:
-            _paint_check_mark(painter, indicator)
+            if state == Qt.PartiallyChecked:
+                _paint_partial_check_mark(painter, indicator)
+            else:
+                _paint_check_mark(painter, indicator)
         finally:
             painter.end()
 

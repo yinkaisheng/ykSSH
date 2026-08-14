@@ -110,6 +110,7 @@ from ui.file_panel.base_table import _BaseFileTable
 
 class LocalFileTable(_BaseFileTable):
     upload_requested = pyqtSignal(list)
+    PEER_FOCUS_KEY = Qt.Key_Right
 
     def __init__(self, parent: QWidget = None, *, initial_path: str = '') -> None:
         super().__init__(parent)
@@ -129,6 +130,11 @@ class LocalFileTable(_BaseFileTable):
 
     def _is_at_root(self) -> bool:
         return _is_local_root(self._current_path)
+
+    def _go_to_root(self) -> None:
+        current = os.path.abspath(os.path.normpath(self._current_path))
+        root = _windows_drive_root(current) if sys.platform == 'win32' else '/'
+        self.set_path(root)
 
     def _selected_entries(self) -> list[tuple[str, str]]:
         rows = sorted({idx.row() for idx in self.selectedIndexes()})
@@ -172,13 +178,21 @@ class LocalFileTable(_BaseFileTable):
             menu.addSeparator()
             file_paths = self._selected_file_paths(selected)
             if file_paths:
-                menu.addAction(
-                    tr('file.edit_system'),
-                    lambda: self.edit_requested.emit(file_paths, False),
+                add_menu_key(
+                    menu,
+                    menu.addAction(
+                        tr('file.edit_system'),
+                        lambda: self.edit_requested.emit(file_paths, False),
+                    ),
+                    Qt.Key_F3,
                 )
-                menu.addAction(
-                    tr('file.edit_configured'),
-                    lambda: self.edit_requested.emit(file_paths, True),
+                add_menu_key(
+                    menu,
+                    menu.addAction(
+                        tr('file.edit_configured'),
+                        lambda: self.edit_requested.emit(file_paths, True),
+                    ),
+                    Qt.Key_F4,
                 )
                 menu.addSeparator()
             add_menu_key(menu, menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected)), Qt.Key_C)
@@ -191,7 +205,7 @@ class LocalFileTable(_BaseFileTable):
                 Qt.Key_T,
             )
             if len(selected) == 1:
-                add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_E)
+                add_menu_key(menu, menu.addAction(tr('file.rename'), self._rename), Qt.Key_F2)
             add_menu_key(menu, menu.addAction(tr('file.properties'), self._properties), Qt.Key_O)
             shift_held = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
             if shift_held:

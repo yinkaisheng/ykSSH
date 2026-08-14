@@ -45,6 +45,7 @@ class ThemePalette:
     highlight_pressed: str
     highlight_text: str
     table_selected_background: str
+    file_table_inactive_selected_background: str
     tree_row_stripe_background: str
     tree_selected_background: str
     tab_selected_background: str

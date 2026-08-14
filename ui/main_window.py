@@ -6,7 +6,7 @@ import asyncio
 from typing import Sequence
 
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent
-from PyQt5.QtGui import QCloseEvent, QMouseEvent, QResizeEvent, QKeySequence
+from PyQt5.QtGui import QCloseEvent, QKeyEvent, QMouseEvent, QResizeEvent, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -291,17 +291,32 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self._has_running_transfers():
+            transfer_tab_ids = [
+                tab_id for tab_id in self._tab_sessions
+                if self._has_running_transfers(tab_id)
+            ]
             if not self._confirm_interrupt_transfers():
-                logger.info('Window close cancelled: transfer tasks are still running')
+                logger.info(
+                    'Window close cancelled: transfer tasks are still running, '
+                    f'tab_id={transfer_tab_ids}'
+                )
                 event.ignore()
                 return
-            logger.info('Window close confirmed: cancelling running transfer tasks')
+            logger.info(
+                'Window close confirmed: cancelling running transfer tasks, '
+                f'tab_id={transfer_tab_ids}'
+            )
             self._cancel_all_transfers()
         event.ignore()
         self._close_in_progress = True
         self._track_background_task(asyncio.create_task(self._finish_close_async()))
 
-    def _track_background_task(self, task: asyncio.Task) -> asyncio.Task:
+    def _track_background_task(
+        self,
+        task: asyncio.Task,
+        *,
+        log_id: str = '',
+    ) -> asyncio.Task:
         self._background_tasks.add(task)
 
         def _done(done: asyncio.Task) -> None:
@@ -313,7 +328,8 @@ class MainWindow(QMainWindow):
             except asyncio.CancelledError:
                 return
             if error is not None:
-                logger.error(f'Background UI task failed: {error}')
+                identity = f'{log_id}, ' if log_id else ''
+                logger.error(f'Background UI task failed: {identity}error={error}')
 
         task.add_done_callback(_done)
         return task
@@ -616,7 +632,10 @@ class MainWindow(QMainWindow):
             f'session_id={session_item.id}, name={session_item.name}, '
             f'host={session_item.host}, port={session_item.port}, username={session_item.username}'
         )
-        self._track_background_task(asyncio.create_task(self._connect_session_async(session_item)))
+        self._track_background_task(
+            asyncio.create_task(self._connect_session_async(session_item)),
+            log_id=f'session_id={session_item.id}, name={session_item.name}',
+        )
 
     async def _connect_session_async(self, session_item: SessionItem) -> None:
         tab_id, terminal = self.terminal_tabs.add_terminal_tab(
@@ -661,7 +680,8 @@ class MainWindow(QMainWindow):
             f'tab_id={tab_id}, session_id={session_item.id}, host={session_item.host}'
         )
         self._track_background_task(
-            asyncio.create_task(self._reconnect_session_async(tab_id))
+            asyncio.create_task(self._reconnect_session_async(tab_id)),
+            log_id=f'tab_id={tab_id}',
         )
 
     async def _reconnect_session_async(self, tab_id: str) -> None:
@@ -698,7 +718,8 @@ class MainWindow(QMainWindow):
             terminal.set_reconnect_enabled(False)
             terminal.write_text(tr('terminal.connected') + '\r\n')
             self._track_background_task(
-                asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item))
+                asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item)),
+                log_id=f'tab_id={tab_id}',
             )
 
         def _on_disconnected() -> None:
@@ -739,7 +760,8 @@ class MainWindow(QMainWindow):
             return
         except HostKeyChangedError as exc:
             logger.error(
-                f'SSH host key changed: host={exc.host}, port={exc.port}, '
+                f'SSH host key changed: tab_id={tab_id}, session_id={session_item.id}, '
+                f'name={session_item.name}, host={exc.host}, port={exc.port}, '
                 f'expected={exc.expected}, actual={exc.actual}'
             )
             if self._terminal_is_alive(terminal):
@@ -760,7 +782,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             logger.warning(
                 'Connect session failed: '
-                f'session_id={session_item.id}, name={session_item.name}, '
+                f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
                 f'host={session_item.host}, error={exc}'
             )
             if self._terminal_is_alive(terminal):
@@ -806,6 +828,7 @@ class MainWindow(QMainWindow):
             return
         handler = self._ensure_sftp_handler(tab_id)
         local_path = resolve_local_path(session_item.local_path)
+        remote_home = await self.connection_manager.resolve_remote_path(tab_id, '')
         remote_path = await self.connection_manager.resolve_remote_path(
             tab_id,
             session_item.remote_path,
@@ -814,7 +837,7 @@ class MainWindow(QMainWindow):
             return
         if (session_item.remote_path or '').strip():
             await self.connection_manager.cd_shell(tab_id, remote_path)
-        if handler.try_init_session_paths(local_path, remote_path):
+        if handler.try_init_session_paths(local_path, remote_path, remote_home):
             panel.local_file_panel.set_path(local_path)
             panel.remote_file_panel.set_path(remote_path)
             await self.connection_manager.refresh_remote_list(tab_id, remote_path)
@@ -855,7 +878,8 @@ class MainWindow(QMainWindow):
                 self.session_panel.set_active_history_tab(None)
                 self.file_panels.show_empty()
         self._track_background_task(
-            asyncio.create_task(self._finalize_tab_close_async(tab_id, handler))
+            asyncio.create_task(self._finalize_tab_close_async(tab_id, handler)),
+            log_id=f'tab_id={tab_id}',
         )
 
     async def _finalize_tab_close_async(
@@ -887,7 +911,8 @@ class MainWindow(QMainWindow):
                 handler.cancel_transfers()
             self.file_edit_manager.cancel_syncs(tab_id)
             self._track_background_task(
-                asyncio.create_task(self._close_tab_after_transfers_async(tab_id))
+                asyncio.create_task(self._close_tab_after_transfers_async(tab_id)),
+                log_id=f'tab_id={tab_id}',
             )
             return
         self.terminal_tabs.force_close_tab(tab_id)
@@ -1049,6 +1074,20 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event) -> bool:
         if not isinstance(watched, QWidget) or watched.window() is not self:
             return super().eventFilter(watched, event)
+        if (
+            isinstance(event, QKeyEvent)
+            and event.type() == QEvent.KeyPress
+            and event.key() == Qt.Key_L
+            and event.modifiers() == Qt.ControlModifier
+        ):
+            terminal = self.terminal_tabs.get_current_terminal()
+            event_is_in_terminal = terminal is not None and (
+                watched is terminal or terminal.isAncestorOf(watched)
+            )
+            if terminal is not None and self._terminal_is_alive(terminal) and not event_is_in_terminal:
+                terminal.setFocus(Qt.ShortcutFocusReason)
+                event.accept()
+                return True
         if not isinstance(event, QMouseEvent):
             return super().eventFilter(watched, event)
 
@@ -1079,6 +1118,8 @@ class MainWindow(QMainWindow):
 
     def _resize_active_terminal(self) -> None:
         if self._active_tab_id is not None:
+            tab_id = self._active_tab_id
             self._track_background_task(
-                asyncio.create_task(self.connection_manager.resize_terminal(self._active_tab_id))
+                asyncio.create_task(self.connection_manager.resize_terminal(tab_id)),
+                log_id=f'tab_id={tab_id}',
             )
