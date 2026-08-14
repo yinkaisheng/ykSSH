@@ -11,11 +11,11 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from core.path_resolver import resolve_remote_path
 from core.sftp_service import listdir
 from core.ssh_session import HostKeyConfirm, SSHSession
+from core.terminal_port import TerminalPort
 from log_util import logger
 from models.session_item import SessionItem
 from storage.credential_store import CredentialStore
 from storage.host_key_store import HostKeyStore
-from ui.terminal_vt_widget import TerminalVTWidget
 
 
 class ConnectionManager(QObject):
@@ -32,7 +32,7 @@ class ConnectionManager(QObject):
         self.keyring = credential_store or CredentialStore()
         self.host_keys = HostKeyStore()
         self._sessions: Dict[str, SSHSession] = {}
-        self._terminals: Dict[str, TerminalVTWidget] = {}
+        self._terminals: Dict[str, TerminalPort] = {}
         self._tab_titles: Dict[str, str] = {}
         self._remote_cache: Dict[str, Dict[str, List[dict]]] = {}
         self._refresh_tasks: Dict[tuple[str, str], asyncio.Task] = {}
@@ -117,7 +117,7 @@ class ConnectionManager(QObject):
         self,
         tab_id: str,
         session_item: SessionItem,
-        terminal: TerminalVTWidget,
+        terminal: TerminalPort,
         *,
         on_connected: Optional[Callable[[], None]] = None,
         on_disconnected: Optional[Callable[[], None]] = None,
@@ -129,7 +129,7 @@ class ConnectionManager(QObject):
             await self.close_tab(tab_id)
 
         password = self.keyring.get_password(session_item.id)
-        cols, rows = terminal._calc_cols_rows()
+        cols, rows = terminal.terminal_size()
         logger.info(
             'Open connection tab: '
             f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
@@ -219,7 +219,7 @@ class ConnectionManager(QObject):
         terminal = self._terminals.get(tab_id)
         if ssh is None or terminal is None:
             return
-        cols, rows = terminal._calc_cols_rows()
+        cols, rows = terminal.terminal_size()
         await ssh.resize(cols, rows)
 
     async def close_tab(self, tab_id: str) -> None:
@@ -244,7 +244,7 @@ class ConnectionManager(QObject):
         self,
         tab_id: str,
         ssh: SSHSession,
-        terminal: Optional[TerminalVTWidget],
+        terminal: Optional[TerminalPort],
     ) -> None:
         if self._sessions.get(tab_id) is ssh:
             self._sessions.pop(tab_id, None)
@@ -258,7 +258,7 @@ class ConnectionManager(QObject):
         self,
         tab_id: str,
         ssh: SSHSession,
-        terminal: Optional[TerminalVTWidget],
+        terminal: Optional[TerminalPort],
     ) -> None:
         if self._sessions.get(tab_id) is not ssh:
             return

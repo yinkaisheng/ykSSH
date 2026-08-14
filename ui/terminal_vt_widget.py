@@ -438,6 +438,10 @@ class TerminalVTWidget(QWidget):
         rows = max(5, int(max(0.0, vp.height()) // self._cell_h))
         return cols, rows
 
+    def terminal_size(self) -> tuple[int, int]:
+        """Return the PTY dimensions required by the connection layer."""
+        return self._calc_cols_rows()
+
     def resizeEvent(self, event):  # type: ignore[override]
         super().resizeEvent(event)
         self._reset_backing_store()

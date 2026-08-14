@@ -91,6 +91,7 @@ ykSSH/
 ├── core/
 │   ├── ssh_session.py           # 单条 SSH 连接（Shell PTY + SFTP）
 │   ├── connection_manager.py    # tab_id ↔ SSHSession 映射与远程列表缓存
+│   ├── terminal_port.py         # connection 层使用的终端能力协议
 │   ├── path_resolver.py         # 本地/远程初始路径解析
 │   ├── file_permissions.py      # 本地/远程权限字符串格式化
 │   ├── sftp_service.py          # SFTP 异步 CRUD（listdir/upload/…）
@@ -301,7 +302,7 @@ SSH stdout  → SSHSession._read_loop → data_received(str)
 TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 ```
 
-- 连接时创建 `xterm-256color` PTY，尺寸取自 `TerminalVTWidget._calc_cols_rows()`
+- 连接时创建 `xterm-256color` PTY，尺寸经 `TerminalPort.terminal_size()` 获取
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
 - 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。
