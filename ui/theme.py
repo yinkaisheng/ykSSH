@@ -230,16 +230,16 @@ QMenuBar#WindowMenuBar::item {{
     border-radius: 0px;
 }}
 QMenuBar#WindowMenuBar::item:hover {{
-    background-color: {p.highlight};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
 }}
 QMenuBar#WindowMenuBar::item:selected {{
-    background-color: {p.highlight};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
 }}
 QMenuBar#WindowMenuBar::item:pressed {{
-    background-color: {p.highlight_pressed};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
 }}
 '''
 

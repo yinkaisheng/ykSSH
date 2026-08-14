@@ -57,18 +57,18 @@ QMenuBar#WindowMenuBar::item {{
 }}
 
 QMenuBar#WindowMenuBar::item:hover {{
-    background-color: {p.highlight};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
 }}
 
 QMenuBar#WindowMenuBar::item:selected {{
-    background-color: {p.highlight};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
 }}
 
 QMenuBar#WindowMenuBar::item:pressed {{
-    background-color: {p.highlight_pressed};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
 }}
 
 QWidget#WindowTitleControls {{
@@ -127,8 +127,8 @@ QToolButton#WindowCloseButton:pressed {{
 }}
 
 QMenuBar::item:selected {{
-    background-color: {p.highlight};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
     border-radius: 0px;
 }}
 
@@ -150,8 +150,8 @@ QMenu::item:disabled {{
 
 QMenu::item:hover,
 QMenu::item:selected {{
-    background-color: {p.highlight};
-    color: {p.highlight_text};
+    background-color: {p.background_menu_hover};
+    color: {p.text_primary};
 }}
 
 QMenu::item:selected:disabled {{
