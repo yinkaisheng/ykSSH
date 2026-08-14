@@ -131,7 +131,8 @@ ykSSH/
     ├── file_panel/              # 文件面板基类、本地/远端 Table、控件与每 Tab 容器（见 §6.3）
     ├── file_table_panel.py      # 文件面板旧导入路径的薄兼容入口
     ├── favorites_dialog.py      # 本地/远端收藏管理（非模态）
-    ├── theme.py                 # QSS 生成与应用（含动态 padding）
+    ├── theme.py                 # 主题、字体及动态样式参数
+    ├── theme_stylesheet.py      # 应用级 QSS 模板
     ├── dialog_common.py         # 对话框布局辅助
     ├── dialog_i18n.py           # QMessageBox 等翻译
     ├── prompt_dialog.py         # 文本输入框
