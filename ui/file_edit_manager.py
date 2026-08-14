@@ -196,11 +196,36 @@ class FileEditManager(QObject):
             key = (tab_id, remote_path)
             existing = self._sessions.get(key)
             if existing is not None and os.path.isfile(existing.local_path):
+                if existing.remote_signature != remote_signature:
+                    try:
+                        await download(sftp, remote_path, existing.local_path)
+                        self._set_local_mtime(existing.local_path, remote_signature)
+                    except Exception as exc:
+                        logger.warning(
+                            f'Remote edit refresh download failed: '
+                            f'path={remote_path}, error={exc}'
+                        )
+                        await message_warning_async(
+                            self._dialog_parent,
+                            tr('file.edit_remote_title'),
+                            tr(
+                                'file.edit_remote_download_failed',
+                                path=remote_path,
+                                error=str(exc),
+                            ),
+                        )
+                        continue
+                    existing.remote_signature = remote_signature
+                    existing.observed_local_signature = self._local_signature(
+                        existing.local_path
+                    )
+                    self._watch_session(existing)
                 local_paths.append(existing.local_path)
                 continue
             local_path = self._temp_path(tab_id, remote_path)
             try:
                 await download(sftp, remote_path, local_path)
+                self._set_local_mtime(local_path, remote_signature)
                 local_signature = self._local_signature(local_path)
             except Exception as exc:
                 logger.warning(f'Remote edit download failed: path={remote_path}, error={exc}')
@@ -468,6 +493,16 @@ class FileEditManager(QObject):
     @staticmethod
     def _remote_signature(attrs) -> FileSignature:
         return int(attrs.size or 0), int(float(attrs.mtime or 0) * 1_000_000_000)
+
+    @staticmethod
+    def _set_local_mtime(path: str, remote_signature: FileSignature) -> None:
+        remote_mtime_ns = remote_signature[1]
+        if remote_mtime_ns <= 0:
+            return
+        try:
+            os.utime(path, ns=(remote_mtime_ns, remote_mtime_ns))
+        except OSError as exc:
+            logger.warning(f'Remote edit local mtime update failed: path={path}, error={exc}')
 
     @staticmethod
     def _format_size(size: int) -> str:

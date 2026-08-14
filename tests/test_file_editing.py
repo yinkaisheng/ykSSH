@@ -170,6 +170,36 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
         first_path = launch.call_args_list[0].args[0][0]
         self.assertEqual(launch.call_args_list[1].args[0], [first_path])
 
+    async def test_reopening_remote_file_refreshes_changed_remote_copy(self) -> None:
+        contents = iter(('old1', 'new2'))
+
+        async def fake_download(_sftp, _remote_path: str, local_path: str) -> None:
+            Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(local_path).write_text(next(contents), encoding='utf-8')
+
+        with (
+            patch('ui.file_edit_manager.download', AsyncMock(side_effect=fake_download)) as mocked,
+            patch.object(self.manager, '_launch_files') as launch,
+        ):
+            await self.manager._open_remote_files_async('tab-a', ['/tmp/a.txt'], True)
+            self.sftp.attrs = SimpleNamespace(
+                size=4,
+                mtime=20.0,
+                permissions=0o100644,
+            )
+            await self.manager._open_remote_files_async('tab-a', ['/tmp/a.txt'], True)
+
+        self.assertEqual(mocked.await_count, 2)
+        local_path = Path(launch.call_args_list[1].args[0][0])
+        self.assertEqual(local_path.read_text(encoding='utf-8'), 'new2')
+        self.assertEqual(local_path.stat().st_mtime_ns, 20_000_000_000)
+        session = self.manager._sessions[('tab-a', '/tmp/a.txt')]
+        self.assertEqual(session.remote_signature, (4, 20_000_000_000))
+        self.assertEqual(
+            session.observed_local_signature,
+            self.manager._local_signature(str(local_path)),
+        )
+
     async def test_large_remote_file_requires_confirmation(self) -> None:
         self.sftp.attrs = SimpleNamespace(
             size=11 * 1024 * 1024,
