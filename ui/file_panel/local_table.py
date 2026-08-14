@@ -144,6 +144,24 @@ class LocalFileTable(_BaseFileTable):
     def _local_full_path(self, name: str) -> str:
         return os.path.join(self._current_path, name)
 
+    def _selected_file_paths(
+        self,
+        selected: Optional[list[tuple[str, str]]] = None,
+    ) -> list[str]:
+        entries = selected or self._selected_entries()
+        return [
+            self._local_full_path(name)
+            for name, entry_type in entries
+            if entry_type != 'dir'
+        ]
+
+    def _edit_selected(self, *, use_configured_editor: bool) -> bool:
+        paths = self._selected_file_paths()
+        if not paths:
+            return False
+        self.edit_requested.emit(paths, use_configured_editor)
+        return True
+
     def _show_context_menu(self, pos) -> None:
         has_context_row = self._sync_context_menu_selection(pos)
         menu = ShortcutMenu(self)
@@ -152,6 +170,17 @@ class LocalFileTable(_BaseFileTable):
         selected = self._selected_entries() if has_context_row else []
         if selected:
             menu.addSeparator()
+            file_paths = self._selected_file_paths(selected)
+            if file_paths:
+                menu.addAction(
+                    tr('file.edit_system'),
+                    lambda: self.edit_requested.emit(file_paths, False),
+                )
+                menu.addAction(
+                    tr('file.edit_configured'),
+                    lambda: self.edit_requested.emit(file_paths, True),
+                )
+                menu.addSeparator()
             add_menu_key(menu, menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected)), Qt.Key_C)
             add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_P)
             add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)

@@ -113,6 +113,7 @@ class _BaseFileTable(QTableWidget):
     filter_cancelled = pyqtSignal()
     favorites_menu_requested = pyqtSignal()
     property_status_changed = pyqtSignal(bool, int, int, int)
+    edit_requested = pyqtSignal(list, bool)
 
     DEFAULT_SORT_COLUMN = 0
     DEFAULT_SORT_ORDER = Qt.AscendingOrder
@@ -156,6 +157,10 @@ class _BaseFileTable(QTableWidget):
             self._rename()
             event.accept()
             return
+        if event.key() == Qt.Key_F4 and not event.modifiers():
+            if self._edit_selected(use_configured_editor=True):
+                event.accept()
+                return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
             if self._activate_current_directory():
                 event.accept()
@@ -188,6 +193,9 @@ class _BaseFileTable(QTableWidget):
         raise NotImplementedError
 
     def _rename(self) -> None:
+        raise NotImplementedError
+
+    def _edit_selected(self, *, use_configured_editor: bool) -> bool:
         raise NotImplementedError
 
     def _jump_to_visible_edge(self, *, last: bool) -> bool:

@@ -44,6 +44,7 @@ from ui.favorites_dialog import (
 )
 from ui.settings_dialog import AppSettings, prompt_app_settings
 from ui.file_panel import FilePanelsContainer, FilesPanel
+from ui.file_edit_manager import FileEditManager
 from ui.side_panel import SidePanel
 from ui.terminal_tab_widget import TerminalTabWidget
 from ui.terminal_vt_widget import TerminalVTWidget
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
         self.profile_store = SessionProfileStore()
         self.credential_store = CredentialStore()
         self.connection_manager = ConnectionManager(self.credential_store, self)
+        self.file_edit_manager = FileEditManager(self.connection_manager, self)
         self._closing_after_transfer_confirm = False
         self._close_in_progress = False
         self._connect_tasks: dict[str, asyncio.Task] = {}
@@ -331,6 +333,16 @@ class MainWindow(QMainWindow):
         return self.file_panels.get_panel(self._active_tab_id)
 
     def _register_files_panel(self, tab_id: str, panel: FilesPanel) -> None:
+        panel.local_file_panel.table.edit_requested.connect(
+            self.file_edit_manager.open_local_files,
+        )
+        panel.remote_file_panel.table.edit_requested.connect(
+            lambda paths, configured, tid=tab_id: self.file_edit_manager.open_remote_files(
+                tid,
+                paths,
+                configured,
+            ),
+        )
         panel.local_file_panel.path_changed.connect(
             lambda path, tid=tab_id: self._on_local_path_changed_for_tab(tid, path),
         )
@@ -489,8 +501,14 @@ class MainWindow(QMainWindow):
     def _has_running_transfers(self, tab_id: Optional[str] = None) -> bool:
         if tab_id is not None:
             handler = self._sftp_handlers.get(tab_id)
-            return handler.has_running_transfers() if handler is not None else False
-        return any(handler.has_running_transfers() for handler in self._sftp_handlers.values())
+            return (
+                (handler.has_running_transfers() if handler is not None else False)
+                or self.file_edit_manager.has_running_syncs(tab_id)
+            )
+        return (
+            any(handler.has_running_transfers() for handler in self._sftp_handlers.values())
+            or self.file_edit_manager.has_running_syncs()
+        )
 
     def _confirm_interrupt_transfers(self) -> bool:
         return ask_yes_no(
@@ -502,6 +520,7 @@ class MainWindow(QMainWindow):
     def _cancel_all_transfers(self) -> None:
         for handler in self._sftp_handlers.values():
             handler.cancel_transfers()
+        self.file_edit_manager.cancel_syncs()
 
     async def _close_all_async(self) -> None:
         connect_tasks = [task for task in self._connect_tasks.values() if not task.done()]
@@ -523,6 +542,7 @@ class MainWindow(QMainWindow):
             *(handler.wait_transfers_closed() for handler in list(self._sftp_handlers.values())),
             return_exceptions=True,
         )
+        await self.file_edit_manager.close()
         await self.connection_manager.close_all()
 
     async def _finish_close_async(self) -> None:
@@ -853,6 +873,7 @@ class MainWindow(QMainWindow):
         if connect_task is not None and not connect_task.done():
             connect_task.cancel()
             await asyncio.gather(connect_task, return_exceptions=True)
+        await self.file_edit_manager.close_tab(tab_id)
         await self.connection_manager.close_tab(tab_id)
 
     def _on_tab_close_requested(self, tab_id: str) -> None:
@@ -864,6 +885,7 @@ class MainWindow(QMainWindow):
             handler = self._sftp_handlers.get(tab_id)
             if handler is not None:
                 handler.cancel_transfers()
+            self.file_edit_manager.cancel_syncs(tab_id)
             self._track_background_task(
                 asyncio.create_task(self._close_tab_after_transfers_async(tab_id))
             )

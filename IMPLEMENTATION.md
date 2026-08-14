@@ -491,6 +491,10 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
     "session_edit_dialog_height": 520,
     "command_edit_dialog_width": 480,
     "command_edit_dialog_height": 320
+  },
+  "editor": {
+    "executable_path": "C:\\Program Files\\Notepad++\\notepad++.exe",
+    "remote_large_file_mb": 10
   }
 }
 ```
@@ -511,7 +515,12 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 | `session_edit_dialog_width/height` | Session 编辑对话框窗口尺寸（关闭时写入，再次编辑时恢复） |
 | `command_edit_dialog_width/height` | 快捷命令编辑对话框窗口尺寸（关闭时写入，再次编辑时恢复） |
 
-`app_config.py` 在加载时对当前 schema 做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` / `side_panel_defaults.py` 默认值并校验范围）。当前处于开发阶段，不保留旧配置字段兼容；稳定版发布后再按发布策略补充迁移规则。
+| `editor` 字段 | 说明 |
+|---------------|------|
+| `executable_path` | 默认外部编辑器可执行文件；为空或路径无效时回退系统文件关联 |
+| `remote_large_file_mb` | 远端编辑的大文件确认阈值，默认 10 MiB |
+
+`app_config.py` 在加载时对当前 schema 做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` / `side_panel_defaults.py` / `editor_defaults.py` 默认值并校验范围）。当前处于开发阶段，不保留旧配置字段兼容；稳定版发布后再按发布策略补充迁移规则。
 
 `sessions.json`、`commands.json` 当前只接受 `version: 1`；版本不匹配时丢弃加载结果并记录 warning。当前处于开发阶段，不保留旧 schema 兼容。
 
@@ -610,6 +619,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - **表格空白区双击**（最后一行下方或最右列右侧）：非根目录时跳转上级（`_BaseFileTable.mouseDoubleClickEvent`）
 - 路径栏回车 / 导航工具栏按钮：`set_path` 跳转并刷新
 - Home / End：跳转并滚动到当前可见行的第一行 / 最后一行（过滤后只在可见行范围内跳转）
+- F4：使用配置的编辑器打开选中文件；编辑器未配置或路径无效时回退系统文件关联。多选中的目录会被忽略。
 
 ### 显示
 
@@ -623,8 +633,18 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 - 在未选中行上右键会先清空旧选择并选中鼠标所在行；在已选中行上右键保留当前多选；空白区右键不改变选择。
 
-- **远程：** 刷新、新建目录；有选中项时：复制文件名、复制路径、复制父路径、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
-- **本地：** 刷新、新建目录；有选中项时：复制、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
+- **远程：** 刷新、新建目录；有选中项时：使用系统关联/配置编辑器打开、复制文件名、复制路径、复制父路径、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
+- **本地：** 刷新、新建目录；有选中项时：使用系统关联/配置编辑器打开、复制、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
+- 编辑动作只处理文件并忽略目录；实际文件达到 3 个时先统一确认。
+
+### 远端文件编辑
+
+- `FileEditManager` 将远端文件下载到系统临时目录的本次运行隔离子目录；同一 Tab 的同一路径重复打开时复用临时副本。
+- 下载前逐文件读取远端 size/mtime；任一文件超过 `editor.remote_large_file_mb` 时统一列出大文件并确认。
+- 所有临时文件由一个 `QFileSystemWatcher` 监听，并使用一个 700ms 防抖定时器合并编辑器的连续写入和原子替换事件，不创建逐文件线程或轮询任务。
+- 只有本地临时文件内容签名（size + mtime_ns）变化时才提示同步；拒绝后保持监控，下一次保存会再次提示。
+- 上传前比较下载时记录的远端 size/mtime。远端已变化时可覆盖远端、重新下载并放弃本地修改，或取消同步。
+- Tab/程序关闭时不对普通未同步修改追加提示；只有上传同步正在进行时复用文件传输中断确认。关闭后尽力删除本次运行临时目录，启动时清理超过 24 小时的遗留目录。
 
 ---
 
