@@ -274,6 +274,7 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
 
         prompt.assert_awaited_once()
+        self.assertTrue(prompt.await_args.kwargs['foreground'])
 
     async def test_sync_task_is_reported_until_finished(self) -> None:
         local_path = Path(self.manager._temp_path('tab-a', '/tmp/sync.txt'))

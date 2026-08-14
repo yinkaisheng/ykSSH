@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication,
@@ -239,6 +240,7 @@ async def ask_yes_no_async(
     text: str,
     *,
     default: int = QMessageBox.No,
+    foreground: bool = False,
 ) -> bool:
     """Show a non-blocking yes/no question compatible with qasync cancellation."""
     loop = asyncio.get_running_loop()
@@ -247,6 +249,8 @@ async def ask_yes_no_async(
     box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
     _translate_message_box_buttons(box)
     box.setDefaultButton(QMessageBox.Yes if default == QMessageBox.Yes else QMessageBox.No)
+    if foreground:
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
     def _finish(result: int) -> None:
         if not future.done():
@@ -254,6 +258,10 @@ async def ask_yes_no_async(
 
     box.finished.connect(_finish)
     box.open()
+    if foreground:
+        box.raise_()
+        box.activateWindow()
+        QApplication.alert(box, 0)
     try:
         return await future == QMessageBox.Yes
     finally:

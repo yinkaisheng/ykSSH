@@ -339,6 +339,7 @@ class FileEditManager(QObject):
             self._dialog_parent,
             tr('file.edit_sync_title'),
             tr('file.edit_sync_confirm', name=posixpath.basename(session.remote_path)),
+            foreground=True,
         )
         if not should_sync:
             return
