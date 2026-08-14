@@ -26,10 +26,11 @@ from PyQt5.QtWidgets import (
 )
 
 from i18n import tr
+from log_util import logger
 from models.command_history_item import CommandHistoryItem
 from models.command_item import CommandItem
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
-from storage.app_config import get_app_config
+from storage.app_config import get_app_config, save_command_edit_dialog_size
 from storage.command_history_store import CommandHistoryStore
 from storage.command_store import CommandStore
 from storage.credential_store import CredentialStore
@@ -112,8 +113,12 @@ class CommandDialog(QDialog):
         title: str,
     ) -> None:
         super().__init__(parent)
+        self._command = command
         self.setWindowTitle(title)
         self.setMinimumWidth(480)
+        if command is not None:
+            cfg = get_app_config().side_panel
+            self.resize(cfg.command_edit_dialog_width, cfg.command_edit_dialog_height)
 
         layout = QVBoxLayout(self)
         grid = create_form_grid()
@@ -138,6 +143,14 @@ class CommandDialog(QDialog):
         layout.addWidget(buttons)
 
         self.name_edit.setFocus()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._command is not None:
+            try:
+                save_command_edit_dialog_size(width=self.width(), height=self.height())
+            except OSError as exc:
+                logger.warning(f'Failed to save command edit dialog size: {exc}')
+        super().closeEvent(event)
 
     def accept(self) -> None:  # type: ignore[override]
         if not self.name_edit.text().strip():

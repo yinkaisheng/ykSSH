@@ -127,6 +127,7 @@ ykSSH/
     ├── theme.py                 # QSS 生成与应用（含动态 padding）
     ├── theme_defaults.py        # 三套主题默认色值
     ├── file_panel_defaults.py   # 文件面板列宽/行高/工具栏/文件夹粗体默认值
+    ├── side_panel_defaults.py   # Session/快捷命令编辑对话框默认尺寸
     ├── appearance_defaults.py   # 外观默认值（UI/终端字体、过滤框高度等）
     ├── dialog_common.py         # 对话框布局辅助
     ├── dialog_i18n.py           # QMessageBox 等翻译
@@ -264,6 +265,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 管理对话框支持添加、删除、上移、下移收藏；浏览选择本地路径添加后保持普通选中状态，不自动进入单元格编辑。
 - 点击收藏路径时若路径指向文件，会进入该文件所在目录并选中文件；远端路径通过 SFTP `lstat/stat` 判断文件/目录，类型变化会更新 `is_file`；路径不存在时逐级尝试父目录，直到可进入的父目录或 `/`。
 - 关闭管理对话框时写入窗口尺寸（`file_panel.local/remote_favorites_dialog_width/height`），下次打开恢复。
+- Session / 快捷命令 **编辑** 对话框关闭时写入 `side_panel.session_edit_dialog_*` / `side_panel.command_edit_dialog_*`，再次编辑时恢复。
 - 不自动去重；收藏内容经 `save_file_panel_local_favorites` / `SidePanel.persist_sessions()` 保存。
 - `MainWindow._register_files_panel` 注入 provider / manage handler（按 `tab_id` 取 `SSHSession.session_item`）。
 
@@ -476,6 +478,12 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
     "local_favorites_dialog_height": 420,
     "remote_favorites_dialog_width": 560,
     "remote_favorites_dialog_height": 380
+  },
+  "side_panel": {
+    "session_edit_dialog_width": 700,
+    "session_edit_dialog_height": 520,
+    "command_edit_dialog_width": 480,
+    "command_edit_dialog_height": 320
   }
 }
 ```
@@ -491,7 +499,12 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 | `local_favorites` | 全局本地收藏路径列表（`path` + 可选 `note`） |
 | `local/remote_favorites_dialog_width/height` | 收藏管理对话框窗口尺寸 |
 
-`app_config.py` 在加载时对当前 schema 做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` 默认值并校验范围）。当前处于开发阶段，不保留旧配置字段兼容；稳定版发布后再按发布策略补充迁移规则。
+| `side_panel` 字段 | 说明 |
+|-------------------|------|
+| `session_edit_dialog_width/height` | Session 编辑对话框窗口尺寸（关闭时写入，再次编辑时恢复） |
+| `command_edit_dialog_width/height` | 快捷命令编辑对话框窗口尺寸（关闭时写入，再次编辑时恢复） |
+
+`app_config.py` 在加载时对当前 schema 做 **normalize**（合并 `theme_defaults.py` / `appearance_defaults.py` / `file_panel_defaults.py` / `side_panel_defaults.py` 默认值并校验范围）。当前处于开发阶段，不保留旧配置字段兼容；稳定版发布后再按发布策略补充迁移规则。
 
 `sessions.json`、`commands.json` 当前只接受 `version: 1`；版本不匹配时丢弃加载结果并记录 warning。当前处于开发阶段，不保留旧 schema 兼容。
 

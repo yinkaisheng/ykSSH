@@ -21,7 +21,9 @@ from PyQt5.QtWidgets import (
 )
 
 from i18n import tr
+from log_util import logger
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
+from storage.app_config import get_app_config, save_session_edit_dialog_size
 from ui.dialog_i18n import message_warning, translate_button_box
 from ui.widgets import ArrowComboBox, GlyphSpinBox
 
@@ -55,8 +57,18 @@ class SessionDialog(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self._build_ui()
         if session is not None:
+            cfg = get_app_config().side_panel
+            self.resize(cfg.session_edit_dialog_width, cfg.session_edit_dialog_height)
             self._load_session(session)
         QTimer.singleShot(0, self._focus_name_edit)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._session is not None:
+            try:
+                save_session_edit_dialog_size(width=self.width(), height=self.height())
+            except OSError as exc:
+                logger.warning(f'Failed to save session edit dialog size: {exc}')
+        super().closeEvent(event)
 
     def _focus_name_edit(self) -> None:
         self.name_edit.setFocus(Qt.OtherFocusReason)

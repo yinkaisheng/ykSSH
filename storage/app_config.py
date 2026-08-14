@@ -32,6 +32,10 @@ from ui.file_panel_defaults import (
     clamp_column_width,
     default_file_panel,
 )
+from ui.side_panel_defaults import (
+    _SIDE_PANEL_INT_BOUNDS,
+    _SIDE_PANEL_INT_DEFAULTS,
+)
 from ui.theme_defaults import DEFAULT_THEMES, DEFAULT_THEME_NAMES, merge_theme_colors
 
 CONFIG_VERSION = 1
@@ -118,6 +122,14 @@ class FilePanelConfig:
 
 
 @dataclass(frozen=True)
+class SidePanelConfig:
+    session_edit_dialog_width: int
+    session_edit_dialog_height: int
+    command_edit_dialog_width: int
+    command_edit_dialog_height: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     language: str
     themes: Dict[str, Dict[str, str]]
@@ -125,6 +137,7 @@ class AppConfig:
     terminal: Dict[str, Any]
     window: WindowConfig
     file_panel: FilePanelConfig
+    side_panel: SidePanelConfig
 
 
 _config_cache: Optional[AppConfig] = None
@@ -359,6 +372,24 @@ def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
     )
 
 
+def _normalize_side_panel(raw: Any) -> Dict[str, int]:
+    raw = raw if isinstance(raw, dict) else {}
+    normalized: Dict[str, int] = {}
+    for key, default in _SIDE_PANEL_INT_DEFAULTS.items():
+        minimum, maximum = _SIDE_PANEL_INT_BOUNDS[key]
+        normalized[key] = _clamp_int(raw.get(key), default, minimum, maximum)
+    return normalized
+
+
+def _side_panel_to_config(side_panel: Dict[str, int]) -> SidePanelConfig:
+    return SidePanelConfig(
+        session_edit_dialog_width=side_panel['session_edit_dialog_width'],
+        session_edit_dialog_height=side_panel['session_edit_dialog_height'],
+        command_edit_dialog_width=side_panel['command_edit_dialog_width'],
+        command_edit_dialog_height=side_panel['command_edit_dialog_height'],
+    )
+
+
 def _normalize_window(raw: Any) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     normalized: Dict[str, Any] = {
@@ -419,6 +450,7 @@ def _normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     normalized['terminal'] = _normalize_terminal(raw.get('terminal'))
     normalized['window'] = _normalize_window(raw.get('window'))
     normalized['file_panel'] = _normalize_file_panel(raw.get('file_panel'))
+    normalized['side_panel'] = _normalize_side_panel(raw.get('side_panel'))
     return normalized
 
 
@@ -431,6 +463,7 @@ def _default_config() -> Dict[str, Any]:
         'terminal': dict(_TERMINAL_SETTING_DEFAULTS),
         'window': _normalize_window({}),
         'file_panel': _normalize_file_panel({}),
+        'side_panel': _normalize_side_panel({}),
     }
 
 
@@ -442,6 +475,7 @@ def _to_app_config(data: Dict[str, Any]) -> AppConfig:
         terminal=dict(data.get('terminal', _TERMINAL_SETTING_DEFAULTS)),
         window=_window_to_config(data.get('window', _normalize_window({}))),
         file_panel=_file_panel_to_config(data.get('file_panel', _normalize_file_panel({}))),
+        side_panel=_side_panel_to_config(data.get('side_panel', _normalize_side_panel({}))),
     )
 
 
@@ -470,6 +504,8 @@ def _config_needs_save(raw: Dict[str, Any], normalized: Dict[str, Any]) -> bool:
     if raw.get('window') != normalized['window']:
         return True
     if raw.get('file_panel') != normalized['file_panel']:
+        return True
+    if raw.get('side_panel') != normalized['side_panel']:
         return True
     return False
 
@@ -671,6 +707,50 @@ def save_favorites_dialog_size(
     file_panel = _normalize_file_panel(file_panel)
     data = dict(_raw_config_cache)
     data['file_panel'] = file_panel
+    _save_config(path, data)
+    _raw_config_cache = data
+    _config_cache = _to_app_config(data)
+    return _config_cache
+
+
+def save_session_edit_dialog_size(
+    *,
+    width: int,
+    height: int,
+    path: Path = CONFIG_FILE,
+) -> AppConfig:
+    """Persist session edit dialog size under side_panel.session_edit_dialog_*."""
+    global _config_cache, _raw_config_cache
+    if _raw_config_cache is None:
+        _raw_config_cache = _normalize_config(_default_config())
+    side_panel = dict(_raw_config_cache.get('side_panel', _normalize_side_panel({})))
+    side_panel['session_edit_dialog_width'] = width
+    side_panel['session_edit_dialog_height'] = height
+    side_panel = _normalize_side_panel(side_panel)
+    data = dict(_raw_config_cache)
+    data['side_panel'] = side_panel
+    _save_config(path, data)
+    _raw_config_cache = data
+    _config_cache = _to_app_config(data)
+    return _config_cache
+
+
+def save_command_edit_dialog_size(
+    *,
+    width: int,
+    height: int,
+    path: Path = CONFIG_FILE,
+) -> AppConfig:
+    """Persist command edit dialog size under side_panel.command_edit_dialog_*."""
+    global _config_cache, _raw_config_cache
+    if _raw_config_cache is None:
+        _raw_config_cache = _normalize_config(_default_config())
+    side_panel = dict(_raw_config_cache.get('side_panel', _normalize_side_panel({})))
+    side_panel['command_edit_dialog_width'] = width
+    side_panel['command_edit_dialog_height'] = height
+    side_panel = _normalize_side_panel(side_panel)
+    data = dict(_raw_config_cache)
+    data['side_panel'] = side_panel
     _save_config(path, data)
     _raw_config_cache = data
     _config_cache = _to_app_config(data)
