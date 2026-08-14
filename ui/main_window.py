@@ -43,7 +43,7 @@ from ui.favorites_dialog import (
     show_remote_favorites_dialog,
 )
 from ui.settings_dialog import AppSettings, prompt_app_settings
-from ui.file_table_panel import FilePanelsContainer, FilesPanel
+from ui.file_panel import FilePanelsContainer, FilesPanel
 from ui.side_panel import SidePanel
 from ui.terminal_tab_widget import TerminalTabWidget
 from ui.terminal_vt_widget import TerminalVTWidget

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Compatibility imports for the file panel package."""
+"""File panel widgets, tables, and per-tab containers."""
 from __future__ import annotations
 
 from ui.file_panel.helpers import EqualSplitSplitter

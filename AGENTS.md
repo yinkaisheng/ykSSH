@@ -15,7 +15,7 @@
 - Session 密码只经 Fernet 加密存入 `config/credentials.json`，密钥在 `config/secret.key`；禁止写入 `sessions.json` 或日志。私钥路径可存 config。
 - 保持最小改动，不顺手重构无关模块；`terminal_vt_widget.py` 体量大，仅在终端行为相关时修改。
 - 新增 UI 文案时，同时更新 `i18n/builtin_strings.py`、`Languages/en/strings.txt` 与 `Languages/zh-CN/strings.txt`；相关 Widget 注册 `register_retranslator(self.retranslate_ui)` 并实现 `retranslate_ui()`。
-- 文件面板 SFTP 操作经 `SftpUiHandler` 桥接，不要在 `file_table_panel.py` 里直接调用 asyncssh。
+- 文件面板 SFTP 操作经 `SftpUiHandler` 桥接，不要在 `ui/file_panel/` 中直接调用 asyncssh。
 - Tab 关闭时 `ConnectionManager.close_tab()` 必须 cancel 读任务并 `disconnect()`。
 - 不要提交 `config/` 下的运行时文件（含 `secret.key`、`credentials.json`）或任何真实凭据。
 - 影响架构、配置 schema、连接/文件面板/终端关键行为或已知限制时，同步更新 [IMPLEMENTATION.md](IMPLEMENTATION.md)；纯样式、拼写或不改变行为的小修可跳过。

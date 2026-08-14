@@ -126,7 +126,8 @@ ykSSH/
     ├── session_dialog.py        # 新建/编辑 Session
     ├── terminal_tab_widget.py   # 终端 Tab 容器
     ├── terminal_vt_widget.py    # pyte 终端渲染（~2000 行）
-    ├── file_table_panel.py      # 文件面板全套组件（见 §6.3）
+    ├── file_panel/              # 文件面板 Table、控件与每 Tab 容器（见 §6.3）
+    ├── file_table_panel.py      # 文件面板旧导入路径的薄兼容入口
     ├── favorites_dialog.py      # 本地/远端收藏管理（非模态）
     ├── theme.py                 # QSS 生成与应用（含动态 padding）
     ├── dialog_common.py         # 对话框布局辅助
@@ -220,7 +221,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 └── _empty                             # 无 Tab 时的空白页
 ```
 
-**类职责（`ui/file_table_panel.py`）：**
+**类职责（`ui/file_panel/`）：**
 
 | 类 | 职责 |
 |----|------|
