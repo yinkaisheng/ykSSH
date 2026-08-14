@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Dict, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QTabWidget, QWidget
@@ -32,15 +31,15 @@ class TerminalTabWidget(QTabWidget):
         tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
         tab_bar.tabMoved.connect(self._rebuild_tab_id_map)
         self.tabBarDoubleClicked.connect(self._on_tab_bar_double_clicked)
-        self._tab_ids: Dict[int, str] = {}
-        self._terminals: Dict[str, TerminalVTWidget] = {}
-        self._display_titles: Dict[str, str] = {}
-        self._hosts: Dict[str, str] = {}
+        self._tab_ids: dict[int, str] = {}
+        self._terminals: dict[str, TerminalVTWidget] = {}
+        self._display_titles: dict[str, str] = {}
+        self._hosts: dict[str, str] = {}
 
     def add_terminal_tab(
         self,
         title: str,
-        tab_id: Optional[str] = None,
+        tab_id: str | None = None,
         host: str = '',
     ) -> tuple[str, TerminalVTWidget]:
         tab_id = tab_id or uuid.uuid4().hex
@@ -55,11 +54,11 @@ class TerminalTabWidget(QTabWidget):
         self.setCurrentIndex(index)
         return tab_id, terminal
 
-    def get_current_terminal(self) -> Optional[TerminalVTWidget]:
+    def get_current_terminal(self) -> TerminalVTWidget | None:
         widget = self.currentWidget()
         return widget if isinstance(widget, TerminalVTWidget) else None
 
-    def get_terminal(self, tab_id: str) -> Optional[TerminalVTWidget]:
+    def get_terminal(self, tab_id: str) -> TerminalVTWidget | None:
         return self._terminals.get(tab_id)
 
     def set_tab_title(self, tab_id: str, title: str) -> None:
@@ -148,7 +147,7 @@ class TerminalTabWidget(QTabWidget):
             widget.deleteLater()
 
     def _rebuild_tab_id_map(self) -> None:
-        new_map: Dict[int, str] = {}
+        new_map: dict[int, str] = {}
         for i in range(self.count()):
             widget = self.widget(i)
             for tab_id, terminal in self._terminals.items():

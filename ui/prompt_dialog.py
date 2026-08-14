@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Optional
+
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFontMetrics, QKeySequence
@@ -30,7 +30,7 @@ def prompt_text(
     *,
     min_width: int = 400,
     allow_empty: bool = False,
-) -> Optional[str]:
+) -> str | None:
     dialog = create_dialog(parent, title, min_width=min_width)
 
     layout = QVBoxLayout(dialog)
@@ -65,7 +65,7 @@ def prompt_multiline_confirm(
     *,
     min_width: int = 480,
     min_height: int = 240,
-) -> Optional[str]:
+) -> str | None:
     """Show a resizable Yes/No dialog with an editable multiline body.
 
     Returns the edited text when Yes is chosen and the content is non-empty

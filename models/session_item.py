@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
 
 from models.favorite_path import FavoritePath, favorite_paths_from_raw, favorite_paths_to_raw
 
@@ -29,15 +29,15 @@ class SessionItem:
     local_path: str = ''
     remote_path: str = ''
     info: str = ''
-    local_favorites: List[FavoritePath] = field(default_factory=list)
-    remote_favorites: List[FavoritePath] = field(default_factory=list)
-    children: List['SessionItem'] = field(default_factory=list)
+    local_favorites: list[FavoritePath] = field(default_factory=list)
+    remote_favorites: list[FavoritePath] = field(default_factory=list)
+    children: list['SessionItem'] = field(default_factory=list)
 
     def is_folder(self) -> bool:
         return not self.host
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {'id': self.id, 'name': self.name}
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {'id': self.id, 'name': self.name}
         if self.host:
             d['host'] = self.host
             d['port'] = self.port
@@ -60,7 +60,7 @@ class SessionItem:
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'SessionItem':
+    def from_dict(cls, data: dict[str, Any]) -> 'SessionItem':
         host = str(data.get('host', '') or '')
         return cls(
             id=data.get('id', str(uuid.uuid4())),

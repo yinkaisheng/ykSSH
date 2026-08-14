@@ -8,7 +8,7 @@ import shutil
 import stat
 import sys
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
@@ -130,8 +130,8 @@ class RemoteFileTable(_BaseFileTable):
         )
         self._apply_default_sort()
         self._current_path = '/'
-        self._list_callback: Optional[Callable[[str], Any]] = None
-        self._download_directory_provider: Optional[Callable[[], str]] = None
+        self._list_callback: Callable[[str], Any] | None = None
+        self._download_directory_provider: Callable[[], str] | None = None
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -155,7 +155,7 @@ class RemoteFileTable(_BaseFileTable):
 
     def _selected_file_paths(
         self,
-        selected: Optional[list[tuple[str, str]]] = None,
+        selected: list[tuple[str, str]] | None = None,
     ) -> list[str]:
         entries = selected or self._selected_entries()
         return [
@@ -263,13 +263,13 @@ class RemoteFileTable(_BaseFileTable):
         if clipboard is not None and text:
             clipboard.setText(text)
 
-    def _copy_selected_names(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+    def _copy_selected_names(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
         if not selected:
             return
         self._copy_text('\n'.join(name for name, _ in selected))
 
-    def _copy_selected_paths(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+    def _copy_selected_paths(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
         if not selected:
             return
@@ -279,7 +279,7 @@ class RemoteFileTable(_BaseFileTable):
         base = self._current_path.rstrip('/')
         self._copy_text(base if base else '/')
 
-    def _download_selected(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+    def _download_selected(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
         if not selected:
             return
@@ -287,7 +287,7 @@ class RemoteFileTable(_BaseFileTable):
         logger.info(f'Remote download selection: count={len(paths)}, paths={paths}')
         self.download_requested.emit(paths)
 
-    def _download_selected_to_other(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+    def _download_selected_to_other(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
         if not selected:
             return
@@ -330,7 +330,7 @@ class RemoteFileTable(_BaseFileTable):
     def set_list_callback(self, callback: Callable[[str], Any]) -> None:
         self._list_callback = callback
 
-    def set_download_directory_provider(self, provider: Optional[Callable[[], str]]) -> None:
+    def set_download_directory_provider(self, provider: Callable[[], str] | None) -> None:
         self._download_directory_provider = provider
 
     def _download_directory(self) -> str:

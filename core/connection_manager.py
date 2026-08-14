@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from typing import Callable, Dict, List, Optional
+from typing import Callable
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -25,29 +25,29 @@ class ConnectionManager(QObject):
 
     def __init__(
         self,
-        credential_store: Optional[CredentialStore] = None,
+        credential_store: CredentialStore | None = None,
         parent: QObject = None,
     ) -> None:
         super().__init__(parent)
         self.keyring = credential_store or CredentialStore()
         self.host_keys = HostKeyStore()
-        self._sessions: Dict[str, SSHSession] = {}
-        self._terminals: Dict[str, TerminalPort] = {}
-        self._tab_titles: Dict[str, str] = {}
-        self._remote_cache: Dict[str, Dict[str, List[dict]]] = {}
-        self._refresh_tasks: Dict[tuple[str, str], asyncio.Task] = {}
+        self._sessions: dict[str, SSHSession] = {}
+        self._terminals: dict[str, TerminalPort] = {}
+        self._tab_titles: dict[str, str] = {}
+        self._remote_cache: dict[str, dict[str, list[dict]]] = {}
+        self._refresh_tasks: dict[tuple[str, str], asyncio.Task] = {}
 
-    def get_session(self, tab_id: str) -> Optional[SSHSession]:
+    def get_session(self, tab_id: str) -> SSHSession | None:
         return self._sessions.get(tab_id)
 
     def get_tab_title(self, tab_id: str) -> str:
         return self._tab_titles.get(tab_id, '')
 
-    def get_remote_list_callback(self, tab_id: str) -> Optional[Callable[[str], List[dict]]]:
+    def get_remote_list_callback(self, tab_id: str) -> Callable[[str], list[dict]] | None:
         if tab_id not in self._sessions:
             return None
 
-        def _callback(path: str) -> List[dict]:
+        def _callback(path: str) -> list[dict]:
             cache = self._remote_cache.setdefault(tab_id, {})
             if path in cache:
                 return cache[path]
@@ -61,7 +61,7 @@ class ConnectionManager(QObject):
 
         return _callback
 
-    def invalidate_remote_cache(self, tab_id: str, path: Optional[str] = None) -> None:
+    def invalidate_remote_cache(self, tab_id: str, path: str | None = None) -> None:
         cache = self._remote_cache.get(tab_id)
         if cache is None:
             return
@@ -70,7 +70,7 @@ class ConnectionManager(QObject):
         else:
             cache.pop(path, None)
 
-    async def refresh_remote_list(self, tab_id: str, path: str) -> List[dict]:
+    async def refresh_remote_list(self, tab_id: str, path: str) -> list[dict]:
         ssh = self._sessions.get(tab_id)
         if ssh is None:
             return []
@@ -119,10 +119,10 @@ class ConnectionManager(QObject):
         session_item: SessionItem,
         terminal: TerminalPort,
         *,
-        on_connected: Optional[Callable[[], None]] = None,
-        on_disconnected: Optional[Callable[[], None]] = None,
-        on_error: Optional[Callable[[str], None]] = None,
-        host_key_confirm: Optional[HostKeyConfirm] = None,
+        on_connected: Callable[[], None] | None = None,
+        on_disconnected: Callable[[], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
+        host_key_confirm: HostKeyConfirm | None = None,
     ) -> None:
         if tab_id in self._sessions:
             logger.info(f'Connection tab already exists, closing old tab first: tab_id={tab_id}')
@@ -244,7 +244,7 @@ class ConnectionManager(QObject):
         self,
         tab_id: str,
         ssh: SSHSession,
-        terminal: Optional[TerminalPort],
+        terminal: TerminalPort | None,
     ) -> None:
         if self._sessions.get(tab_id) is ssh:
             self._sessions.pop(tab_id, None)
@@ -258,7 +258,7 @@ class ConnectionManager(QObject):
         self,
         tab_id: str,
         ssh: SSHSession,
-        terminal: Optional[TerminalPort],
+        terminal: TerminalPort | None,
     ) -> None:
         if self._sessions.get(tab_id) is not ssh:
             return

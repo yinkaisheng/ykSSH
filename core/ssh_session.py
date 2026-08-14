@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable
 
 import asyncssh
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -38,21 +38,21 @@ class SSHSession(QObject):
     data_received = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, parent: QObject = None, host_key_store: Optional[HostKeyStore] = None) -> None:
+    def __init__(self, parent: QObject = None, host_key_store: HostKeyStore | None = None) -> None:
         super().__init__(parent)
-        self._conn: Optional[asyncssh.SSHClientConnection] = None
-        self._process: Optional[asyncssh.SSHClientProcess] = None
-        self._sftp: Optional[asyncssh.SFTPClient] = None
-        self._read_task: Optional[asyncio.Task] = None
+        self._conn: asyncssh.SSHClientConnection | None = None
+        self._process: asyncssh.SSHClientProcess | None = None
+        self._sftp: asyncssh.SFTPClient | None = None
+        self._read_task: asyncio.Task | None = None
         self._disconnecting = False
         self._aborted = False
-        self._session_item: Optional[SessionItem] = None
+        self._session_item: SessionItem | None = None
         self._cols = 80
         self._rows = 24
         self._host_key_store = host_key_store or HostKeyStore()
 
     @property
-    def session_item(self) -> Optional[SessionItem]:
+    def session_item(self) -> SessionItem | None:
         return self._session_item
 
     @property
@@ -71,10 +71,10 @@ class SSHSession(QObject):
         self,
         session_item: SessionItem,
         *,
-        password: Optional[str] = None,
+        password: str | None = None,
         cols: int = 80,
         rows: int = 24,
-        host_key_confirm: Optional[HostKeyConfirm] = None,
+        host_key_confirm: HostKeyConfirm | None = None,
     ) -> None:
         if self.is_connected:
             await self.disconnect()
@@ -268,5 +268,5 @@ class SSHSession(QObject):
         if self._process is not None:
             self._process.change_terminal_size(cols, rows)
 
-    def get_sftp(self) -> Optional[asyncssh.SFTPClient]:
+    def get_sftp(self) -> asyncssh.SFTPClient | None:
         return self._sftp

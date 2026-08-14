@@ -31,6 +31,8 @@ The project is currently in active development and primarily targets Windows and
 
 ## Installation
 
+ykSSH requires **Python 3.10 or newer**. Python 3.9 and earlier are not supported.
+
 ```powershell
 git clone https://github.com/yinkaisheng/ykssh.git
 cd ykSSH

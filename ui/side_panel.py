@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QKeyEvent
@@ -100,11 +99,11 @@ class SidePanel(QWidget):
     def __init__(
         self,
         session_store: SessionProfileStore,
-        credential_store: Optional[CredentialStore] = None,
-        command_store: Optional[CommandStore] = None,
-        history_store: Optional[CommandHistoryStore] = None,
-        host_key_store: Optional[HostKeyStore] = None,
-        parent: Optional[QWidget] = None,
+        credential_store: CredentialStore | None = None,
+        command_store: CommandStore | None = None,
+        history_store: CommandHistoryStore | None = None,
+        host_key_store: HostKeyStore | None = None,
+        parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self.store = session_store
@@ -112,10 +111,10 @@ class SidePanel(QWidget):
         self.command_store = command_store or CommandStore()
         self.history_store = history_store or CommandHistoryStore()
         self.host_keys = host_key_store or HostKeyStore()
-        self._items: List[SessionItem] = []
-        self._commands: List[CommandItem] = []
+        self._items: list[SessionItem] = []
+        self._commands: list[CommandItem] = []
         self._active_drawer = DRAWER_SESSIONS
-        self._filter_texts: Dict[str, str] = {
+        self._filter_texts: dict[str, str] = {
             DRAWER_SESSIONS: '',
             DRAWER_COMMANDS: '',
             DRAWER_HISTORY: '',
@@ -130,9 +129,9 @@ class SidePanel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
-        self._drawer_buttons: Dict[str, QToolButton] = {}
-        self._drawer_symbols: Dict[str, QLabel] = {}
-        self._drawer_titles: Dict[str, QLabel] = {}
+        self._drawer_buttons: dict[str, QToolButton] = {}
+        self._drawer_symbols: dict[str, QLabel] = {}
+        self._drawer_titles: dict[str, QLabel] = {}
 
         self._sessions_button = self._create_drawer_button(DRAWER_SESSIONS)
         layout.addWidget(self._sessions_button)
@@ -295,7 +294,7 @@ class SidePanel(QWidget):
     def reload_history(self) -> None:
         self.history_list.reload()
 
-    def set_active_history_tab(self, tab_id: Optional[str]) -> None:
+    def set_active_history_tab(self, tab_id: str | None) -> None:
         self.history_list.set_active_tab(tab_id)
 
     def add_history_command(self, tab_id: str, command: str, sent_at: str, command_start_row: int) -> None:
@@ -375,10 +374,10 @@ class SidePanel(QWidget):
         return tree_item
 
     def _sync_data_model(self) -> None:
-        lookup: Dict[str, SessionItem] = {}
+        lookup: dict[str, SessionItem] = {}
         self._collect_by_id(self._items, lookup)
 
-        new_items: List[SessionItem] = []
+        new_items: list[SessionItem] = []
         for i in range(self.tree.topLevelItemCount()):
             new_items.append(self._tree_to_session(self.tree.topLevelItem(i), lookup))
         self._items = new_items
@@ -386,20 +385,20 @@ class SidePanel(QWidget):
         self.tree.viewport().update()
 
     @staticmethod
-    def _collect_by_id(items: List[SessionItem], out: Dict[str, SessionItem]) -> None:
+    def _collect_by_id(items: list[SessionItem], out: dict[str, SessionItem]) -> None:
         for item in items:
             out[item.id] = item
             SidePanel._collect_by_id(item.children, out)
 
     def _tree_to_session(self, tree_item: QTreeWidgetItem,
-                         lookup: Dict[str, SessionItem]) -> SessionItem:
+                         lookup: dict[str, SessionItem]) -> SessionItem:
         item_id = tree_item.data(0, ROLE_ITEM_ID)
         name = tree_item.text(0)
         item_type = tree_item.data(0, ROLE_TYPE)
         existing = lookup.get(item_id)
 
         if item_type == ITEM_TYPE_FOLDER:
-            children: List[SessionItem] = []
+            children: list[SessionItem] = []
             for i in range(tree_item.childCount()):
                 children.append(self._tree_to_session(tree_item.child(i), lookup))
             if existing is not None and existing.is_folder():
@@ -413,9 +412,9 @@ class SidePanel(QWidget):
             return existing
         return SessionItem(id=item_id, name=name)
 
-    def _find_session_by_tree(self, tree_item: QTreeWidgetItem) -> Optional[SessionItem]:
-        path: List[int] = []
-        node: Optional[QTreeWidgetItem] = tree_item
+    def _find_session_by_tree(self, tree_item: QTreeWidgetItem) -> SessionItem | None:
+        path: list[int] = []
+        node: QTreeWidgetItem | None = tree_item
         while node is not None:
             parent = node.parent()
             if parent:
@@ -428,7 +427,7 @@ class SidePanel(QWidget):
         if not path:
             return None
 
-        items: List[SessionItem] = self._items
+        items: list[SessionItem] = self._items
         for idx in path[:-1]:
             if 0 <= idx < len(items) and items[idx].is_folder():
                 items = items[idx].children
@@ -439,16 +438,16 @@ class SidePanel(QWidget):
             return items[last]
         return None
 
-    def current_session(self) -> Optional[SessionItem]:
+    def current_session(self) -> SessionItem | None:
         item = self.tree.currentItem()
         if item is None:
             return None
         session = self._find_session_by_tree(item)
         return session if session is not None and not session.is_folder() else None
 
-    def _find_command_by_tree(self, tree_item: QTreeWidgetItem) -> Optional[CommandItem]:
-        path: List[int] = []
-        node: Optional[QTreeWidgetItem] = tree_item
+    def _find_command_by_tree(self, tree_item: QTreeWidgetItem) -> CommandItem | None:
+        path: list[int] = []
+        node: QTreeWidgetItem | None = tree_item
         while node is not None:
             parent = node.parent()
             if parent:
@@ -458,7 +457,7 @@ class SidePanel(QWidget):
             node = parent
         path.reverse()
 
-        items: List[CommandItem] = self._commands
+        items: list[CommandItem] = self._commands
         for idx in path[:-1]:
             if 0 <= idx < len(items) and items[idx].is_folder():
                 items = items[idx].children
@@ -469,10 +468,10 @@ class SidePanel(QWidget):
         return None
 
     def _sync_command_model(self) -> None:
-        lookup: Dict[str, CommandItem] = {}
+        lookup: dict[str, CommandItem] = {}
         self._collect_commands_by_id(self._commands, lookup)
 
-        new_items: List[CommandItem] = []
+        new_items: list[CommandItem] = []
         for i in range(self.commands_tree.topLevelItemCount()):
             new_items.append(self._tree_to_command(self.commands_tree.topLevelItem(i), lookup))
         self._commands = new_items
@@ -480,20 +479,20 @@ class SidePanel(QWidget):
         self.commands_tree.viewport().update()
 
     @staticmethod
-    def _collect_commands_by_id(items: List[CommandItem], out: Dict[str, CommandItem]) -> None:
+    def _collect_commands_by_id(items: list[CommandItem], out: dict[str, CommandItem]) -> None:
         for item in items:
             out[item.id] = item
             SidePanel._collect_commands_by_id(item.children, out)
 
     def _tree_to_command(self, tree_item: QTreeWidgetItem,
-                         lookup: Dict[str, CommandItem]) -> CommandItem:
+                         lookup: dict[str, CommandItem]) -> CommandItem:
         item_id = tree_item.data(0, ROLE_ITEM_ID)
         name = tree_item.text(0)
         item_type = tree_item.data(0, ROLE_TYPE)
         existing = lookup.get(item_id)
 
         if item_type == ITEM_TYPE_FOLDER:
-            children: List[CommandItem] = []
+            children: list[CommandItem] = []
             for i in range(tree_item.childCount()):
                 children.append(self._tree_to_command(tree_item.child(i), lookup))
             if existing is not None and existing.is_folder():
@@ -913,7 +912,7 @@ class SidePanel(QWidget):
         self._save_commands()
         self.commands_tree.setCurrentItem(tree_item)
 
-    def _add_session_to_parent(self, parent_item: Optional[QTreeWidgetItem]) -> None:
+    def _add_session_to_parent(self, parent_item: QTreeWidgetItem | None) -> None:
         dialog = SessionDialog(self, title=tr('sessions.dialog_title_new'))
         if dialog.exec_() != SessionDialog.Accepted:
             return
@@ -935,7 +934,7 @@ class SidePanel(QWidget):
         self.sessions_changed.emit()
         self.tree.setCurrentItem(tree_item)
 
-    def _add_command_to_parent(self, parent_item: Optional[QTreeWidgetItem]) -> None:
+    def _add_command_to_parent(self, parent_item: QTreeWidgetItem | None) -> None:
         dialog = CommandDialog(self, title=tr('commands.dialog_title_new'))
         if dialog.exec_() != CommandDialog.Accepted:
             return
@@ -1242,7 +1241,7 @@ class SidePanel(QWidget):
         self._filter_edit.setFont(filter_font)
         self._filter_edit.setFixedHeight(appearance.filter_edit_height)
 
-    def _refresh_tooltips(self, item: Optional[QTreeWidgetItem] = None) -> None:
+    def _refresh_tooltips(self, item: QTreeWidgetItem | None = None) -> None:
         if item is None:
             for i in range(self.tree.topLevelItemCount()):
                 self._refresh_tooltips(self.tree.topLevelItem(i))
@@ -1255,7 +1254,7 @@ class SidePanel(QWidget):
         for i in range(item.childCount()):
             self._refresh_tooltips(item.child(i))
 
-    def _refresh_command_tooltips(self, item: Optional[QTreeWidgetItem] = None) -> None:
+    def _refresh_command_tooltips(self, item: QTreeWidgetItem | None = None) -> None:
         if item is None:
             for i in range(self.commands_tree.topLevelItemCount()):
                 self._refresh_command_tooltips(self.commands_tree.topLevelItem(i))

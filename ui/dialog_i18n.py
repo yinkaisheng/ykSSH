@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, Tuple
 
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
@@ -65,7 +64,7 @@ def _insert_mnemonic(base: str, letter: str) -> str:
     return f'&{base}'
 
 
-def _dialog_button_label(i18n_key: str, hint: Optional[str]) -> str:
+def _dialog_button_label(i18n_key: str, hint: str | None) -> str:
     """English: &Yes style mnemonics; other locales: 是(Y) style."""
     base = tr(i18n_key)
     if not hint:
@@ -80,7 +79,7 @@ def _dialog_button_label(i18n_key: str, hint: Optional[str]) -> str:
     return f'{base}({display})'
 
 
-def _dialog_shortcut_hint_label(i18n_key: str, hint: Optional[str]) -> str:
+def _dialog_shortcut_hint_label(i18n_key: str, hint: str | None) -> str:
     """Show an underlined hint without registering a competing Qt mnemonic."""
     base = tr(i18n_key)
     if not hint or len(hint) != 1:
@@ -91,7 +90,7 @@ def _dialog_shortcut_hint_label(i18n_key: str, hint: Optional[str]) -> str:
     return f'{base}({hint.upper()}\u0332)'
 
 
-def _effective_shortcut(hint: Optional[str]) -> Optional[QKeySequence]:
+def _effective_shortcut(hint: str | None) -> QKeySequence | None:
     if not hint:
         return None
     if hint == 'Esc':
@@ -108,7 +107,7 @@ def _effective_shortcut(hint: Optional[str]) -> Optional[QKeySequence]:
 def _configure_dialog_button(
     button: QPushButton,
     i18n_key: str,
-    hint: Optional[str],
+    hint: str | None,
 ) -> None:
     shortcut_override = button.property(_SHORTCUT_OVERRIDE_PROPERTY)
     if isinstance(shortcut_override, str):
@@ -376,7 +375,7 @@ def get_open_file_name(
     title: str,
     directory: str = '',
     file_filter: str = '',
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     dialog = QFileDialog(parent, title, directory, file_filter)
     dialog.setFileMode(QFileDialog.ExistingFile)
     if dialog.exec_() == QDialog.Accepted:
@@ -391,7 +390,7 @@ def get_save_file_name(
     title: str,
     default_name: str = '',
     file_filter: str = '',
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     dialog = QFileDialog(parent, title, '', file_filter)
     dialog.setAcceptMode(QFileDialog.AcceptSave)
     if default_name:

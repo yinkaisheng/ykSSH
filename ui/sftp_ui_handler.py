@@ -7,7 +7,7 @@ import asyncio
 import os
 import stat
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QWidget
@@ -59,8 +59,8 @@ class SftpUiHandler(QObject):
         self._remote_dir = '/'
         self._remote_home = '/'
         self._paths_initialized = False
-        self._transfer_stats: Dict[str, dict] = {}
-        self._transfer_conflict_policy: Dict[str, Optional[TransferDecision]] = {
+        self._transfer_stats: dict[str, dict] = {}
+        self._transfer_conflict_policy: dict[str, TransferDecision | None] = {
             'upload': None,
             'download': None,
         }
@@ -79,7 +79,7 @@ class SftpUiHandler(QObject):
     def remote_home(self) -> str:
         return self._remote_home
 
-    async def resolve_remote_navigation_target(self, path: str) -> tuple[str, str, Optional[bool]]:
+    async def resolve_remote_navigation_target(self, path: str) -> tuple[str, str, bool | None]:
         """Return (directory, filename_to_select, is_file) for a remote favorite/path."""
         text = (path or '').strip() or '/'
         ssh = self._cm.get_session(self.tab_id)
@@ -133,7 +133,7 @@ class SftpUiHandler(QObject):
             asyncio.create_task(self._cm.refresh_remote_list(self.tab_id, self._remote_dir))
         )
 
-    def upload_local_paths(self, local_paths: List[str]) -> None:
+    def upload_local_paths(self, local_paths: list[str]) -> None:
         logger.info(
             'Upload requested: '
             f'tab_id={self.tab_id}, count={len(local_paths)}, remote_dir={self._remote_dir}, '
@@ -222,7 +222,7 @@ class SftpUiHandler(QObject):
         self,
         sftp,
         path: str,
-        visited_dirs: Optional[set[str]] = None,
+        visited_dirs: set[str] | None = None,
     ) -> int:
         if visited_dirs is None:
             visited_dirs = set()
@@ -311,7 +311,7 @@ class SftpUiHandler(QObject):
         self._transfer_stats.pop(kind, None)
         self.transfer_status_changed.emit(kind, '', False, 0.0, 0, 0)
 
-    def _dialog_parent(self) -> Optional[QWidget]:
+    def _dialog_parent(self) -> QWidget | None:
         parent = self.parent()
         return parent if isinstance(parent, QWidget) else None
 
@@ -353,7 +353,7 @@ class SftpUiHandler(QObject):
     async def _warn(self, message: str) -> None:
         await message_warning_async(self._dialog_parent(), tr('file.operation_failed'), message)
 
-    async def _upload_async(self, local_paths: List[str]) -> None:
+    async def _upload_async(self, local_paths: list[str]) -> None:
         ssh = self._cm.get_session(self.tab_id)
         if ssh is None:
             return
@@ -414,13 +414,13 @@ class SftpUiHandler(QObject):
         finally:
             self._end_transfer_status('upload')
 
-    def download_remote_paths(self, remote_paths: List[str]) -> None:
+    def download_remote_paths(self, remote_paths: list[str]) -> None:
         self._download_remote_paths(remote_paths, self._local_dir)
 
-    def download_remote_paths_to(self, remote_paths: List[str], local_dir: str) -> None:
+    def download_remote_paths_to(self, remote_paths: list[str], local_dir: str) -> None:
         self._download_remote_paths(remote_paths, local_dir)
 
-    def _download_remote_paths(self, remote_paths: List[str], local_dir: str) -> None:
+    def _download_remote_paths(self, remote_paths: list[str], local_dir: str) -> None:
         logger.info(
             'Download requested: '
             f'tab_id={self.tab_id}, count={len(remote_paths)}, local_dir={local_dir}, '
@@ -428,7 +428,7 @@ class SftpUiHandler(QObject):
         )
         self._track_transfer_task(asyncio.create_task(self._download_async(remote_paths, local_dir)))
 
-    async def _download_async(self, remote_paths: List[str], local_dir: str) -> None:
+    async def _download_async(self, remote_paths: list[str], local_dir: str) -> None:
         ssh = self._cm.get_session(self.tab_id)
         if ssh is None:
             return
@@ -486,11 +486,11 @@ class SftpUiHandler(QObject):
         finally:
             self._end_transfer_status('download')
 
-    def delete_remote_paths(self, remote_paths: List[str]) -> None:
+    def delete_remote_paths(self, remote_paths: list[str]) -> None:
         logger.info(f'Remote delete requested: tab_id={self.tab_id}, count={len(remote_paths)}, paths={remote_paths}')
         self._track_transfer_task(asyncio.create_task(self._delete_async(remote_paths)))
 
-    async def _delete_async(self, remote_paths: List[str]) -> None:
+    async def _delete_async(self, remote_paths: list[str]) -> None:
         ssh = self._cm.get_session(self.tab_id)
         if ssh is None:
             return
@@ -524,7 +524,7 @@ class SftpUiHandler(QObject):
         )
         self._track_transfer_task(asyncio.create_task(self._rename_async(old_name, new_name)))
 
-    def apply_remote_properties(self, remote_paths: List[str], change: PermissionChange) -> None:
+    def apply_remote_properties(self, remote_paths: list[str], change: PermissionChange) -> None:
         logger.info(
             'Remote properties requested: '
             f'tab_id={self.tab_id}, count={len(remote_paths)}, recursive={change.recursive}'
@@ -535,7 +535,7 @@ class SftpUiHandler(QObject):
 
     async def _apply_remote_properties_async(
         self,
-        remote_paths: List[str],
+        remote_paths: list[str],
         change: PermissionChange,
     ) -> None:
         ssh = self._cm.get_session(self.tab_id)

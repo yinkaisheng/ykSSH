@@ -8,7 +8,7 @@ import shutil
 import stat
 import sys
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
@@ -389,7 +389,7 @@ def _apply_file_panel_toolbar_layout(
     *,
     label: QLabel,
     path_edit: QLineEdit,
-    nav_toolbar: Optional[QWidget] = None,
+    nav_toolbar: QWidget | None = None,
 ) -> None:
     cfg = get_app_config().file_panel
     toolbar_height = cfg.file_panel_toolbar_height

@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import re
-from typing import Dict
 
-ThemeColorDict = Dict[str, str]
+
+ThemeColorDict = dict[str, str]
 
 # Single source of truth for config.json → themes.<solarized|light|dark>.<key>
-THEME_COLOR_DOCS: Dict[str, str] = {
+THEME_COLOR_DOCS: dict[str, str] = {
     'background_primary': 'Main window, editors, and primary content background',
     'text_primary': 'Default body text',
     'background_secondary': 'Buttons, menu bar, table headers, combo/spin controls',
@@ -71,7 +71,7 @@ def normalize_theme_color(value: object, default: str) -> str:
     return default
 
 
-def merge_theme_colors(theme_name: str, overrides: Dict[str, object]) -> ThemeColorDict:
+def merge_theme_colors(theme_name: str, overrides: dict[str, object]) -> ThemeColorDict:
     defaults = DEFAULT_THEMES[theme_name]
     merged: ThemeColorDict = {}
     for key in THEME_COLOR_KEY_ORDER:
@@ -79,7 +79,7 @@ def merge_theme_colors(theme_name: str, overrides: Dict[str, object]) -> ThemeCo
     return merged
 
 
-DEFAULT_THEMES: Dict[str, ThemeColorDict] = {
+DEFAULT_THEMES: dict[str, ThemeColorDict] = {
     'solarized': {
         'background_primary': '#fdf6e3',
         'text_primary': '#657b83',

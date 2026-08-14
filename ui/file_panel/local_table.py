@@ -8,7 +8,7 @@ import shutil
 import stat
 import sys
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
@@ -146,7 +146,7 @@ class LocalFileTable(_BaseFileTable):
 
     def _selected_file_paths(
         self,
-        selected: Optional[list[tuple[str, str]]] = None,
+        selected: list[tuple[str, str]] | None = None,
     ) -> list[str]:
         entries = selected or self._selected_entries()
         return [
@@ -310,13 +310,13 @@ class LocalFileTable(_BaseFileTable):
         if clipboard is not None and text:
             clipboard.setText(text)
 
-    def _copy_selected_names(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+    def _copy_selected_names(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
         if not selected:
             return
         self._copy_text('\n'.join(name for name, _ in selected))
 
-    def _copy_selected_paths(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+    def _copy_selected_paths(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
         if not selected:
             return
@@ -325,7 +325,7 @@ class LocalFileTable(_BaseFileTable):
     def _copy_current_directory_path(self) -> None:
         self._copy_text(self._current_path)
 
-    def _upload_selected(self, selected: Optional[list[tuple[str, str]]] = None) -> None:
+    def _upload_selected(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
         if not selected:
             return
@@ -445,13 +445,13 @@ class LocalFileTable(_BaseFileTable):
         self.path_changed.emit(self._current_path)
         self.refresh()
 
-def _list_windows_drives() -> List[str]:
+def _list_windows_drives() -> list[str]:
     if sys.platform != 'win32':
         return []
     import ctypes
 
     bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-    drives: List[str] = []
+    drives: list[str] = []
     for index in range(26):
         if bitmask & (1 << index):
             drives.append(f'{chr(ord("A") + index)}:')

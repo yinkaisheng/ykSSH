@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from configparser import ConfigParser
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Callable
 
 from i18n.builtin_strings import BUILTIN_STRINGS
 from log_util import logger
@@ -51,14 +51,14 @@ class LanguageInfo:
     name: str
 
 
-_translator: Optional['Translator'] = None
+_translator: 'Translator' | None = None
 
 
 class Translator:
     def __init__(self, locale: str = DEFAULT_LOCALE) -> None:
         self._locale = DEFAULT_LOCALE
-        self._strings: Dict[str, str] = dict(BUILTIN_STRINGS)
-        self._retranslators: List[Callable[[], None]] = []
+        self._strings: dict[str, str] = dict(BUILTIN_STRINGS)
+        self._retranslators: list[Callable[[], None]] = []
         self.set_locale(locale)
 
     def locale(self) -> str:
@@ -114,8 +114,8 @@ def _normalize_locale_code(locale: str) -> str:
     return text or DEFAULT_LOCALE
 
 
-def _parse_strings_file(path) -> Dict[str, str]:
-    parsed: Dict[str, str] = {}
+def _parse_strings_file(path) -> dict[str, str]:
+    parsed: dict[str, str] = {}
     for line in path.read_text(encoding='utf-8').splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith('#'):
@@ -170,7 +170,7 @@ def _read_language_name(code: str) -> str:
     return code
 
 
-def _discover_language_codes() -> List[str]:
+def _discover_language_codes() -> list[str]:
     codes = {DEFAULT_LOCALE}
     if LANGUAGES_DIR.is_dir():
         for entry in sorted(LANGUAGES_DIR.iterdir()):
@@ -220,7 +220,7 @@ def unregister_retranslator(callback: Callable[[], None]) -> None:
     _get_translator().unregister_retranslator(callback)
 
 
-def list_languages() -> List[LanguageInfo]:
+def list_languages() -> list[LanguageInfo]:
     return [
         LanguageInfo(code=code, name=_read_language_name(code))
         for code in _discover_language_codes()

@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Dict
 
-BUILTIN_STRINGS: Dict[str, str] = {
+
+BUILTIN_STRINGS: dict[str, str] = {
     'main.window_title': 'ykSSH',
     'main.new_session': '+ New Session',
     'main.connect': 'Connect',

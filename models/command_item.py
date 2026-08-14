@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
 
 
 @dataclass
@@ -15,13 +15,13 @@ class CommandItem:
     name: str = ''
     command: str = ''
     description: str = ''
-    children: List['CommandItem'] = field(default_factory=list)
+    children: list['CommandItem'] = field(default_factory=list)
 
     def is_folder(self) -> bool:
         return not self.command
 
-    def to_dict(self) -> Dict[str, Any]:
-        data: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
             'id': self.id,
             'name': self.name,
         }
@@ -34,7 +34,7 @@ class CommandItem:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'CommandItem':
+    def from_dict(cls, data: dict[str, Any]) -> 'CommandItem':
         return cls(
             id=str(data.get('id', '') or uuid.uuid4()),
             name=str(data.get('name', '') or ''),

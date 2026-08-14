@@ -8,7 +8,7 @@ import shutil
 import stat
 import sys
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
@@ -134,8 +134,8 @@ class _BaseFileTable(QTableWidget):
         self._filter_text = ''
         self._filter_edit_focused = False
         self._pending_select_name = ''
-        self._inline_rename_edit: Optional[_InlineRenameEdit] = None
-        self._inline_rename_item: Optional[QTableWidgetItem] = None
+        self._inline_rename_edit: _InlineRenameEdit | None = None
+        self._inline_rename_item: QTableWidgetItem | None = None
         self.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.itemSelectionChanged.connect(self._emit_status_counts)
 
@@ -278,7 +278,7 @@ class _BaseFileTable(QTableWidget):
         if edit is not None:
             edit.deleteLater()
 
-    def _context_menu_row_at(self, pos) -> Optional[int]:
+    def _context_menu_row_at(self, pos) -> int | None:
         index = self.indexAt(pos)
         if index.isValid():
             row = index.row()
@@ -330,7 +330,7 @@ class _BaseFileTable(QTableWidget):
         last_rect = self.visualRect(last_cell)
         return self._visible_row_at_y(pos.y()) is None or pos.x() > last_rect.right()
 
-    def _visible_row_at_y(self, y: int) -> Optional[int]:
+    def _visible_row_at_y(self, y: int) -> int | None:
         for row in range(self.rowCount()):
             if self.isRowHidden(row):
                 continue

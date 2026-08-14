@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 import asyncssh
 
@@ -20,7 +20,7 @@ _HOST_KEYS_VERSION = 1
 class HostKeyStore:
     """Persist the first trusted public key for each SSH endpoint."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path is not None else HOST_KEYS_FILE
         self._keys: dict[str, str] = {}
         self._load()

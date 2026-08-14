@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from models.favorite_path import FavoritePath
 
@@ -19,13 +19,13 @@ class AppearanceConfig:
     session_tree_row_height_px: int
     filter_edit_height: int
     filter_edit_font_size: int
-    ui_font_families_win: Tuple[str, ...]
+    ui_font_families_win: tuple[str, ...]
     terminal_font_family: str
     terminal_font_size_px: int
     terminal_font_size_min: int
     terminal_font_size_max: int
-    terminal_font_families: Tuple[str, ...]
-    terminal_font_fallbacks: Tuple[str, ...]
+    terminal_font_families: tuple[str, ...]
+    terminal_font_fallbacks: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -33,16 +33,16 @@ class WindowConfig:
     border_width: int
     title_bar_height: int
     tab_bar_height: int
-    width: Optional[int]
-    height: Optional[int]
-    session_tree_width: Optional[int]
-    vertical_splitter: Optional[float]
+    width: int | None
+    height: int | None
+    session_tree_width: int | None
+    vertical_splitter: float | None
 
 
 @dataclass(frozen=True)
 class FilePanelConfig:
-    local_column_widths: Dict[str, int]
-    remote_column_widths: Dict[str, int]
+    local_column_widths: dict[str, int]
+    remote_column_widths: dict[str, int]
     header_height_px: int
     row_height_px: int
     file_panel_toolbar_height: int
@@ -50,7 +50,7 @@ class FilePanelConfig:
     file_panel_statusbar_font_size: int
     file_panel_favorites_menu_font_size: int
     folder_name_bold: bool
-    local_favorites: Tuple[FavoritePath, ...]
+    local_favorites: tuple[FavoritePath, ...]
     local_favorites_dialog_width: int
     local_favorites_dialog_height: int
     remote_favorites_dialog_width: int
@@ -74,9 +74,9 @@ class EditorConfig:
 @dataclass(frozen=True)
 class AppConfig:
     language: str
-    themes: Dict[str, Dict[str, str]]
+    themes: dict[str, dict[str, str]]
     appearance: AppearanceConfig
-    terminal: Dict[str, Any]
+    terminal: dict[str, Any]
     window: WindowConfig
     file_panel: FilePanelConfig
     side_panel: SidePanelConfig

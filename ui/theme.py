@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Dict, Literal, Optional
+from typing import Literal
 
 from PyQt5.QtGui import QFont, QColor, QFontMetrics
 from PyQt5.QtWidgets import QApplication
@@ -64,7 +64,7 @@ class ThemePalette:
 ThemePalette.__doc__ = format_theme_palette_doc()
 
 
-_active_palette: Optional[ThemePalette] = None
+_active_palette: ThemePalette | None = None
 
 
 def palette_from_colors(colors: ThemeColorDict) -> ThemePalette:

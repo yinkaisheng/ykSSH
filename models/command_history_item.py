@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass
@@ -16,7 +16,7 @@ class CommandHistoryItem:
     sent_at: str = ''
     command_start_row: int = -1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             'id': self.id,
             'command': self.command,
@@ -25,7 +25,7 @@ class CommandHistoryItem:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'CommandHistoryItem':
+    def from_dict(cls, data: dict[str, Any]) -> 'CommandHistoryItem':
         return cls(
             id=str(data.get('id', '') or uuid.uuid4()),
             command=str(data.get('command', '') or ''),

@@ -3,9 +3,9 @@
 """Default appearance and font settings for config.json appearance.*."""
 from __future__ import annotations
 
-from typing import Dict, Tuple
 
-AppearanceDict = Dict[str, object]
+
+AppearanceDict = dict[str, object]
 
 DEFAULT_THEME = 'solarized'
 
@@ -16,7 +16,7 @@ DEFAULT_SESSION_TREE_FONT_SIZE_PX = 14
 DEFAULT_SESSION_TREE_ROW_HEIGHT_PX = 26
 DEFAULT_FILTER_EDIT_HEIGHT = 26
 DEFAULT_FILTER_EDIT_FONT_SIZE = 14
-DEFAULT_UI_FONT_FAMILIES_WIN: Tuple[str, ...] = (
+DEFAULT_UI_FONT_FAMILIES_WIN: tuple[str, ...] = (
     'Microsoft YaHei UI',
     'Segoe UI',
     'MS Shell Dlg 2',
@@ -26,12 +26,12 @@ DEFAULT_TERMINAL_FONT_FAMILY = 'Consolas'
 DEFAULT_TERMINAL_FONT_SIZE_PX = 22
 DEFAULT_TERMINAL_FONT_SIZE_MIN = 14
 DEFAULT_TERMINAL_FONT_SIZE_MAX = 48
-DEFAULT_TERMINAL_FONT_FAMILIES: Tuple[str, ...] = (
+DEFAULT_TERMINAL_FONT_FAMILIES: tuple[str, ...] = (
     'Consolas',
     'Cascadia Mono',
     'Courier New',
 )
-DEFAULT_TERMINAL_FONT_FALLBACKS: Tuple[str, ...] = (
+DEFAULT_TERMINAL_FONT_FALLBACKS: tuple[str, ...] = (
     'Cascadia Mono',
     'Menlo',
     'Monaco',
@@ -39,7 +39,7 @@ DEFAULT_TERMINAL_FONT_FALLBACKS: Tuple[str, ...] = (
     'monospace',
 )
 
-_APPEARANCE_INT_DEFAULTS: Dict[str, int] = {
+_APPEARANCE_INT_DEFAULTS: dict[str, int] = {
     'ui_font_size_px': DEFAULT_UI_FONT_SIZE_PX,
     'table_font_size_px': DEFAULT_TABLE_FONT_SIZE_PX,
     'status_font_size_px': DEFAULT_STATUS_FONT_SIZE_PX,
@@ -52,7 +52,7 @@ _APPEARANCE_INT_DEFAULTS: Dict[str, int] = {
     'terminal_font_size_max': DEFAULT_TERMINAL_FONT_SIZE_MAX,
 }
 
-_APPEARANCE_INT_BOUNDS: Dict[str, Tuple[int, int]] = {
+_APPEARANCE_INT_BOUNDS: dict[str, tuple[int, int]] = {
     'ui_font_size_px': (8, 32),
     'table_font_size_px': (8, 32),
     'status_font_size_px': (8, 24),

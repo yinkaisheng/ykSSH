@@ -8,7 +8,7 @@ import shutil
 import stat
 import sys
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
@@ -139,9 +139,9 @@ class _FileNavToolbar(QWidget):
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
         self._layout.addWidget(self._refresh_btn)
 
-        self._path_provider: Optional[Callable[[], str]] = None
-        self._home_path_provider: Optional[Callable[[], str]] = None
-        self._navigate_handler: Optional[Callable[[str], None]] = None
+        self._path_provider: Callable[[], str] | None = None
+        self._home_path_provider: Callable[[], str] | None = None
+        self._navigate_handler: Callable[[str], None] | None = None
         self.retranslate_ui()
 
     def set_path_provider(self, provider: Callable[[], str]) -> None:
@@ -461,8 +461,8 @@ def _show_favorites_menu(
     anchor: QWidget,
     *,
     sections: Sequence[tuple[str, Sequence[FavoritePath]]],
-    on_manage: Optional[Callable[[], None]],
-    on_navigate: Optional[Callable[[FavoritePath], None]],
+    on_manage: Callable[[], None] | None,
+    on_navigate: Callable[[FavoritePath], None] | None,
 ) -> None:
     menu = _FavoriteMenu(parent, on_navigate=on_navigate)
     menu_font = QFont()
@@ -509,7 +509,7 @@ class _FavoriteMenu(ShortcutMenu):
         self,
         parent: QWidget = None,
         *,
-        on_navigate: Optional[Callable[[FavoritePath], None]],
+        on_navigate: Callable[[FavoritePath], None] | None,
     ) -> None:
         super().__init__(parent)
         self._on_navigate = on_navigate

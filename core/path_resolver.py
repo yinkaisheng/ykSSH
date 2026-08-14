@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
-from typing import Optional, Union
+
 
 import asyncssh
 
@@ -21,7 +21,7 @@ def resolve_local_path(configured: str) -> str:
     return default
 
 
-def _path_text(value: Union[str, bytes, asyncssh.sftp.SFTPName, None]) -> str:
+def _path_text(value: str | bytes | asyncssh.sftp.SFTPName | None) -> str:
     if value is None:
         return ''
     if isinstance(value, str):

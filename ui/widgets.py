@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QStyledItemDelegate,
 )
 
-from typing import Callable, Optional, Type
+from typing import Callable
 
 from PyQt5.QtGui import QContextMenuEvent, QKeySequence
 from PyQt5.QtWidgets import QLineEdit, QPlainTextEdit, QTextEdit
@@ -289,7 +289,7 @@ def _standard_edit_action_shortcut(text: str, action) -> str:
     return shortcut.toString() if not shortcut.isEmpty() else ''
 
 
-def _edit_menu_i18n_key(action) -> Optional[str]:
+def _edit_menu_i18n_key(action) -> str | None:
     text = action.text()
     label = _standard_edit_action_label(text)
     key = _EDIT_MENU_LABELS.get(label)
@@ -343,7 +343,7 @@ def _wrap_context_menu_event(original: Callable) -> Callable:
     return contextMenuEvent
 
 
-_EDIT_CONTEXT_MENU_CLASSES: tuple[Type, ...] = (QLineEdit, QPlainTextEdit, QTextEdit)
+_EDIT_CONTEXT_MENU_CLASSES: tuple[type, ...] = (QLineEdit, QPlainTextEdit, QTextEdit)
 _INSTALLED = False
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -20,17 +19,17 @@ _CREDENTIALS_VERSION = 1
 class CredentialStore:
     """Persist session passwords in config/credentials.json (Fernet-encrypted)."""
 
-    def __init__(self, path: Optional[Path] = None, fernet: Optional[Fernet] = None) -> None:
+    def __init__(self, path: Path | None = None, fernet: Fernet | None = None) -> None:
         self.path = Path(path) if path is not None else CREDENTIALS_FILE
         self._fernet = fernet or load_or_create_fernet()
-        self._passwords: Dict[str, str] = {}
+        self._passwords: dict[str, str] = {}
         self._save_blocked = False
         self._load()
 
     def _encrypt(self, plaintext: str) -> str:
         return self._fernet.encrypt(plaintext.encode('utf-8')).decode('ascii')
 
-    def _decrypt(self, token: str) -> Optional[str]:
+    def _decrypt(self, token: str) -> str | None:
         try:
             return self._fernet.decrypt(token.encode('ascii')).decode('utf-8')
         except (InvalidToken, ValueError, UnicodeDecodeError):
@@ -65,7 +64,7 @@ class CredentialStore:
             self._passwords = {}
             return
 
-        passwords: Dict[str, str] = {}
+        passwords: dict[str, str] = {}
         decrypt_failures = 0
         for key, value in raw.items():
             if not isinstance(key, str) or not isinstance(value, str):
@@ -103,7 +102,7 @@ class CredentialStore:
             logger.warning(f'Failed to save credentials to {self.path}: {exc}')
             return False
 
-    def get_password(self, session_id: str) -> Optional[str]:
+    def get_password(self, session_id: str) -> str | None:
         return self._passwords.get(session_id)
 
     def set_password(self, session_id: str, password: str) -> bool:

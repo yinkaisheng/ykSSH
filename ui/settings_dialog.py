@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 from PyQt5.QtGui import QFontDatabase
 from PyQt5.QtWidgets import (
@@ -65,9 +65,9 @@ def prompt_app_settings(
     current_editor_path: str,
     current_remote_large_file_mb: int,
     *,
-    on_save: Optional[Callable[[AppSettings], None]] = None,
+    on_save: Callable[[AppSettings], None] | None = None,
     min_width: int = 400,
-) -> Optional[AppSettings]:
+) -> AppSettings | None:
     dialog = create_dialog(parent, tr('settings.title'), min_width=min_width)
     initial = AppSettings(
         theme=normalize_theme_name(current_theme),

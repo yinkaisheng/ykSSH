@@ -3,7 +3,7 @@
 """Per-terminal command history list used by the side panel."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QListWidget, QListWidgetItem
@@ -31,9 +31,9 @@ class CommandHistoryPanel(QListWidget):
     def __init__(self, store: CommandHistoryStore, parent=None) -> None:
         super().__init__(parent)
         self._store = store
-        self._items: List[CommandHistoryItem] = []
-        self._active_tab_id: Optional[str] = None
-        self._scroll_positions: Dict[str, int] = {}
+        self._items: list[CommandHistoryItem] = []
+        self._active_tab_id: str | None = None
+        self._scroll_positions: dict[str, int] = {}
         self._filter_keyword = ''
 
         self.setObjectName('CommandHistoryList')
@@ -46,7 +46,7 @@ class CommandHistoryPanel(QListWidget):
         self._items = self._store.load_for_tab(self._active_tab_id)
         self._rebuild()
 
-    def set_active_tab(self, tab_id: Optional[str]) -> None:
+    def set_active_tab(self, tab_id: str | None) -> None:
         self._save_scroll_position()
         self._active_tab_id = tab_id
         self.reload()
@@ -111,7 +111,7 @@ class CommandHistoryPanel(QListWidget):
         first_line = item.command.splitlines()[0] if item.command else ''
         return first_line[:120]
 
-    def _find_by_id(self, item_id: str) -> Optional[CommandHistoryItem]:
+    def _find_by_id(self, item_id: str) -> CommandHistoryItem | None:
         return next((item for item in self._items if item.id == item_id), None)
 
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:

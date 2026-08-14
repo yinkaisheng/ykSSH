@@ -7,7 +7,7 @@ import io
 import inspect
 import threading
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 IsPy38OrHigher = sys.version_info >= (3, 8)
 
@@ -326,7 +326,7 @@ def printx(*values, prefix: Any = '', print_id: bool = False, sep: str = ' ', en
     print(timestr, "\n  ".join(output_parts), sep=sep, end=end, flush=flush)
 
 
-def log(msg: Any = '', sep: str = ' ', end: Optional[str] = None, caller: bool = True, flush: bool = False, file: Optional[io.FileIO] = None) -> None:
+def log(msg: Any = '', sep: str = ' ', end: str | None = None, caller: bool = True, flush: bool = False, file: io.FileIO | None = None) -> None:
     '''console log'''
     now = datetime.now()
     if caller:

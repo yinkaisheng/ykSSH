@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Optional
+
 
 from PyQt5.QtCore import Qt, QEvent, QPoint, QRectF, QPointF
 from PyQt5.QtGui import QMouseEvent, QPainter, QPen, QPalette, QColor
@@ -162,8 +162,8 @@ class WindowTitleBar(QWidget):
         self._window = window
         self._height = self.DEFAULT_HEIGHT
         self._border_width = 0
-        self._drag_press_global: Optional[QPoint] = None
-        self._drag_window_origin: Optional[QPoint] = None
+        self._drag_press_global: QPoint | None = None
+        self._drag_window_origin: QPoint | None = None
         self.setObjectName('WindowTitleBar')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedHeight(self._height)

@@ -3,7 +3,7 @@
 """Create and edit quick commands."""
 from __future__ import annotations
 
-from typing import Optional
+
 
 from PyQt5.QtWidgets import (
     QDialog,
@@ -29,7 +29,7 @@ class CommandDialog(QDialog):
         self,
         parent: QWidget,
         *,
-        command: Optional[CommandItem] = None,
+        command: CommandItem | None = None,
         title: str,
     ) -> None:
         super().__init__(parent)
@@ -83,7 +83,7 @@ class CommandDialog(QDialog):
             return
         super().accept()
 
-    def get_command(self, existing: Optional[CommandItem] = None) -> Optional[CommandItem]:
+    def get_command(self, existing: CommandItem | None = None) -> CommandItem | None:
         name = self.name_edit.text().strip()
         command = self.command_edit.toPlainText().strip()
         if not name or not command:

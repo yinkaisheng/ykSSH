@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from cryptography.fernet import Fernet
 
@@ -16,7 +15,7 @@ class InvalidSecretKeyError(RuntimeError):
     """Raised when an existing secret.key cannot be loaded as a Fernet key."""
 
 
-def load_or_create_fernet(path: Optional[Path] = None) -> Fernet:
+def load_or_create_fernet(path: Path | None = None) -> Fernet:
     key_path = Path(path) if path is not None else SECRET_KEY_FILE
     key_path.parent.mkdir(parents=True, exist_ok=True)
     if key_path.exists():

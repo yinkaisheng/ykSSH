@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from log_util import logger
 from models.session_item import SessionItem
@@ -17,11 +17,11 @@ SESSIONS_VERSION = 1
 class SessionProfileStore:
     """Persist a flat list of root ``SessionItem`` nodes to sessions.json."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path is not None else SESSIONS_FILE
-        self._cache: Optional[List[SessionItem]] = None
+        self._cache: list[SessionItem] | None = None
 
-    def load(self) -> List[SessionItem]:
+    def load(self) -> list[SessionItem]:
         if self._cache is not None:
             return self._cache
         if not self.path.exists():
@@ -50,9 +50,9 @@ class SessionProfileStore:
         self._cache = [SessionItem.from_dict(d) for d in items_data if isinstance(d, dict)]
         return self._cache
 
-    def save_items(self, items: List[SessionItem]) -> bool:
+    def save_items(self, items: list[SessionItem]) -> bool:
         self._ensure_dir()
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             'version': SESSIONS_VERSION,
             'items': [item.to_dict() for item in items],
         }

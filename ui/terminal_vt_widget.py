@@ -6,7 +6,7 @@ import time
 import string
 import unicodedata
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPoint, QPointF, QRectF, QEvent
 from PyQt5.QtGui import (
@@ -310,8 +310,8 @@ class TerminalVTWidget(QWidget):
     # -------------------------
     @staticmethod
     def _build_terminal_font(
-        family: Optional[str] = None,
-        size_px: Optional[int] = None,
+        family: str | None = None,
+        size_px: int | None = None,
     ) -> QFont:
         appearance = get_app_config().appearance
         family = normalize_terminal_font_family(family or appearance.terminal_font_family)
@@ -336,7 +336,7 @@ class TerminalVTWidget(QWidget):
         font.setPixelSize(size_px)
         return font
 
-    def _sync_font_stylesheet(self, font: Optional[QFont] = None) -> None:
+    def _sync_font_stylesheet(self, font: QFont | None = None) -> None:
         """Override global QSS font-size; pass the intended QFont (setFont alone is overridden by app QSS)."""
         source = font if font is not None else self.font()
         size_px = source.pixelSize()
@@ -349,8 +349,8 @@ class TerminalVTWidget(QWidget):
 
     def apply_terminal_font(
         self,
-        family: Optional[str] = None,
-        size_px: Optional[int] = None,
+        family: str | None = None,
+        size_px: int | None = None,
     ) -> None:
         """Apply terminal font from settings and reflow the grid."""
         terminal_font = self._build_terminal_font(family, size_px)

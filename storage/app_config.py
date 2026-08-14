@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Sequence
 
 from i18n.translator import DEFAULT_LOCALE, list_languages
 from log_util import logger
@@ -55,7 +55,7 @@ CONFIG_VERSION = 1
 
 _VALID_THEMES = frozenset(DEFAULT_THEME_NAMES)
 
-_TERMINAL_SETTING_DEFAULTS: Dict[str, Any] = {
+_TERMINAL_SETTING_DEFAULTS: dict[str, Any] = {
     'terminal_scrollback_lines': 5000,
     'terminal_reflow_buffer_chars': 200000,
     'terminal_experimental_raw_reflow_on_resize': False,
@@ -86,8 +86,8 @@ _MIN_SESSION_TREE_WIDTH = 120
 _MAX_SESSION_TREE_WIDTH = 800
 
 
-_config_cache: Optional[AppConfig] = None
-_raw_config_cache: Optional[Dict[str, Any]] = None
+_config_cache: AppConfig | None = None
+_raw_config_cache: dict[str, Any] | None = None
 
 
 def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -114,10 +114,10 @@ def _normalize_bool(value: Any, default: bool) -> bool:
 
 def _normalize_string_list(
     value: Any,
-    default: Tuple[str, ...],
+    default: tuple[str, ...],
     *,
     strip_quotes: bool = False,
-) -> Tuple[str, ...]:
+) -> tuple[str, ...]:
     if not isinstance(value, list):
         return default
     items: list[str] = []
@@ -138,7 +138,7 @@ def _normalize_theme_name(value: Any) -> str:
     return DEFAULT_THEME
 
 
-def _normalize_font_family(value: Any, default: str, candidates: Tuple[str, ...]) -> str:
+def _normalize_font_family(value: Any, default: str, candidates: tuple[str, ...]) -> str:
     if isinstance(value, str):
         name = value.strip().replace('"', '')
         if name in candidates:
@@ -148,7 +148,7 @@ def _normalize_font_family(value: Any, default: str, candidates: Tuple[str, ...]
     return default
 
 
-def _normalize_appearance(raw: Any) -> Dict[str, Any]:
+def _normalize_appearance(raw: Any) -> dict[str, Any]:
     defaults = default_appearance()
     raw = raw if isinstance(raw, dict) else {}
     candidates = _normalize_string_list(
@@ -156,7 +156,7 @@ def _normalize_appearance(raw: Any) -> Dict[str, Any]:
         DEFAULT_TERMINAL_FONT_FAMILIES,
         strip_quotes=True,
     )
-    normalized: Dict[str, Any] = {
+    normalized: dict[str, Any] = {
         'theme': _normalize_theme_name(raw.get('theme')),
         'ui_font_families_win': list(_normalize_string_list(
             raw.get('ui_font_families_win'),
@@ -190,9 +190,9 @@ def _normalize_appearance(raw: Any) -> Dict[str, Any]:
     return normalized
 
 
-def _normalize_terminal(raw: Any) -> Dict[str, Any]:
+def _normalize_terminal(raw: Any) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
-    normalized: Dict[str, Any] = {}
+    normalized: dict[str, Any] = {}
     for key, default in _TERMINAL_SETTING_DEFAULTS.items():
         if isinstance(default, bool):
             normalized[key] = _normalize_bool(raw.get(key, default), default)
@@ -209,7 +209,7 @@ def _normalize_terminal(raw: Any) -> Dict[str, Any]:
     return normalized
 
 
-def _appearance_to_config(appearance: Dict[str, Any]) -> AppearanceConfig:
+def _appearance_to_config(appearance: dict[str, Any]) -> AppearanceConfig:
     return AppearanceConfig(
         theme=appearance['theme'],
         ui_font_size_px=appearance['ui_font_size_px'],
@@ -229,14 +229,14 @@ def _appearance_to_config(appearance: Dict[str, Any]) -> AppearanceConfig:
     )
 
 
-def _default_themes() -> Dict[str, Dict[str, str]]:
+def _default_themes() -> dict[str, dict[str, str]]:
     return {name: dict(DEFAULT_THEMES[name]) for name in DEFAULT_THEME_NAMES}
 
 
-def _normalize_themes(raw_themes: Any) -> Dict[str, Dict[str, str]]:
+def _normalize_themes(raw_themes: Any) -> dict[str, dict[str, str]]:
     if not isinstance(raw_themes, dict):
         raw_themes = {}
-    normalized: Dict[str, Dict[str, str]] = {}
+    normalized: dict[str, dict[str, str]] = {}
     for theme_name in DEFAULT_THEME_NAMES:
         theme_raw = raw_themes.get(theme_name, {})
         if not isinstance(theme_raw, dict):
@@ -256,11 +256,11 @@ def _normalize_language(value: Any) -> str:
 def _normalize_column_widths(
     value: Any,
     *,
-    default: Dict[str, int],
-    columns: Tuple[str, ...] = FILE_TABLE_COLUMNS,
-) -> Dict[str, int]:
+    default: dict[str, int],
+    columns: tuple[str, ...] = FILE_TABLE_COLUMNS,
+) -> dict[str, int]:
     if isinstance(value, dict):
-        normalized: Dict[str, int] = {}
+        normalized: dict[str, int] = {}
         for key in columns:
             if key in value:
                 normalized[key] = clamp_column_width(value[key], default.get(key, 100))
@@ -278,9 +278,9 @@ def _normalize_favorite_entries(raw: Any) -> list[dict[str, str]]:
     return favorite_paths_to_raw(favorite_paths_from_raw(raw))
 
 
-def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
+def _normalize_file_panel(raw: Any) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
-    normalized: Dict[str, Any] = {
+    normalized: dict[str, Any] = {
         'local_column_widths': _normalize_column_widths(
             raw.get('local_column_widths'),
             default=DEFAULT_LOCAL_COLUMN_WIDTHS,
@@ -299,7 +299,7 @@ def _normalize_file_panel(raw: Any) -> Dict[str, Any]:
     return normalized
 
 
-def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
+def _file_panel_to_config(file_panel: dict[str, Any]) -> FilePanelConfig:
     return FilePanelConfig(
         local_column_widths=dict(file_panel['local_column_widths']),
         remote_column_widths=dict(file_panel['remote_column_widths']),
@@ -318,16 +318,16 @@ def _file_panel_to_config(file_panel: Dict[str, Any]) -> FilePanelConfig:
     )
 
 
-def _normalize_side_panel(raw: Any) -> Dict[str, int]:
+def _normalize_side_panel(raw: Any) -> dict[str, int]:
     raw = raw if isinstance(raw, dict) else {}
-    normalized: Dict[str, int] = {}
+    normalized: dict[str, int] = {}
     for key, default in _SIDE_PANEL_INT_DEFAULTS.items():
         minimum, maximum = _SIDE_PANEL_INT_BOUNDS[key]
         normalized[key] = _clamp_int(raw.get(key), default, minimum, maximum)
     return normalized
 
 
-def _side_panel_to_config(side_panel: Dict[str, int]) -> SidePanelConfig:
+def _side_panel_to_config(side_panel: dict[str, int]) -> SidePanelConfig:
     return SidePanelConfig(
         session_edit_dialog_width=side_panel['session_edit_dialog_width'],
         session_edit_dialog_height=side_panel['session_edit_dialog_height'],
@@ -336,7 +336,7 @@ def _side_panel_to_config(side_panel: Dict[str, int]) -> SidePanelConfig:
     )
 
 
-def _normalize_editor(raw: Any) -> Dict[str, Any]:
+def _normalize_editor(raw: Any) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     executable_path = raw.get('executable_path', DEFAULT_EDITOR_PATH)
     if not isinstance(executable_path, str):
@@ -352,16 +352,16 @@ def _normalize_editor(raw: Any) -> Dict[str, Any]:
     }
 
 
-def _editor_to_config(editor: Dict[str, Any]) -> EditorConfig:
+def _editor_to_config(editor: dict[str, Any]) -> EditorConfig:
     return EditorConfig(
         executable_path=editor['executable_path'],
         remote_large_file_mb=editor['remote_large_file_mb'],
     )
 
 
-def _normalize_window(raw: Any) -> Dict[str, Any]:
+def _normalize_window(raw: Any) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
-    normalized: Dict[str, Any] = {
+    normalized: dict[str, Any] = {
         'border_width': _clamp_int(
             raw.get('border_width'),
             DEFAULT_WINDOW_BORDER_WIDTH,
@@ -399,7 +399,7 @@ def _normalize_window(raw: Any) -> Dict[str, Any]:
     return normalized
 
 
-def _window_to_config(window: Dict[str, Any]) -> WindowConfig:
+def _window_to_config(window: dict[str, Any]) -> WindowConfig:
     return WindowConfig(
         border_width=window['border_width'],
         title_bar_height=window['title_bar_height'],
@@ -411,8 +411,8 @@ def _window_to_config(window: Dict[str, Any]) -> WindowConfig:
     )
 
 
-def _normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
-    normalized: Dict[str, Any] = {'version': CONFIG_VERSION}
+def _normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {'version': CONFIG_VERSION}
     normalized['themes'] = _normalize_themes(raw.get('themes'))
     normalized['appearance'] = _normalize_appearance(raw.get('appearance'))
     normalized['language'] = _normalize_language(raw.get('language'))
@@ -424,7 +424,7 @@ def _normalize_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _default_config() -> Dict[str, Any]:
+def _default_config() -> dict[str, Any]:
     return {
         'version': CONFIG_VERSION,
         'themes': _default_themes(),
@@ -438,7 +438,7 @@ def _default_config() -> Dict[str, Any]:
     }
 
 
-def _to_app_config(data: Dict[str, Any]) -> AppConfig:
+def _to_app_config(data: dict[str, Any]) -> AppConfig:
     return AppConfig(
         language=data['language'],
         themes=data['themes'],
@@ -451,11 +451,11 @@ def _to_app_config(data: Dict[str, Any]) -> AppConfig:
     )
 
 
-def _save_config(path: Path, data: Dict[str, Any]) -> None:
+def _save_config(path: Path, data: dict[str, Any]) -> None:
     atomic_write_json(path, data)
 
 
-def _config_needs_save(raw: Dict[str, Any], normalized: Dict[str, Any]) -> bool:
+def _config_needs_save(raw: dict[str, Any], normalized: dict[str, Any]) -> bool:
     if raw.get('version') != normalized['version']:
         return True
     raw_themes = raw.get('themes')
@@ -620,8 +620,8 @@ def save_window_state(
 
 def save_file_panel_column_widths(
     *,
-    local_column_widths: Optional[Dict[str, int]] = None,
-    remote_column_widths: Optional[Dict[str, int]] = None,
+    local_column_widths: dict[str, int] | None = None,
+    remote_column_widths: dict[str, int] | None = None,
     path: Path = CONFIG_FILE,
 ) -> AppConfig:
     global _config_cache, _raw_config_cache

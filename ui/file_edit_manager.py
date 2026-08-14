@@ -14,7 +14,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from PyQt5.QtCore import QFileSystemWatcher, QObject, QProcess, QTimer, QUrl
 from PyQt5.QtGui import QDesktopServices
@@ -49,7 +48,7 @@ class _RemoteEditSession:
     local_path: str
     remote_signature: FileSignature
     observed_local_signature: FileSignature
-    prompt_task: Optional[asyncio.Task] = None
+    prompt_task: asyncio.Task | None = None
     pending_change: bool = False
 
 
@@ -71,7 +70,7 @@ class FileEditManager(QObject):
         self._sessions_by_local: dict[str, _RemoteEditSession] = {}
         self._tasks: set[asyncio.Task] = set()
         self._sync_tasks: set[asyncio.Task] = set()
-        self._task_tabs: dict[asyncio.Task, Optional[str]] = {}
+        self._task_tabs: dict[asyncio.Task, str | None] = {}
         self._sync_task_tabs: dict[asyncio.Task, str] = {}
         self._pending_local_paths: set[str] = set()
 
@@ -106,13 +105,13 @@ class FileEditManager(QObject):
             tab_id=tab_id,
         )
 
-    def has_running_syncs(self, tab_id: Optional[str] = None) -> bool:
+    def has_running_syncs(self, tab_id: str | None = None) -> bool:
         tasks = [task for task in self._sync_tasks if not task.done()]
         if tab_id is None:
             return bool(tasks)
         return any(self._sync_task_tabs.get(task) == tab_id for task in tasks)
 
-    def cancel_syncs(self, tab_id: Optional[str] = None) -> None:
+    def cancel_syncs(self, tab_id: str | None = None) -> None:
         for task in list(self._sync_tasks):
             if task.done():
                 continue
@@ -413,7 +412,7 @@ class FileEditManager(QObject):
         self._cm.invalidate_remote_cache(session.tab_id, parent)
         await self._cm.refresh_remote_list(session.tab_id, parent)
 
-    def _track_task(self, task: asyncio.Task, *, tab_id: Optional[str] = None) -> None:
+    def _track_task(self, task: asyncio.Task, *, tab_id: str | None = None) -> None:
         self._tasks.add(task)
         self._task_tabs[task] = tab_id
         task.add_done_callback(self._task_done)

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QDrag
@@ -44,7 +43,7 @@ class FavoriteTreeWidget(QTreeWidget):
         self.setDefaultDropAction(Qt.MoveAction)
 
         self._sibling_dragging = False
-        self._sibling_indicator_target: Optional[QTreeWidgetItem] = None
+        self._sibling_indicator_target: QTreeWidgetItem | None = None
         self._sibling_above = True
 
     def startDrag(self, supportedActions):
@@ -200,9 +199,9 @@ class FavoriteTreeWidget(QTreeWidget):
     def tree_id(self) -> str:
         return self._tree_id
 
-    def get_item_path(self, item: QTreeWidgetItem) -> List[int]:
-        path: List[int] = []
-        node: Optional[QTreeWidgetItem] = item
+    def get_item_path(self, item: QTreeWidgetItem) -> list[int]:
+        path: list[int] = []
+        node: QTreeWidgetItem | None = item
         while node is not None:
             parent = node.parent()
             if parent:
@@ -213,8 +212,8 @@ class FavoriteTreeWidget(QTreeWidget):
         path.reverse()
         return path
 
-    def get_item_by_path(self, path: List[int]) -> Optional[QTreeWidgetItem]:
-        node: Optional[QTreeWidgetItem] = None
+    def get_item_by_path(self, path: list[int]) -> QTreeWidgetItem | None:
+        node: QTreeWidgetItem | None = None
         for idx in path:
             if node is None:
                 if 0 <= idx < self.topLevelItemCount():
@@ -244,14 +243,14 @@ class FavoriteTreeWidget(QTreeWidget):
         super().keyPressEvent(event)
 
     @staticmethod
-    def _collect_expanded(item: QTreeWidgetItem) -> Dict[int, bool]:
+    def _collect_expanded(item: QTreeWidgetItem) -> dict[int, bool]:
         states = {id(item): item.isExpanded()}
         for i in range(item.childCount()):
             states.update(FavoriteTreeWidget._collect_expanded(item.child(i)))
         return states
 
     @staticmethod
-    def _restore_expanded_map(item: QTreeWidgetItem, states: Dict[int, bool]):
+    def _restore_expanded_map(item: QTreeWidgetItem, states: dict[int, bool]):
         if id(item) in states:
             item.setExpanded(states[id(item)])
         for i in range(item.childCount()):
@@ -296,7 +295,7 @@ class FavoriteTreeWidget(QTreeWidget):
 
     def _execute_sibling_move(self, item: QTreeWidgetItem,
                               target: QTreeWidgetItem, above: bool,
-                              expanded_states: Dict[int, bool]):
+                              expanded_states: dict[int, bool]):
         if target is item or self._is_descendant_of(target, item):
             self.setCurrentItem(item)
             return
@@ -306,7 +305,7 @@ class FavoriteTreeWidget(QTreeWidget):
         self.setCurrentItem(moved)
 
     def _execute_internal_move_finish(self, item: QTreeWidgetItem,
-                                      expanded_states: Dict[int, bool]):
+                                      expanded_states: dict[int, bool]):
         self._restore_expanded_map(item, expanded_states)
         self.itemMoved.emit(item)
         self.setCurrentItem(item)

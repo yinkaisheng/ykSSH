@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
@@ -42,9 +41,9 @@ class SessionDialog(QDialog):
         self,
         parent: QWidget = None,
         *,
-        session: Optional[SessionItem] = None,
-        title: Optional[str] = None,
-        initial_password: Optional[str] = None,
+        session: SessionItem | None = None,
+        title: str | None = None,
+        initial_password: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session

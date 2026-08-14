@@ -3,28 +3,28 @@
 """Default file panel table layout settings for config.json file_panel.*."""
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Iterable
 
 FILE_TABLE_COLUMN_NAME = 'Name'
 FILE_TABLE_COLUMN_SIZE = 'Size'
 FILE_TABLE_COLUMN_MODIFIED = 'Modified'
 FILE_TABLE_COLUMN_PERMISSIONS = 'Permissions'
 
-FILE_TABLE_COLUMNS: Tuple[str, ...] = (
+FILE_TABLE_COLUMNS: tuple[str, ...] = (
     FILE_TABLE_COLUMN_NAME,
     FILE_TABLE_COLUMN_SIZE,
     FILE_TABLE_COLUMN_MODIFIED,
     FILE_TABLE_COLUMN_PERMISSIONS,
 )
 
-DEFAULT_LOCAL_COLUMN_WIDTHS: Dict[str, int] = {
+DEFAULT_LOCAL_COLUMN_WIDTHS: dict[str, int] = {
     FILE_TABLE_COLUMN_NAME: 460,
     FILE_TABLE_COLUMN_SIZE: 96,
     FILE_TABLE_COLUMN_MODIFIED: 144,
     FILE_TABLE_COLUMN_PERMISSIONS: 100,
 }
 
-DEFAULT_REMOTE_COLUMN_WIDTHS: Dict[str, int] = dict(DEFAULT_LOCAL_COLUMN_WIDTHS)
+DEFAULT_REMOTE_COLUMN_WIDTHS: dict[str, int] = dict(DEFAULT_LOCAL_COLUMN_WIDTHS)
 
 DEFAULT_FILE_TABLE_HEADER_HEIGHT_PX = 22
 DEFAULT_FILE_TABLE_ROW_HEIGHT_PX = 24
@@ -38,7 +38,7 @@ DEFAULT_LOCAL_FAVORITES_DIALOG_HEIGHT = 420
 DEFAULT_REMOTE_FAVORITES_DIALOG_WIDTH = 560
 DEFAULT_REMOTE_FAVORITES_DIALOG_HEIGHT = 380
 
-_FILE_PANEL_INT_BOUNDS: Dict[str, Tuple[int, int]] = {
+_FILE_PANEL_INT_BOUNDS: dict[str, tuple[int, int]] = {
     'header_height_px': (18, 48),
     'row_height_px': (18, 48),
     'file_panel_toolbar_height': (18, 48),
@@ -51,7 +51,7 @@ _FILE_PANEL_INT_BOUNDS: Dict[str, Tuple[int, int]] = {
     'remote_favorites_dialog_height': (240, 3000),
 }
 
-_FILE_PANEL_INT_DEFAULTS: Dict[str, int] = {
+_FILE_PANEL_INT_DEFAULTS: dict[str, int] = {
     'header_height_px': DEFAULT_FILE_TABLE_HEADER_HEIGHT_PX,
     'row_height_px': DEFAULT_FILE_TABLE_ROW_HEIGHT_PX,
     'file_panel_toolbar_height': DEFAULT_FILE_PANEL_TOOLBAR_HEIGHT,
@@ -64,7 +64,7 @@ _FILE_PANEL_INT_DEFAULTS: Dict[str, int] = {
     'remote_favorites_dialog_height': DEFAULT_REMOTE_FAVORITES_DIALOG_HEIGHT,
 }
 
-_FILE_PANEL_BOOL_DEFAULTS: Dict[str, bool] = {
+_FILE_PANEL_BOOL_DEFAULTS: dict[str, bool] = {
     'folder_name_bold': DEFAULT_FOLDER_NAME_BOLD,
 }
 
@@ -80,11 +80,11 @@ def clamp_column_width(value: Any, default: int) -> int:
 
 
 def ordered_column_widths(
-    widths: Dict[str, int],
+    widths: dict[str, int],
     *,
-    columns: Tuple[str, ...] = FILE_TABLE_COLUMNS,
-    defaults: Dict[str, int],
-) -> Tuple[int, ...]:
+    columns: tuple[str, ...] = FILE_TABLE_COLUMNS,
+    defaults: dict[str, int],
+) -> tuple[int, ...]:
     """Resolve column-width dict to widths in table display order."""
     return tuple(
         widths.get(column, defaults.get(column, 100))
@@ -95,11 +95,11 @@ def ordered_column_widths(
 def column_widths_from_table(
     table_widths: Iterable[int],
     *,
-    columns: Tuple[str, ...] = FILE_TABLE_COLUMNS,
-) -> Dict[str, int]:
+    columns: tuple[str, ...] = FILE_TABLE_COLUMNS,
+) -> dict[str, int]:
     """Build a column-width dict from current table column indices."""
     widths_list = list(table_widths)
-    resolved: Dict[str, int] = {}
+    resolved: dict[str, int] = {}
     for index, column in enumerate(columns):
         if index >= len(widths_list):
             break
@@ -110,7 +110,7 @@ def column_widths_from_table(
     return resolved
 
 
-def default_file_panel() -> Dict[str, object]:
+def default_file_panel() -> dict[str, object]:
     return {
         'local_column_widths': dict(DEFAULT_LOCAL_COLUMN_WIDTHS),
         'remote_column_widths': dict(DEFAULT_REMOTE_COLUMN_WIDTHS),

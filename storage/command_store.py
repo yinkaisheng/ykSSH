@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from log_util import logger
 from models.command_item import CommandItem
@@ -17,11 +17,11 @@ COMMANDS_VERSION = 1
 class CommandStore:
     """Persist quick-command groups and command leaves."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path is not None else COMMANDS_FILE
-        self._cache: Optional[List[CommandItem]] = None
+        self._cache: list[CommandItem] | None = None
 
-    def load(self) -> List[CommandItem]:
+    def load(self) -> list[CommandItem]:
         if self._cache is not None:
             return self._cache
         if not self.path.exists():
@@ -42,9 +42,9 @@ class CommandStore:
         self._cache = [CommandItem.from_dict(d) for d in items_data if isinstance(d, dict)]
         return self._cache
 
-    def save_items(self, items: List[CommandItem]) -> bool:
+    def save_items(self, items: list[CommandItem]) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             'version': COMMANDS_VERSION,
             'items': [item.to_dict() for item in items],
         }

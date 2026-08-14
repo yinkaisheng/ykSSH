@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List, Optional, Sequence
+from typing import Sequence
 
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent
 from PyQt5.QtGui import QCloseEvent, QMouseEvent, QResizeEvent, QKeySequence
@@ -101,16 +101,16 @@ class MainWindow(QMainWindow):
         self._terminal_resize_timer.setSingleShot(True)
         self._terminal_resize_timer.setInterval(80)
         self._terminal_resize_timer.timeout.connect(self._resize_active_terminal)
-        self._active_tab_id: Optional[str] = None
+        self._active_tab_id: str | None = None
         self._sftp_handlers: dict[str, SftpUiHandler] = {}
         self._local_favorites_dialogs: dict[str, LocalFavoritesDialog] = {}
         self._remote_favorites_dialogs: dict[str, RemoteFavoritesDialog] = {}
         self.setWindowTitle(tr('main.window_title'))
-        self._main_splitter: Optional[QSplitter] = None
-        self._vertical_splitter: Optional[QSplitter] = None
+        self._main_splitter: QSplitter | None = None
+        self._vertical_splitter: QSplitter | None = None
         self._session_tree_width = DEFAULT_SESSION_TREE_WIDTH
-        self._title_bar: Optional[WindowTitleBar] = None
-        self._shell_frame: Optional[QFrame] = None
+        self._title_bar: WindowTitleBar | None = None
+        self._shell_frame: QFrame | None = None
         self._init_ui()
         register_retranslator(self.retranslate_ui)
         self._connect_signals()
@@ -327,7 +327,7 @@ class MainWindow(QMainWindow):
         self.terminal_tabs.retranslate_ui()
         self.file_panels.retranslate_ui()
 
-    def _active_files_panel(self) -> Optional[FilesPanel]:
+    def _active_files_panel(self) -> FilesPanel | None:
         if not self._active_tab_id:
             return None
         return self.file_panels.get_panel(self._active_tab_id)
@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
             lambda tid=tab_id: self._persist_remote_favorites_for_tab(tid),
         )
 
-    def _session_item_for_tab(self, tab_id: str) -> Optional[SessionItem]:
+    def _session_item_for_tab(self, tab_id: str) -> SessionItem | None:
         session = self._tab_sessions.get(tab_id)
         if session is not None:
             return session
@@ -439,8 +439,8 @@ class MainWindow(QMainWindow):
     def _save_local_favorites(
         self,
         tab_id: str,
-        global_entries: List[FavoritePath],
-        session_entries: List[FavoritePath],
+        global_entries: list[FavoritePath],
+        session_entries: list[FavoritePath],
     ) -> None:
         try:
             save_file_panel_local_favorites(global_entries)
@@ -459,7 +459,7 @@ class MainWindow(QMainWindow):
         global_entries, session_entries = self._local_favorites_for_tab(tab_id)
         self._save_local_favorites(tab_id, list(global_entries), list(session_entries))
 
-    def _save_remote_favorites(self, tab_id: str, entries: List[FavoritePath]) -> None:
+    def _save_remote_favorites(self, tab_id: str, entries: list[FavoritePath]) -> None:
         session = self._session_item_for_tab(tab_id)
         if session is None:
             return
@@ -498,7 +498,7 @@ class MainWindow(QMainWindow):
             self._sftp_handlers[tab_id] = handler
         return handler
 
-    def _has_running_transfers(self, tab_id: Optional[str] = None) -> bool:
+    def _has_running_transfers(self, tab_id: str | None = None) -> bool:
         if tab_id is not None:
             handler = self._sftp_handlers.get(tab_id)
             return (
@@ -861,7 +861,7 @@ class MainWindow(QMainWindow):
     async def _finalize_tab_close_async(
         self,
         tab_id: str,
-        handler: Optional[SftpUiHandler],
+        handler: SftpUiHandler | None,
     ) -> None:
         if handler is not None:
             handler.cancel_transfers()
@@ -1017,7 +1017,7 @@ class MainWindow(QMainWindow):
         return edges
 
     @staticmethod
-    def _splitter_handle_at(widget: Optional[QWidget]) -> Optional[QSplitterHandle]:
+    def _splitter_handle_at(widget: QWidget | None) -> QSplitterHandle | None:
         while widget is not None:
             if isinstance(widget, QSplitterHandle):
                 return widget

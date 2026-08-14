@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Sequence
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -47,7 +47,7 @@ class _FavoriteListEditor(QWidget):
         *,
         title: str = '',
         allow_browse: bool = False,
-        browse_start_provider: Optional[Callable[[], str]] = None,
+        browse_start_provider: Callable[[], str] | None = None,
     ) -> None:
         super().__init__(parent)
         self._allow_browse = allow_browse
@@ -112,8 +112,8 @@ class _FavoriteListEditor(QWidget):
         for entry in entries:
             self._append_row(entry.path, entry.note, is_file=entry.is_file, start_edit=False)
 
-    def entries(self) -> List[FavoritePath]:
-        result: List[FavoritePath] = []
+    def entries(self) -> list[FavoritePath]:
+        result: list[FavoritePath] = []
         for row in range(self._table.rowCount()):
             path_item = self._table.item(row, 0)
             note_item = self._table.item(row, 1)
@@ -148,7 +148,7 @@ class _FavoriteListEditor(QWidget):
         path: str = '',
         note: str = '',
         *,
-        is_file: Optional[bool] = None,
+        is_file: bool | None = None,
         start_edit: bool = True,
     ) -> None:
         row = self._table.rowCount()
@@ -214,8 +214,8 @@ class LocalFavoritesDialog(QWidget):
         *,
         global_entries: Sequence[FavoritePath],
         session_entries: Sequence[FavoritePath],
-        browse_start_provider: Optional[Callable[[], str]] = None,
-        on_save: Optional[Callable[[List[FavoritePath], List[FavoritePath]], None]] = None,
+        browse_start_provider: Callable[[], str] | None = None,
+        on_save: Callable[[list[FavoritePath], list[FavoritePath]], None] | None = None,
     ) -> None:
         super().__init__(parent, Qt.Window)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -291,7 +291,7 @@ class RemoteFavoritesDialog(QWidget):
         parent: QWidget = None,
         *,
         session_entries: Sequence[FavoritePath],
-        on_save: Optional[Callable[[List[FavoritePath]], None]] = None,
+        on_save: Callable[[list[FavoritePath]], None] | None = None,
     ) -> None:
         super().__init__(parent, Qt.Window)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -347,8 +347,8 @@ def show_local_favorites_dialog(
     *,
     global_entries: Sequence[FavoritePath],
     session_entries: Sequence[FavoritePath],
-    current_path_provider: Optional[Callable[[], str]] = None,
-    on_save: Optional[Callable[[List[FavoritePath], List[FavoritePath]], None]] = None,
+    current_path_provider: Callable[[], str] | None = None,
+    on_save: Callable[[list[FavoritePath], list[FavoritePath]], None] | None = None,
 ) -> LocalFavoritesDialog:
     dialog = LocalFavoritesDialog(
         parent,
@@ -367,8 +367,8 @@ def show_remote_favorites_dialog(
     parent: QWidget,
     *,
     session_entries: Sequence[FavoritePath],
-    current_path_provider: Optional[Callable[[], str]] = None,
-    on_save: Optional[Callable[[List[FavoritePath]], None]] = None,
+    current_path_provider: Callable[[], str] | None = None,
+    on_save: Callable[[list[FavoritePath]], None] | None = None,
 ) -> RemoteFavoritesDialog:
     del current_path_provider  # kept for call-site compatibility
     dialog = RemoteFavoritesDialog(

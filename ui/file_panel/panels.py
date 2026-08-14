@@ -8,7 +8,7 @@ import shutil
 import stat
 import sys
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
@@ -114,17 +114,17 @@ class LocalFilePanel(QWidget):
         self,
         parent: QWidget = None,
         *,
-        on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
+        on_save_column_widths: Callable[[bool, dict[str, int]], None] | None = None,
         initial_path: str = '',
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
         self._initial_path = initial_path
-        self._favorites_provider: Optional[
-            Callable[[], tuple[Sequence[FavoritePath], Sequence[FavoritePath]]]
-        ] = None
-        self._manage_favorites_handler: Optional[Callable[[], None]] = None
-        self._favorites_changed_handler: Optional[Callable[[], None]] = None
+        self._favorites_provider: (
+            Callable[[], tuple[Sequence[FavoritePath], Sequence[FavoritePath]]] | None
+        ) = None
+        self._manage_favorites_handler: Callable[[], None] | None = None
+        self._favorites_changed_handler: Callable[[], None] | None = None
         self._sftp_handler = None
         self._build_ui()
 
@@ -291,14 +291,14 @@ class RemoteFilePanel(QWidget):
         self,
         parent: QWidget = None,
         *,
-        on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
+        on_save_column_widths: Callable[[bool, dict[str, int]], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_save_column_widths = on_save_column_widths
         self._sftp_handler = None
-        self._favorites_provider: Optional[Callable[[], Sequence[FavoritePath]]] = None
-        self._manage_favorites_handler: Optional[Callable[[], None]] = None
-        self._favorites_changed_handler: Optional[Callable[[], None]] = None
+        self._favorites_provider: Callable[[], Sequence[FavoritePath]] | None = None
+        self._manage_favorites_handler: Callable[[], None] | None = None
+        self._favorites_changed_handler: Callable[[], None] | None = None
         self._background_tasks: set[asyncio.Task] = set()
         self._build_ui()
         tasks = self._background_tasks
@@ -483,7 +483,7 @@ class RemoteFilePanel(QWidget):
             defaults=DEFAULT_REMOTE_COLUMN_WIDTHS,
         )
 
-    def set_list_callback(self, callback: Callable[[str], List[dict]]) -> None:
+    def set_list_callback(self, callback: Callable[[str], list[dict]]) -> None:
         self.table.set_list_callback(callback)
         self.placeholder.hide()
         self.table.show()
@@ -548,7 +548,7 @@ class FilesPanel(QWidget):
         self,
         parent: QWidget = None,
         *,
-        on_save_column_widths: Optional[Callable[[bool, dict[str, int]], None]] = None,
+        on_save_column_widths: Callable[[bool, dict[str, int]], None] | None = None,
         initial_local_path: str = '',
     ) -> None:
         super().__init__(parent)
@@ -640,10 +640,10 @@ class FilePanelsContainer(QWidget):
         self._stack.addWidget(panel)
         return panel
 
-    def get_panel(self, tab_id: str) -> Optional[FilesPanel]:
+    def get_panel(self, tab_id: str) -> FilesPanel | None:
         return self._panels.get(tab_id)
 
-    def show_panel(self, tab_id: str) -> Optional[FilesPanel]:
+    def show_panel(self, tab_id: str) -> FilesPanel | None:
         panel = self._panels.get(tab_id)
         if panel is not None:
             self._stack.setCurrentWidget(panel)

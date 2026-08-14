@@ -8,7 +8,7 @@ import os
 import shutil
 import stat
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Awaitable, Callable, Literal
 
 import asyncssh
 
@@ -25,7 +25,7 @@ class LocalSymlinkUnsupported(Exception):
 
 
 TransferDecision = Literal['overwrite', 'resume', 'cancel']
-ConflictHandler = Callable[[str, str, bool], Union[TransferDecision, Awaitable[TransferDecision]]]
+ConflictHandler = Callable[[str, str, bool], TransferDecision | Awaitable[TransferDecision]]
 ProgressHandler = Callable[[str, str, int, int], None]
 
 _COPY_CHUNK_SIZE = 256 * 1024
@@ -39,8 +39,8 @@ class _RemoteEntry:
     mtime: float = 0.0
 
 
-async def listdir(sftp: asyncssh.SFTPClient, path: str) -> List[Dict[str, Any]]:
-    entries: List[Dict[str, Any]] = []
+async def listdir(sftp: asyncssh.SFTPClient, path: str) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     try:
         names = await sftp.listdir(path)
     except asyncssh.SFTPError as exc:
@@ -72,8 +72,8 @@ async def upload(
     sftp: asyncssh.SFTPClient,
     local_path: str,
     remote_path: str,
-    progress_handler: Optional[ProgressHandler] = None,
-    conflict_handler: Optional[ConflictHandler] = None,
+    progress_handler: ProgressHandler | None = None,
+    conflict_handler: ConflictHandler | None = None,
 ) -> None:
     local_path = os.path.abspath(local_path)
     if _is_local_link(local_path):
@@ -99,8 +99,8 @@ async def download(
     sftp: asyncssh.SFTPClient,
     remote_path: str,
     local_path: str,
-    progress_handler: Optional[ProgressHandler] = None,
-    conflict_handler: Optional[ConflictHandler] = None,
+    progress_handler: ProgressHandler | None = None,
+    conflict_handler: ConflictHandler | None = None,
 ) -> None:
     attrs = await sftp.lstat(remote_path)
     if await _remote_entry_is_dir(sftp, remote_path, attrs):
@@ -124,8 +124,8 @@ async def _upload_dir(
     sftp: asyncssh.SFTPClient,
     local_dir: str,
     remote_dir: str,
-    progress_handler: Optional[ProgressHandler],
-    conflict_handler: Optional[ConflictHandler],
+    progress_handler: ProgressHandler | None,
+    conflict_handler: ConflictHandler | None,
     visited_dirs: set[str],
 ) -> None:
     canonical_dir = os.path.realpath(local_dir)
@@ -160,8 +160,8 @@ async def _upload_file(
     sftp: asyncssh.SFTPClient,
     local_path: str,
     remote_path: str,
-    progress_handler: Optional[ProgressHandler],
-    conflict_handler: Optional[ConflictHandler],
+    progress_handler: ProgressHandler | None,
+    conflict_handler: ConflictHandler | None,
 ) -> None:
     src_stat = os.stat(local_path)
     src_size = src_stat.st_size
@@ -201,8 +201,8 @@ async def _download_dir(
     sftp: asyncssh.SFTPClient,
     remote_dir: str,
     local_dir: str,
-    progress_handler: Optional[ProgressHandler],
-    conflict_handler: Optional[ConflictHandler],
+    progress_handler: ProgressHandler | None,
+    conflict_handler: ConflictHandler | None,
     visited_dirs: set[str],
 ) -> None:
     canonical_dir = await _remote_realpath(sftp, remote_dir)
@@ -234,8 +234,8 @@ async def _download_file(
     sftp: asyncssh.SFTPClient,
     remote_path: str,
     local_path: str,
-    progress_handler: Optional[ProgressHandler],
-    conflict_handler: Optional[ConflictHandler],
+    progress_handler: ProgressHandler | None,
+    conflict_handler: ConflictHandler | None,
 ) -> None:
     attrs = await _remote_target_attrs(sftp, remote_path)
     src_size = int(attrs.size or 0)
@@ -276,8 +276,8 @@ async def _remote_file_start_offset(
     local_path: str,
     remote_path: str,
     src_size: int,
-    conflict_handler: Optional[ConflictHandler],
-) -> Optional[int]:
+    conflict_handler: ConflictHandler | None,
+) -> int | None:
     try:
         attrs = await sftp.lstat(remote_path)
     except asyncssh.SFTPError:
@@ -300,8 +300,8 @@ async def _local_file_start_offset(
     remote_path: str,
     local_path: str,
     src_size: int,
-    conflict_handler: Optional[ConflictHandler],
-) -> Optional[int]:
+    conflict_handler: ConflictHandler | None,
+) -> int | None:
     if _is_local_link(local_path):
         decision = await _resolve_conflict(remote_path, local_path, os.path.isdir(local_path), conflict_handler)
         if decision == 'cancel':
@@ -330,7 +330,7 @@ async def _ensure_remote_dir(
     sftp: asyncssh.SFTPClient,
     remote_dir: str,
     local_source: str,
-    conflict_handler: Optional[ConflictHandler],
+    conflict_handler: ConflictHandler | None,
 ) -> bool:
     try:
         attrs = await sftp.lstat(remote_dir)
@@ -357,7 +357,7 @@ async def _ensure_local_dir(
     sftp: asyncssh.SFTPClient,
     remote_source: str,
     local_dir: str,
-    conflict_handler: Optional[ConflictHandler],
+    conflict_handler: ConflictHandler | None,
 ) -> bool:
     del sftp
     if _is_local_link(local_dir):
@@ -408,7 +408,7 @@ async def _resolve_conflict(
     source_path: str,
     target_path: str,
     target_is_dir: bool,
-    conflict_handler: Optional[ConflictHandler],
+    conflict_handler: ConflictHandler | None,
 ) -> TransferDecision:
     if conflict_handler is None:
         return 'overwrite'
@@ -486,7 +486,7 @@ async def _set_remote_mtime(
     sftp: asyncssh.SFTPClient,
     path: str,
     mtime: float,
-    atime: Optional[float] = None,
+    atime: float | None = None,
 ) -> None:
     if mtime <= 0:
         return
