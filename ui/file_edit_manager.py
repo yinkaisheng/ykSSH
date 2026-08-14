@@ -50,7 +50,7 @@ class FileEditManager(QObject):
     """Coordinate editor launches and all remote temporary-file sessions."""
 
     _DEBOUNCE_MS = 700
-    _STALE_TEMP_SECONDS = 24 * 60 * 60
+    _STALE_TEMP_SECONDS = 7 * 24 * 60 * 60
 
     def __init__(
         self,
@@ -266,6 +266,11 @@ class FileEditManager(QObject):
 
     def _queue_local_path(self, local_path: str) -> None:
         self._pending_local_paths.add(os.path.normcase(os.path.abspath(local_path)))
+        try:
+            if self._runtime_dir.exists():
+                os.utime(self._runtime_dir, None)
+        except OSError:
+            pass
         self._debounce_timer.start(self._DEBOUNCE_MS)
 
     def _process_pending_changes(self) -> None:
