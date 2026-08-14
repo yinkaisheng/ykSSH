@@ -24,6 +24,7 @@
 ## 代码约定
 
 - Python 3.10+，`from __future__ import annotations`，UTF-8，`# -*- coding: utf-8 -*-`。
+- 类型标注使用 Python 3.10+ 现代语法：使用 `list[str]`、`dict[str, int]`、`tuple[...]`、`T | None`，不要使用 `typing.List`、`typing.Dict`、`typing.Tuple`、`typing.Optional`、`typing.Union` 等旧式别名；`Any`、`Callable`、`Literal`、`Protocol`、`Sequence` 等仍按需从 `typing` 导入。
 - 新代码匹配现有风格：类型标注、简短 docstring、分层清晰（models → core → storage → ui）。
 - 移植或对齐 `../http-requester`、`../nebula-shell` 时保持 PyQt5，并改为 ykSSH 包结构。
 
