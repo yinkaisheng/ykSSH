@@ -121,7 +121,9 @@ ykSSH/
 └── ui/
     ├── main_window.py           # 主窗口：布局、连接生命周期、Tab 切换
     ├── window_title_bar.py      # 无边框标题栏 + 菜单（见 §5.1）
-    ├── side_panel.py            # 左侧 Session/快捷命令/历史命令抽屉
+    ├── side_panel.py            # 左侧抽屉容器及 Session/快捷命令树
+    ├── command_dialog.py        # 快捷命令编辑对话框
+    ├── command_history_panel.py # 按运行时 Tab 隔离的历史命令列表
     ├── favorite_tree_widget.py  # 可拖拽 QTreeWidget
     ├── session_dialog.py        # 新建/编辑 Session
     ├── terminal_tab_widget.py   # 终端 Tab 容器

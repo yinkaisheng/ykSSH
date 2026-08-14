@@ -10,34 +10,28 @@ from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QKeyEvent
 from PyQt5.QtWidgets import (
     QApplication,
-    QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QSizePolicy,
     QToolButton,
     QTreeWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from i18n import tr
-from log_util import logger
-from models.command_history_item import CommandHistoryItem
 from models.command_item import CommandItem
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
-from storage.app_config import get_app_config, save_command_edit_dialog_size
+from storage.app_config import get_app_config
 from storage.command_history_store import CommandHistoryStore
 from storage.command_store import CommandStore
 from storage.credential_store import CredentialStore
 from storage.host_key_store import HostKeyStore
 from storage.session_profile_store import SessionProfileStore
-from ui.dialog_common import add_form_field, create_form_grid
-from ui.dialog_i18n import ask_yes_no, message_warning, translate_button_box
+from ui.command_dialog import CommandDialog
+from ui.command_history_panel import CommandHistoryPanel
+from ui.dialog_i18n import ask_yes_no, message_warning
 from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
 from ui.prompt_dialog import prompt_text
 from ui.favorite_tree_widget import (
@@ -95,87 +89,6 @@ def _command_tooltip(command: CommandItem) -> str:
     return '\n'.join(lines)
 
 
-def _history_tooltip(item: CommandHistoryItem) -> str:
-    return '\n'.join([
-        f"{tr('history.sent_at')}: {item.sent_at}",
-        item.command,
-    ])
-
-
-class CommandDialog(QDialog):
-    """Create or edit a quick command."""
-
-    def __init__(
-        self,
-        parent: QWidget,
-        *,
-        command: Optional[CommandItem] = None,
-        title: str,
-    ) -> None:
-        super().__init__(parent)
-        self._command = command
-        self.setWindowTitle(title)
-        self.setMinimumWidth(480)
-        if command is not None:
-            cfg = get_app_config().side_panel
-            self.resize(cfg.command_edit_dialog_width, cfg.command_edit_dialog_height)
-
-        layout = QVBoxLayout(self)
-        grid = create_form_grid()
-
-        self.name_edit = QLineEdit(command.name if command is not None else '')
-        self.command_edit = QTextEdit(command.command if command is not None else '')
-        self.command_edit.setAcceptRichText(False)
-        self.command_edit.setMinimumHeight(90)
-        self.description_edit = QTextEdit(command.description if command is not None else '')
-        self.description_edit.setAcceptRichText(False)
-        self.description_edit.setMinimumHeight(70)
-
-        add_form_field(grid, 0, tr('commands.name'), self.name_edit)
-        add_form_field(grid, 1, tr('commands.command'), self.command_edit)
-        add_form_field(grid, 2, tr('commands.description'), self.description_edit)
-        layout.addLayout(grid)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
-        translate_button_box(buttons)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self.name_edit.setFocus()
-
-    def closeEvent(self, event) -> None:  # type: ignore[override]
-        if self._command is not None:
-            try:
-                save_command_edit_dialog_size(width=self.width(), height=self.height())
-            except OSError as exc:
-                logger.warning(f'Failed to save command edit dialog size: {exc}')
-        super().closeEvent(event)
-
-    def accept(self) -> None:  # type: ignore[override]
-        if not self.name_edit.text().strip():
-            message_warning(self, tr('commands.validation_title'), tr('commands.validation_name_required'))
-            self.name_edit.setFocus()
-            return
-        if not self.command_edit.toPlainText().strip():
-            message_warning(self, tr('commands.validation_title'), tr('commands.validation_command_required'))
-            self.command_edit.setFocus()
-            return
-        super().accept()
-
-    def get_command(self, existing: Optional[CommandItem] = None) -> Optional[CommandItem]:
-        name = self.name_edit.text().strip()
-        command = self.command_edit.toPlainText().strip()
-        if not name or not command:
-            return None
-        item = existing or CommandItem()
-        item.name = name
-        item.command = command
-        item.description = self.description_edit.toPlainText().strip()
-        item.children = []
-        return item
-
-
 class SidePanel(QWidget):
     """Left drawer panel for sessions, quick commands, and command history."""
 
@@ -201,10 +114,7 @@ class SidePanel(QWidget):
         self.host_keys = host_key_store or HostKeyStore()
         self._items: List[SessionItem] = []
         self._commands: List[CommandItem] = []
-        self._history_items: List[CommandHistoryItem] = []
         self._active_drawer = DRAWER_SESSIONS
-        self._active_history_tab_id: Optional[str] = None
-        self._history_scroll_positions: Dict[str, int] = {}
         self._filter_texts: Dict[str, str] = {
             DRAWER_SESSIONS: '',
             DRAWER_COMMANDS: '',
@@ -260,12 +170,9 @@ class SidePanel(QWidget):
         self._history_button = self._create_drawer_button(DRAWER_HISTORY)
         layout.addWidget(self._history_button)
 
-        self.history_list = QListWidget()
-        self.history_list.setObjectName('CommandHistoryList')
-        self.history_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.history_list.customContextMenuRequested.connect(self._show_history_context_menu)
-        self.history_list.itemClicked.connect(self._on_history_item_clicked)
-        self.history_list.itemDoubleClicked.connect(self._on_history_item_double_clicked)
+        self.history_list = CommandHistoryPanel(self.history_store, self)
+        self.history_list.command_send_requested.connect(self.command_send_requested)
+        self.history_list.history_jump_requested.connect(self.history_jump_requested)
         layout.addWidget(self.history_list, 1)
 
         self._filter_edit = QLineEdit()
@@ -386,27 +293,16 @@ class SidePanel(QWidget):
         self._rebuild_command_tree()
 
     def reload_history(self) -> None:
-        self._history_items = self.history_store.load_for_tab(self._active_history_tab_id)
-        self._rebuild_history_list()
+        self.history_list.reload()
 
     def set_active_history_tab(self, tab_id: Optional[str]) -> None:
-        self._save_history_scroll_position()
-        self._active_history_tab_id = tab_id
-        self.reload_history()
+        self.history_list.set_active_tab(tab_id)
 
     def add_history_command(self, tab_id: str, command: str, sent_at: str, command_start_row: int) -> None:
-        items = self.history_store.add(tab_id, command, sent_at, command_start_row)
-        if tab_id == self._active_history_tab_id:
-            self._save_history_scroll_position()
-            self._history_items = items
-            self._rebuild_history_list()
+        self.history_list.add_command(tab_id, command, sent_at, command_start_row)
 
     def remove_history_tab(self, tab_id: str) -> None:
-        self._history_scroll_positions.pop(tab_id, None)
-        self.history_store.remove_tab(tab_id)
-        if tab_id == self._active_history_tab_id:
-            self._history_items = []
-            self._rebuild_history_list()
+        self.history_list.remove_tab(tab_id)
 
     def persist_sessions(self) -> bool:
         """Write current in-memory session tree (including favorites) to disk."""
@@ -445,35 +341,6 @@ class SidePanel(QWidget):
         self.commands_tree.expandAll()
         self._filter_command_items(self._filter_texts.get(DRAWER_COMMANDS, '').strip().lower())
         self.commands_tree.viewport().update()
-
-    def _rebuild_history_list(self) -> None:
-        self.history_list.clear()
-        for item in self._history_items:
-            list_item = QListWidgetItem(self._history_label(item))
-            list_item.setData(ROLE_ITEM_ID, item.id)
-            list_item.setToolTip(_history_tooltip(item))
-            self.history_list.addItem(list_item)
-        self._filter_history_items(self._filter_texts.get(DRAWER_HISTORY, '').strip().lower())
-        self._restore_history_scroll_position()
-
-    def _save_history_scroll_position(self) -> None:
-        if not self._active_history_tab_id:
-            return
-        self._history_scroll_positions[self._active_history_tab_id] = (
-            self.history_list.verticalScrollBar().value()
-        )
-
-    def _restore_history_scroll_position(self) -> None:
-        if not self._active_history_tab_id:
-            self.history_list.verticalScrollBar().setValue(0)
-            return
-        value = self._history_scroll_positions.get(self._active_history_tab_id, 0)
-        self.history_list.verticalScrollBar().setValue(value)
-
-    @staticmethod
-    def _history_label(item: CommandHistoryItem) -> str:
-        first_line = item.command.splitlines()[0] if item.command else ''
-        return first_line[:120]
 
     def _session_to_tree(self, session: SessionItem) -> QTreeWidgetItem:
         tree_item = QTreeWidgetItem([session.name])
@@ -666,26 +533,6 @@ class SidePanel(QWidget):
         command = self._find_command_by_tree(item)
         if command is not None and not command.is_folder():
             self.command_send_requested.emit(command.command, False)
-
-    def _on_history_item_double_clicked(self, item: QListWidgetItem) -> None:
-        history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
-        if history is not None:
-            self.command_send_requested.emit(history.command, False)
-
-    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
-        history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
-        if history is not None:
-            self.history_jump_requested.emit(
-                history.command,
-                history.sent_at,
-                history.command_start_row,
-            )
-
-    def _find_history_by_id(self, item_id: str) -> Optional[CommandHistoryItem]:
-        for item in self._history_items:
-            if item.id == item_id:
-                return item
-        return None
 
     @staticmethod
     def _is_folder(item: QTreeWidgetItem) -> bool:
@@ -969,24 +816,6 @@ class SidePanel(QWidget):
         command = self._find_command_by_tree(item)
         if command is not None and not command.is_folder() and command.command:
             QApplication.clipboard().setText(command.command)
-
-    def _show_history_context_menu(self, pos) -> None:
-        item = self.history_list.itemAt(pos)
-        if item is None:
-            return
-        history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
-        if history is None:
-            return
-        menu = ShortcutMenu(self)
-        send_action, send_exec_action, copy_action = self._add_command_dispatch_actions(menu)
-        action = exec_menu(menu, self.history_list.viewport().mapToGlobal(pos))
-        if action == send_action:
-            self.command_send_requested.emit(history.command, False)
-        elif action == send_exec_action:
-            self.command_send_requested.emit(history.command, True)
-        elif action == copy_action:
-            if history.command:
-                QApplication.clipboard().setText(history.command)
 
     def _expand_recursive(self, item: QTreeWidgetItem) -> None:
         item.setExpanded(True)
@@ -1392,13 +1221,7 @@ class SidePanel(QWidget):
         return visible
 
     def _filter_history_items(self, keyword: str) -> None:
-        for index in range(self.history_list.count()):
-            item = self.history_list.item(index)
-            history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
-            haystack = ''
-            if history is not None:
-                haystack = f"{history.command.lower()}\n{history.sent_at.lower()}"
-            item.setHidden(bool(keyword) and keyword not in haystack)
+        self.history_list.apply_filter(keyword)
 
     def _clear_filter(self) -> None:
         self._filter_edit.clear()
@@ -1445,16 +1268,9 @@ class SidePanel(QWidget):
         for i in range(item.childCount()):
             self._refresh_command_tooltips(item.child(i))
 
-    def _refresh_history_tooltips(self) -> None:
-        for index in range(self.history_list.count()):
-            item = self.history_list.item(index)
-            history = self._find_history_by_id(item.data(ROLE_ITEM_ID))
-            if history is not None:
-                item.setToolTip(_history_tooltip(history))
-
     def retranslate_ui(self) -> None:
         self._update_drawer_texts()
         self._filter_edit.setPlaceholderText(tr(self._filter_placeholder_key()))
         self._refresh_tooltips()
         self._refresh_command_tooltips()
-        self._refresh_history_tooltips()
+        self.history_list.retranslate_ui()
