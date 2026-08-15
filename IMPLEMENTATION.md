@@ -249,7 +249,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 远端 `~` 使用连接用户的真实主目录：连接后以 SFTP `realpath('.')`/用户信息解析并写入 `SftpUiHandler.remote_home`；Session 配置的 `remote_path` 只作为首次打开目录和 Shell `cd` 目标，不再覆盖 `~`。
 - 本地 `~` 为 `os.path.expanduser('~')`；Windows 下 `/` 跳转到当前路径所在盘根（如 `D:\`）。
 - 工具栏与 Table 间距：`_FILE_PANEL_TOOLBAR_TABLE_SPACING`（4px）。
-- 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；中文名称额外支持按拼音首字母过滤（如 `zw` 匹配“中文测试”），首字符为单个多音汉字或后接非汉字时允许首字母多音变体（如“长”和“长abc.txt”可用 `c`/`z`，而“长度”按默认读音 `cd`）；ESC 或路径变化清除过滤。
+- 文件 table 获焦时输入普通字符会显示 statusbar 的 `file_filter_edit` 并把字符送入过滤框；`Ctrl+F` 显示过滤框并聚焦；`ab` 匹配 `ab*`，`*ab` 匹配 `*ab*`，`*ab*dd` 匹配 `*ab*dd*`；中文名称额外支持按拼音首字母过滤（如 `zw` 匹配“中文测试”），首字符为单个多音汉字或后接非汉字时允许首字母多音变体（如“长”和“长abc.txt”可用 `c`/`z`，而“长度”按默认读音 `cd`）。过滤框保持焦点时，Up/Down 在可见行间移动单选；无可见单选或存在多选时，Up 从末行、Down 从首行开始。Esc 清除并隐藏过滤框；若此前仅有一个可见选中项，则保持选中并滚动到可见区域。路径变化也会清除过滤。
 - 文件 table 获焦时 `Ctrl+D` 打开收藏菜单；菜单路径前 10 项显示 `1..9,0` 数字前缀，菜单打开时按对应数字直接跳转。Enter 在当前行单选文件夹时进入该目录，否则使用系统关联程序打开所选文件（多选时忽略文件夹）。
 - 本地文件 table：**Delete** → 回收站（无确认）；**Shift+Delete** → 永久删除（无确认）。右键菜单默认「移到回收站」；按住 **Shift** 再右键则显示「永久删除」并弹确认（对齐资源管理器习惯）。远端 Delete 弹确认后删除，Shift+Delete 直接删除。
 - 本地/远端文件可通过右键菜单或文件表格获得焦点时按 **F2** 重命名，名称列显示行内 `QLineEdit`：文件按常见单/复合后缀智能选中名称部分（如 `abc.test.tar.gz` 选中 `abc.test`），未知后缀或目录选中全名；**Esc** 取消，**Enter** 或编辑框失焦提交。
@@ -293,6 +293,12 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 
 **SFTP 操作桥接：** `SftpUiHandler` 接收 Table 的 signal（upload/download/delete/rename/mkdir），内部 `asyncio.create_task` 调用 `sftp_service`，完成后 `on_refresh_ui` 刷新文件列表。
 
+本地或远端文件 Table 获得焦点时，`Ctrl+N` 复用各自右键菜单的「新建文件夹」操作，`Ctrl+R` 触发刷新。点击文件面板右上角导航工具栏中的任意按钮后，焦点自动回到对应文件 Table。
+
+本地或远端路径变化后的列表加载完成时，若没有明确的待选文件，则自动选中第一条可见行；通过文件路径导航时仍优先选中目标文件。普通刷新不强制改变选择。
+
+同一路径执行工具栏或右键「刷新」时，刷新前的单选/多选项目按名称恢复；部分项目仍存在时只恢复存在项，全部消失时选择当前视野第一条可见行。路径变化与重命名的待选目标优先于刷新选择恢复。
+
 **列表数据：** `sftp_service.listdir` 与本地 `listdir` 均跳过 `.` / `..`，由 Table 在非根目录时自行插入一行 `..`（`is_parent=True`），避免与服务器返回的条目重复。
 
 ### 6.4 终端 I/O 数据流
@@ -308,7 +314,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
 - 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。
-- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。终端内的文件面板焦点快捷键由 `MainWindow.eventFilter` 本地拦截且不发送给远端 shell：`Ctrl+Alt+B` 优先切到当前 Tab 的远端文件 Table，断连等远端 Table 隐藏或禁用时回退到本地文件 Table；`Ctrl+;` 固定切到本地文件 Table；`Ctrl+'` 固定切到可用的远端文件 Table。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
 
 #### 终端快捷键速查
@@ -318,11 +324,17 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 | `Ctrl+Shift+C` / `Shift+Delete` | 复制终端选区 | 本地终端 |
 | `Ctrl+Shift+V` / `Shift+Insert` | 粘贴 | 本地终端 |
 | `Ctrl+A` / `Ctrl+E` | 移动到当前输入行首/行尾 | 发送给远端 shell |
+| `Ctrl+U` | 清空当前 shell 输入 | 发送给远端 shell；本地同步清空待提交命令文本 |
+| `Ctrl+W` / `Ctrl+R` | 删除光标前一个词 / 反向搜索命令历史 | 发送给远端 shell |
+| `Ctrl+C` / `Ctrl+D` | 中断前台任务或取消输入 / 发送 EOF | 发送给远端 shell |
 | `Ctrl+L` | 焦点不在终端时切回当前终端；焦点已在终端时清屏 | 焦点外：`MainWindow.eventFilter`；焦点在终端：发送给远端 |
 | `Alt+Left` / `Alt+Right` | 向左/向右移动一个词 | 发送 `ESC b/f` |
 | `Alt+Backspace` / `Alt+Delete` | 删除前一个/后一个词 | 发送 `ESC DEL` / `ESC d` |
 | `Ctrl+Shift+Home` / `Ctrl+Shift+End` | 跳到最早 scrollback / 返回最新输出 | 仅主屏幕本地处理 |
 | `Ctrl+滚轮` | 每个刻度滚动一屏减一行 | 主屏幕本地处理；备用屏幕发送 PageUp/PageDown |
+| `Ctrl+Alt+B` | 焦点切到当前 Tab 的远端文件 Table；远端不可用时回退到本地文件 Table | 仅终端获得焦点时本地处理 |
+| `Ctrl+;` | 焦点切到当前 Tab 的本地文件 Table | 仅终端获得焦点时本地处理 |
+| `Ctrl+'` | 焦点切到当前 Tab 的远端文件 Table | 仅终端获得焦点且远端 Table 可用时本地处理 |
 
 `Ctrl+Shift+Home/End` 不在备用屏幕中拦截，避免影响 Vim 等 TUI 对 Home/End 的依赖。主屏幕停留在历史位置时，凡是将发送给远端并改变/导航输入的键盘操作（普通输入、IME、粘贴、方向键、按词移动/删除、Backspace/Delete、Ctrl+A/E、Enter 等）都会先恢复最新输出；复制和 scrollback 跳转等纯本地操作不触发恢复。
 
@@ -646,8 +658,8 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 - 在未选中行上右键会先清空旧选择并选中鼠标所在行；在已选中行上右键保留当前多选；空白区右键不改变选择。
 
-- **远程：** 刷新、新建目录；有选中项时：使用系统关联程序/配置编辑器打开、复制文件名、复制路径、复制父路径、下载、重命名（单选）、删除。多选复制时各行以换行拼接。
-- **本地：** 刷新、新建目录；有选中项时：使用系统关联程序/配置编辑器打开、复制、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
+- **远程：** 刷新、新建目录；有选中项时：使用系统关联程序/配置编辑器打开、复制文件名、复制路径（`A`）、复制父路径（`P`）、发送文件名（`S`）/路径（`F`）/父路径（`G`）到对应 Tab 终端、将终端路径切换到当前远端目录（`Q`）、下载、重命名（单选）、删除。多选复制时各行以换行拼接；发送名称或路径时逐项执行 POSIX shell 引用并以空格拼接，只填入终端而不执行；包含控制字符时拒绝发送。「将终端路径切换到此处」先发送 `Ctrl+A`、`Ctrl+K` 清空整行 shell 输入，再执行经过 POSIX shell 引用的 `cd -- <path>`；包含控制字符的路径不执行。
+- **本地：** 刷新、新建目录；有选中项时：使用系统关联程序/配置编辑器打开、复制文件名、复制路径（`A`）、复制父路径（`P`）、上传、重命名（单选）、移到回收站（Shift 按下时为永久删除）。
 - 编辑动作只处理文件并忽略目录；实际文件达到 3 个时先统一确认。
 
 ### 远端文件编辑

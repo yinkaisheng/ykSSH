@@ -18,6 +18,7 @@ class TerminalTabWidget(QTabWidget):
 
     tab_close_requested = pyqtSignal(str)
     tab_closed = pyqtSignal(str)
+    terminal_added = pyqtSignal(str, object)
 
     def __init__(self, parent: QWidget = None) -> None:
         super().__init__(parent)
@@ -52,6 +53,7 @@ class TerminalTabWidget(QTabWidget):
         if host:
             self._hosts[tab_id] = host
         self.setCurrentIndex(index)
+        self.terminal_added.emit(tab_id, terminal)
         return tab_id, terminal
 
     def get_current_terminal(self) -> TerminalVTWidget | None:

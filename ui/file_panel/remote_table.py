@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import shutil
 import stat
 import sys
@@ -107,6 +108,18 @@ from ui.file_panel.helpers import (
 
 from ui.file_panel.base_table import _BaseFileTable
 
+
+def _terminal_shell_arguments(values: Iterable[str]) -> str:
+    """Return safely quoted POSIX shell arguments, or empty for control input."""
+    arguments = list(values)
+    if not arguments or any(
+        any(ord(char) < 32 or 0x7F <= ord(char) < 0xA0 for char in value)
+        for value in arguments
+    ):
+        return ''
+    return ' '.join(shlex.quote(value) for value in arguments)
+
+
 class RemoteFileTable(_BaseFileTable):
     upload_requested = pyqtSignal(list)
     download_requested = pyqtSignal(list)
@@ -116,6 +129,8 @@ class RemoteFileTable(_BaseFileTable):
     mkdir_requested = pyqtSignal(str)
     refresh_requested = pyqtSignal()
     properties_requested = pyqtSignal(list, object)
+    terminal_text_requested = pyqtSignal(str)
+    terminal_path_change_requested = pyqtSignal(str)
     PEER_FOCUS_KEY = Qt.Key_Left
 
     def __init__(self, parent: QWidget = None) -> None:
@@ -202,8 +217,29 @@ class RemoteFileTable(_BaseFileTable):
                 )
                 menu.addSeparator()
             add_menu_key(menu, menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected)), Qt.Key_C)
-            add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_P)
-            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
+            add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_A)
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_P)
+            menu.addSeparator()
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.send_name_to_terminal'), lambda: self._send_names_to_terminal(selected)),
+                Qt.Key_S,
+            )
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.send_path_to_terminal'), lambda: self._send_paths_to_terminal(selected)),
+                Qt.Key_F,
+            )
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.send_parent_path_to_terminal'), self._send_parent_path_to_terminal),
+                Qt.Key_G,
+            )
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.change_terminal_path_to_this'), self._change_terminal_path),
+                Qt.Key_Q,
+            )
             menu.addSeparator()
             add_menu_key(
                 menu,
@@ -221,8 +257,21 @@ class RemoteFileTable(_BaseFileTable):
             add_menu_key(menu, menu.addAction(tr('file.delete'), self._delete_selected), Qt.Key_D)
         else:
             menu.addSeparator()
-            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_P)
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.send_parent_path_to_terminal'), self._send_parent_path_to_terminal),
+                Qt.Key_G,
+            )
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.change_terminal_path_to_this'), self._change_terminal_path),
+                Qt.Key_Q,
+            )
         exec_menu(menu, self.viewport().mapToGlobal(pos))
+
+    def _request_refresh(self) -> None:
+        self.refresh_requested.emit()
 
     def _mkdir(self) -> None:
         name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
@@ -235,6 +284,11 @@ class RemoteFileTable(_BaseFileTable):
     def _rename_remote(self, old_name: str, new_name: str) -> None:
         self._pending_select_name = new_name
         self.rename_requested.emit(old_name, new_name)
+
+    def cancel_pending_selection(self, name: str) -> None:
+        """Cancel a pending selection when its remote operation failed."""
+        if self._pending_select_name == name:
+            self._pending_select_name = ''
 
     def _properties(self) -> None:
         selected = self._selected_entries()
@@ -284,6 +338,30 @@ class RemoteFileTable(_BaseFileTable):
     def _copy_current_directory_path(self) -> None:
         base = self._current_path.rstrip('/')
         self._copy_text(base if base else '/')
+
+    def _send_names_to_terminal(self, selected: list[tuple[str, str]] | None = None) -> None:
+        selected = selected or self._selected_entries()
+        text = _terminal_shell_arguments(name for name, _ in selected)
+        if text:
+            self.terminal_text_requested.emit(text)
+
+    def _send_paths_to_terminal(self, selected: list[tuple[str, str]] | None = None) -> None:
+        selected = selected or self._selected_entries()
+        text = _terminal_shell_arguments(
+            self._remote_full_path(name) for name, _ in selected
+        )
+        if text:
+            self.terminal_text_requested.emit(text)
+
+    def _send_parent_path_to_terminal(self) -> None:
+        base = self._current_path.rstrip('/')
+        text = _terminal_shell_arguments((base if base else '/',))
+        if text:
+            self.terminal_text_requested.emit(text)
+
+    def _change_terminal_path(self) -> None:
+        base = self._current_path.rstrip('/')
+        self.terminal_path_change_requested.emit(base if base else '/')
 
     def _download_selected(self, selected: list[tuple[str, str]] | None = None) -> None:
         selected = selected or self._selected_entries()
@@ -383,6 +461,7 @@ class RemoteFileTable(_BaseFileTable):
         else:
             base = self._current_path.rstrip('/')
             self._current_path = f'{base}/{name}' if base else f'/{name}'
+        self._prepare_path_change_selection()
         self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh_requested.emit()
@@ -400,6 +479,7 @@ class RemoteFileTable(_BaseFileTable):
             else:
                 self._current_path = path
                 self._pending_select_name = ''
+        self._prepare_path_change_selection()
         self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh_requested.emit()
@@ -417,6 +497,9 @@ class RemoteFileTable(_BaseFileTable):
 
     def clear_remote(self) -> None:
         self._list_callback = None
+        self._pending_select_name = ''
+        self._select_first_after_path_change = False
+        self._refresh_selection_names = None
         self.setRowCount(0)
         self.clear_filter()
         self._emit_status_counts()

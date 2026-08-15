@@ -163,6 +163,9 @@ class LocalFilePanel(QWidget):
         self._nav_toolbar = _FileNavToolbar(self, local=True)
         self._nav_toolbar.set_path_provider(self.table.current_path)
         self._nav_toolbar.set_navigate_handler(self.table.set_path)
+        self._nav_toolbar.table_focus_requested.connect(
+            lambda: self.table.setFocus(Qt.MouseFocusReason)
+        )
         header.addWidget(self._nav_toolbar)
         _apply_file_panel_toolbar_layout(
             self._toolbar,
@@ -368,6 +371,9 @@ class RemoteFilePanel(QWidget):
         self._nav_toolbar.set_path_provider(self.table.current_path)
         self._nav_toolbar.set_navigate_handler(self.table.set_path)
         self._nav_toolbar.set_home_path_provider(self._remote_home_path)
+        self._nav_toolbar.table_focus_requested.connect(
+            lambda: self.table.setFocus(Qt.MouseFocusReason)
+        )
         header.addWidget(self._nav_toolbar)
         _apply_file_panel_toolbar_layout(
             self._toolbar,
@@ -549,6 +555,9 @@ class RemoteFilePanel(QWidget):
                 self._sftp_handler.property_status_changed.disconnect(
                     self.statusbar.set_property_status,
                 )
+                self._sftp_handler.rename_failed.disconnect(
+                    self.table.cancel_pending_selection,
+                )
             except TypeError:
                 pass
         self._sftp_handler = handler
@@ -565,6 +574,7 @@ class RemoteFilePanel(QWidget):
         self.table.set_download_directory_provider(lambda: handler.local_dir)
         handler.transfer_status_changed.connect(self.statusbar.set_transfer_status)
         handler.property_status_changed.connect(self.statusbar.set_property_status)
+        handler.rename_failed.connect(self.table.cancel_pending_selection)
         self.table.refresh_requested.connect(
             lambda: handler.refresh_remote(self.table.current_path()),
         )

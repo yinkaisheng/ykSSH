@@ -176,7 +176,6 @@ class MainWindow(QMainWindow):
 
         settings_menu = menubar.addMenu(tr('menu.settings'))
         self._settings_action = QAction(tr('settings.title'), self)
-        self._settings_action.setShortcut('Ctrl+,')
         self._settings_action.triggered.connect(self._on_settings_clicked)
         settings_menu.addAction(self._settings_action)
 
@@ -192,12 +191,20 @@ class MainWindow(QMainWindow):
         self.side_panel.sessions_changed.connect(self._schedule_session_save)
         self.terminal_tabs.tab_close_requested.connect(self._on_tab_close_requested)
         self.terminal_tabs.tab_closed.connect(self._on_tab_closed)
+        self.terminal_tabs.terminal_added.connect(self._install_terminal_shortcut_filter)
         self.terminal_tabs.currentChanged.connect(self._on_current_tab_changed)
         self.connection_manager.remote_list_updated.connect(self._on_remote_list_updated)
         if self._main_splitter is not None:
             self._main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
         if self._vertical_splitter is not None:
             self._vertical_splitter.splitterMoved.connect(self._schedule_session_save)
+
+    def _install_terminal_shortcut_filter(
+        self,
+        _tab_id: str,
+        terminal: TerminalVTWidget,
+    ) -> None:
+        terminal.installEventFilter(self)
 
     def _schedule_session_save(self, *_args) -> None:
         self._session_save_timer.start()
@@ -358,6 +365,12 @@ class MainWindow(QMainWindow):
                 paths,
                 configured,
             ),
+        )
+        panel.remote_file_panel.table.terminal_text_requested.connect(
+            lambda text, tid=tab_id: self._send_text_to_terminal_for_tab(tid, text),
+        )
+        panel.remote_file_panel.table.terminal_path_change_requested.connect(
+            lambda path, tid=tab_id: self._change_terminal_path_for_tab(tid, path),
         )
         panel.local_file_panel.path_changed.connect(
             lambda path, tid=tab_id: self._on_local_path_changed_for_tab(tid, path),
@@ -618,6 +631,20 @@ class MainWindow(QMainWindow):
         if terminal is None or not self._terminal_is_alive(terminal):
             return
         terminal.send_command_text(command, execute=execute)
+        terminal.setFocus(Qt.OtherFocusReason)
+
+    def _send_text_to_terminal_for_tab(self, tab_id: str, text: str) -> None:
+        terminal = self.terminal_tabs.get_terminal(tab_id)
+        if terminal is None or not self._terminal_is_alive(terminal):
+            return
+        terminal.send_command_text(text, execute=False)
+        terminal.setFocus(Qt.OtherFocusReason)
+
+    def _change_terminal_path_for_tab(self, tab_id: str, path: str) -> None:
+        terminal = self.terminal_tabs.get_terminal(tab_id)
+        if terminal is None or not self._terminal_is_alive(terminal):
+            return
+        terminal.change_directory(path)
         terminal.setFocus(Qt.OtherFocusReason)
 
     def _jump_to_active_terminal_command(self, command: str, sent_at: str, command_start_row: int) -> None:
@@ -1074,16 +1101,53 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event) -> bool:
         if not isinstance(watched, QWidget) or watched.window() is not self:
             return super().eventFilter(watched, event)
+        terminal = self.terminal_tabs.get_current_terminal()
+        event_is_in_terminal = terminal is not None and (
+            watched is terminal or terminal.isAncestorOf(watched)
+        )
+        punctuation_focus_shortcut = (
+            isinstance(event, QKeyEvent)
+            and event.key() in (
+                Qt.Key_Semicolon,
+                Qt.Key_Apostrophe,
+            )
+            and event.modifiers() == Qt.ControlModifier
+        )
+        file_focus_shortcut = (
+            isinstance(event, QKeyEvent)
+            and event.type() == QEvent.KeyPress
+            and event_is_in_terminal
+            and (
+                (
+                    event.key() == Qt.Key_B
+                    and event.modifiers() == (Qt.ControlModifier | Qt.AltModifier)
+                )
+                or punctuation_focus_shortcut
+            )
+        )
+        if file_focus_shortcut:
+            panel = self._active_files_panel()
+            if panel is not None:
+                remote_table = panel.remote_file_panel.table
+                remote_available = not remote_table.isHidden() and remote_table.isEnabled()
+                if event.key() == Qt.Key_Semicolon:
+                    target_table = panel.local_file_panel.table
+                elif event.key() == Qt.Key_Apostrophe:
+                    target_table = remote_table if remote_available else None
+                else:
+                    target_table = (
+                        remote_table if remote_available else panel.local_file_panel.table
+                    )
+                if target_table is not None:
+                    target_table.setFocus(Qt.ShortcutFocusReason)
+            event.accept()
+            return True
         if (
             isinstance(event, QKeyEvent)
             and event.type() == QEvent.KeyPress
             and event.key() == Qt.Key_L
             and event.modifiers() == Qt.ControlModifier
         ):
-            terminal = self.terminal_tabs.get_current_terminal()
-            event_is_in_terminal = terminal is not None and (
-                watched is terminal or terminal.isAncestorOf(watched)
-            )
             if terminal is not None and self._terminal_is_alive(terminal) and not event_is_in_terminal:
                 terminal.setFocus(Qt.ShortcutFocusReason)
                 event.accept()

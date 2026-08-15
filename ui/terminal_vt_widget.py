@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import os
+import shlex
 import time
 import string
 import unicodedata
@@ -2453,7 +2454,9 @@ class TerminalVTWidget(QWidget):
     def _emit_pending_command_submitted(self, sent_at: str, start_y: int | None) -> None:
         command = self._pending_command_text.strip()
         force_history = self._pending_command_history_forced
-        visible_command = self._visible_command_text_for_history(start_y, command)
+        visible_command = (
+            '' if force_history else self._visible_command_text_for_history(start_y, command)
+        )
         if visible_command:
             command = visible_command
         self._pending_command_text = ''
@@ -2501,6 +2504,22 @@ class TerminalVTWidget(QWidget):
             self._commit_command_start()
             payload += b'\r'
         self.input_received.emit(payload)
+
+    def change_directory(self, path: str) -> None:
+        """Clear the current shell input, then execute cd for a remote path."""
+        path = path or ''
+        if not path or any(
+            ord(char) < 32 or 0x7F <= ord(char) < 0xA0
+            for char in path
+        ):
+            return
+        self._prepare_for_terminal_input()
+        self._pending_command_start_y = None
+        self._pending_command_start_x = None
+        self._pending_command_text = ''
+        self._pending_command_history_forced = False
+        self.input_received.emit(b'\x01\x0b')
+        self.send_command_text(f'cd -- {shlex.quote(path)}', execute=True)
 
     def scroll_to_command(self, command: str, sent_at: str, command_start_row: int = -1) -> bool:
         rows_count = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)

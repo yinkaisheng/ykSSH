@@ -43,6 +43,7 @@ def _remote_parent_and_name(path: str) -> tuple[str, str]:
 class SftpUiHandler(QObject):
     transfer_status_changed = pyqtSignal(str, str, bool, float, int, int)
     property_status_changed = pyqtSignal(bool, int, int, int)
+    rename_failed = pyqtSignal(str)
 
     def __init__(
         self,
@@ -630,9 +631,11 @@ class SftpUiHandler(QObject):
     async def _rename_async(self, old_name: str, new_name: str) -> None:
         ssh = self._cm.get_session(self.tab_id)
         if ssh is None:
+            self.rename_failed.emit(new_name)
             return
         sftp = ssh.get_sftp()
         if sftp is None:
+            self.rename_failed.emit(new_name)
             return
         base = self._remote_dir.rstrip('/') or ''
         old_path = f'{base}/{old_name}' if base else f'/{old_name}'
@@ -640,12 +643,14 @@ class SftpUiHandler(QObject):
         try:
             await rename(sftp, old_path, new_path, tab_id=self.tab_id)
         except asyncio.CancelledError:
+            self.rename_failed.emit(new_name)
             raise
         except Exception as exc:
             logger.warning(
                 f'Rename failed: tab_id={self.tab_id}, old={old_path}, '
                 f'new={new_path}, error={exc}'
             )
+            self.rename_failed.emit(new_name)
             await self._warn(str(exc))
             return
         self._cm.invalidate_remote_cache(self.tab_id)

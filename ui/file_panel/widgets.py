@@ -103,6 +103,7 @@ class _FileNavToolbar(QWidget):
 
     refresh_requested = pyqtSignal()
     favorites_requested = pyqtSignal()
+    table_focus_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget = None, *, local: bool = True) -> None:
         super().__init__(parent)
@@ -163,6 +164,7 @@ class _FileNavToolbar(QWidget):
         btn.setAutoRaise(True)
         btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        btn.clicked.connect(self.table_focus_requested.emit)
         return btn
 
     def _make_icon_button(self, icon_name: str) -> QToolButton:
@@ -171,6 +173,7 @@ class _FileNavToolbar(QWidget):
         btn.setAutoRaise(True)
         btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        btn.clicked.connect(self.table_focus_requested.emit)
         icon = getattr(self.style().StandardPixmap, icon_name)
         btn.setIcon(self.style().standardIcon(icon))
         return btn
@@ -300,8 +303,12 @@ class _FilePanelStatusBar(QWidget):
 
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
         if obj is self.file_filter_edit and event.type() == QEvent.KeyPress:
+            if event.modifiers() == Qt.NoModifier and event.key() in (Qt.Key_Up, Qt.Key_Down):
+                direction = -1 if event.key() == Qt.Key_Up else 1
+                self._table.move_filter_selection(direction)
+                return True
             if event.key() == Qt.Key_Escape:
-                self._table.clear_filter()
+                self._table.clear_filter_from_edit()
                 self._table.setFocus(Qt.OtherFocusReason)
                 return True
         if obj is self.file_filter_edit and event.type() in (QEvent.FocusIn, QEvent.FocusOut):

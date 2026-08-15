@@ -18,8 +18,9 @@ from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox, QSpin
 
 from ui.file_edit_manager import FileEditManager, _RemoteEditSession
 from ui.file_panel.local_table import LocalFileTable
-from ui.file_panel.panels import FilesPanel
+from ui.file_panel.panels import FilesPanel, LocalFilePanel, RemoteFilePanel
 from ui.file_panel.remote_table import RemoteFileTable
+from ui.file_panel.widgets import _FilePanelStatusBar
 from ui.sftp_ui_handler import SftpUiHandler
 from ui.settings_dialog import prompt_app_settings
 from storage.app_config import _normalize_editor
@@ -279,6 +280,355 @@ class FileTableEditShortcutTests(unittest.TestCase):
             panel.deleteLater()
             self.app.processEvents()
 
+    def test_ctrl_n_triggers_new_folder_in_local_and_remote_tables(self) -> None:
+        local_table = LocalFileTable(initial_path=str(Path.cwd()))
+        remote_table = RemoteFileTable()
+        local_mkdir = Mock()
+        remote_mkdir = Mock()
+        local_table._mkdir = local_mkdir
+        remote_table._mkdir = remote_mkdir
+        event = QKeyEvent(QEvent.KeyPress, Qt.Key_N, Qt.ControlModifier)
+
+        local_table.keyPressEvent(event)
+        remote_table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_N, Qt.ControlModifier))
+
+        local_mkdir.assert_called_once_with()
+        remote_mkdir.assert_called_once_with()
+
+    def test_ctrl_r_refreshes_local_and_requests_remote_refresh(self) -> None:
+        local_table = LocalFileTable(initial_path=str(Path.cwd()))
+        remote_table = RemoteFileTable()
+        local_refresh = Mock()
+        remote_refresh = Mock()
+        local_table.refresh = local_refresh
+        remote_table.refresh_requested.connect(remote_refresh)
+
+        local_table.keyPressEvent(
+            QKeyEvent(QEvent.KeyPress, Qt.Key_R, Qt.ControlModifier)
+        )
+        remote_table.keyPressEvent(
+            QKeyEvent(QEvent.KeyPress, Qt.Key_R, Qt.ControlModifier)
+        )
+
+        local_refresh.assert_called_once_with()
+        remote_refresh.assert_called_once_with()
+
+    def test_toolbar_button_returns_focus_to_own_file_table(self) -> None:
+        local_panel = LocalFilePanel(initial_path=str(Path.cwd()))
+        remote_panel = RemoteFilePanel()
+        remote_panel.set_list_callback(lambda _path: [])
+        host = QWidget()
+        local_panel.setParent(host)
+        remote_panel.setParent(host)
+        host.show()
+        local_panel.show()
+        remote_panel.show()
+        self.app.processEvents()
+
+        for panel in (local_panel, remote_panel):
+            panel.path_edit.setFocus()
+            self.assertTrue(panel.path_edit.hasFocus())
+            panel._nav_toolbar._refresh_btn.click()
+            self.app.processEvents()
+            self.assertTrue(panel.table.hasFocus())
+
+        host.close()
+        host.deleteLater()
+
+    def test_remote_context_menu_path_shortcuts_and_terminal_text_actions(self) -> None:
+        table = RemoteFileTable()
+        table.set_path('/srv/project')
+        table.set_list_callback(lambda _path: [
+            {'name': 'hello world.txt', 'is_dir': False, 'size': 3},
+        ])
+        table.refresh()
+        item = next(
+            table.item(row, 0)
+            for row in range(table.rowCount())
+            if table.item(row, 0) is not None
+            and table.item(row, 0).text() == 'hello world.txt'
+        )
+        table.setCurrentItem(item)
+        item.setSelected(True)
+        pos = table.visualItemRect(item).center()
+        emitted: list[str] = []
+        changed_paths: list[str] = []
+        table.terminal_text_requested.connect(emitted.append)
+        table.terminal_path_change_requested.connect(changed_paths.append)
+        captured = {}
+
+        def capture_menu(menu, _global_pos):
+            captured.update(menu._key_actions)
+            captured['actions'] = menu.actions()
+            return None
+
+        with patch('ui.file_panel.remote_table.exec_menu', side_effect=capture_menu):
+            table._show_context_menu(pos)
+
+        QApplication.clipboard().clear()
+        captured[Qt.Key_A].trigger()
+        self.assertEqual(QApplication.clipboard().text(), '/srv/project/hello world.txt')
+        captured[Qt.Key_P].trigger()
+        self.assertEqual(QApplication.clipboard().text(), '/srv/project')
+
+        captured[Qt.Key_S].trigger()
+        captured[Qt.Key_F].trigger()
+        captured[Qt.Key_G].trigger()
+        self.assertEqual(
+            emitted,
+            ["'hello world.txt'", "'/srv/project/hello world.txt'", '/srv/project'],
+        )
+        self.assertEqual(
+            captured[Qt.Key_Q].text().split('\t')[0],
+            'Change Terminal Path to This',
+        )
+        captured[Qt.Key_Q].trigger()
+        self.assertEqual(changed_paths, ['/srv/project'])
+
+    def test_remote_terminal_text_actions_reject_control_characters(self) -> None:
+        table = RemoteFileTable()
+        emitted: list[str] = []
+        table.terminal_text_requested.connect(emitted.append)
+
+        table._send_names_to_terminal([('safe\nwhoami', 'file')])
+        table._send_paths_to_terminal([('safe\x1b[2J', 'file')])
+
+        self.assertEqual(emitted, [])
+
+    def test_local_context_menu_uses_path_a_and_parent_path_p(self) -> None:
+        table = LocalFileTable(initial_path=str(Path.cwd()))
+        table.refresh()
+        item = next(
+            table.item(row, 0)
+            for row in range(table.rowCount())
+            if table.item(row, 0) is not None and table.item(row, 0).text() != '..'
+        )
+        table.setCurrentItem(item)
+        item.setSelected(True)
+        pos = table.visualItemRect(item).center()
+        captured = {}
+
+        def capture_menu(menu, _global_pos):
+            captured.update(menu._key_actions)
+            return None
+
+        with patch('ui.file_panel.local_table.exec_menu', side_effect=capture_menu):
+            table._show_context_menu(pos)
+
+        self.assertEqual(captured[Qt.Key_A].text().split('\t')[0], 'Copy Path')
+        self.assertEqual(captured[Qt.Key_P].text().split('\t')[0], 'Copy Parent Path')
+
+    def test_filter_edit_arrows_navigate_only_visible_rows(self) -> None:
+        table = RemoteFileTable()
+        table.set_list_callback(lambda _path: [
+            {'name': 'alpha.txt', 'is_dir': False, 'size': 1},
+            {'name': 'beta.txt', 'is_dir': False, 'size': 1},
+            {'name': 'gamma.txt', 'is_dir': False, 'size': 1},
+        ])
+        table.refresh()
+        statusbar = _FilePanelStatusBar(table, transfer_kind='download')
+        statusbar.show()
+        statusbar.file_filter_edit.setText('*a*')
+        statusbar.focus_filter()
+        self.app.processEvents()
+        edit = statusbar.file_filter_edit
+        visible_rows = [row for row in range(table.rowCount()) if not table.isRowHidden(row)]
+
+        def selected_rows() -> list[int]:
+            return sorted({index.row() for index in table.selectedIndexes()})
+
+        table.clearSelection()
+        QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Up, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[-1]])
+        QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Up, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[-2]])
+        for _ in range(len(visible_rows) + 1):
+            QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Up, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[0]])
+
+        table.clearSelection()
+        QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Down, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[0]])
+        QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Down, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[1]])
+        for _ in range(len(visible_rows) + 1):
+            QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Down, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[-1]])
+
+        table.item(visible_rows[0], 0).setSelected(True)
+        table.item(visible_rows[-1], 0).setSelected(True)
+        self.assertGreater(len(selected_rows()), 1)
+        QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Up, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[-1]])
+        table.item(visible_rows[0], 0).setSelected(True)
+        QApplication.sendEvent(edit, QKeyEvent(QEvent.KeyPress, Qt.Key_Down, Qt.NoModifier))
+        self.assertEqual(selected_rows(), [visible_rows[0]])
+        self.assertTrue(edit.hasFocus())
+
+    def test_filter_edit_escape_keeps_single_selection_visible(self) -> None:
+        table = RemoteFileTable()
+        table.set_list_callback(lambda _path: [
+            {'name': f'item-{index:02d}.txt', 'is_dir': False, 'size': 1}
+            for index in range(30)
+        ])
+        table.refresh()
+        statusbar = _FilePanelStatusBar(table, transfer_kind='download')
+        statusbar.show()
+        statusbar.file_filter_edit.setText('item-29')
+        statusbar.focus_filter()
+        self.app.processEvents()
+        selected_item = next(
+            table.item(row, 0)
+            for row in range(table.rowCount())
+            if not table.isRowHidden(row)
+        )
+        table.setCurrentItem(selected_item)
+        selected_item.setSelected(True)
+
+        with patch.object(table, 'scrollToItem') as scroll_to_item:
+            QApplication.sendEvent(
+                statusbar.file_filter_edit,
+                QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier),
+            )
+            self.assertFalse(scroll_to_item.called)
+            self.app.processEvents()
+
+        self.assertEqual(table.filter_text(), '')
+        self.assertTrue(statusbar.file_filter_edit.isHidden())
+        self.assertTrue(selected_item.isSelected())
+        scroll_to_item.assert_called_once()
+        self.assertIs(scroll_to_item.call_args.args[0], selected_item)
+
+    def test_path_change_selects_first_row_in_local_and_remote_tables(self) -> None:
+        local_table = LocalFileTable(initial_path=str(Path.cwd().parent))
+        local_table.set_path(str(Path.cwd()))
+        local_selected = sorted({index.row() for index in local_table.selectedIndexes()})
+        self.assertEqual(local_selected, [0])
+        local_table.clearSelection()
+        local_table.refresh()
+        self.assertEqual(local_table.selectedIndexes(), [])
+        local_table.set_path(str(Path.cwd() / 'README.md'))
+        self.assertEqual(local_table.currentItem().text(), 'README.md')
+
+        remote_table = RemoteFileTable()
+        remote_table.set_list_callback(lambda _path: [
+            {'name': 'alpha.txt', 'is_dir': False, 'size': 1},
+            {'name': 'beta.txt', 'is_dir': False, 'size': 1},
+        ])
+        remote_table.refresh_requested.connect(remote_table.refresh)
+        remote_table.set_path('/srv/project')
+        remote_selected = sorted({index.row() for index in remote_table.selectedIndexes()})
+        self.assertEqual(remote_selected, [0])
+        remote_table.set_path('/srv/project/beta.txt')
+        self.assertEqual(remote_table.currentItem().text(), 'beta.txt')
+
+    def test_refresh_restores_existing_selection_or_selects_first_visible_row(self) -> None:
+        entries = [
+            {'name': 'alpha.txt', 'is_dir': False, 'size': 1},
+            {'name': 'beta.txt', 'is_dir': False, 'size': 1},
+            {'name': 'gamma.txt', 'is_dir': False, 'size': 1},
+        ]
+        remote_table = RemoteFileTable()
+        remote_table.set_list_callback(lambda _path: list(entries))
+        remote_table.refresh()
+
+        def item_named(name: str):
+            return next(
+                remote_table.item(row, 0)
+                for row in range(remote_table.rowCount())
+                if remote_table.item(row, 0) is not None
+                and remote_table.item(row, 0).text() == name
+            )
+
+        def selected_names() -> list[str]:
+            return sorted({
+                remote_table.item(index.row(), 0).text()
+                for index in remote_table.selectedIndexes()
+            })
+
+        item_named('alpha.txt').setSelected(True)
+        item_named('gamma.txt').setSelected(True)
+        entries[:] = [
+            {'name': 'beta.txt', 'is_dir': False, 'size': 1},
+            {'name': 'gamma.txt', 'is_dir': False, 'size': 1},
+            {'name': 'delta.txt', 'is_dir': False, 'size': 1},
+        ]
+        remote_table.refresh()
+        self.assertEqual(selected_names(), ['gamma.txt'])
+
+        entries[:] = [
+            {'name': 'beta.txt', 'is_dir': False, 'size': 1},
+            {'name': 'delta.txt', 'is_dir': False, 'size': 1},
+        ]
+        remote_table.refresh()
+        self.assertEqual(selected_names(), ['beta.txt'])
+
+        local_table = LocalFileTable(initial_path=str(Path.cwd()))
+        local_table.refresh()
+        readme = next(
+            local_table.item(row, 0)
+            for row in range(local_table.rowCount())
+            if local_table.item(row, 0) is not None
+            and local_table.item(row, 0).text() == 'README.md'
+        )
+        readme.setSelected(True)
+        local_table.refresh()
+        self.assertTrue(
+            any(
+                local_table.item(index.row(), 0).text() == 'README.md'
+                for index in local_table.selectedIndexes()
+            )
+        )
+
+    def test_missing_pending_target_is_consumed_after_one_refresh(self) -> None:
+        table = RemoteFileTable()
+        table.set_list_callback(lambda _path: [
+            {'name': 'alpha.txt', 'is_dir': False, 'size': 1},
+        ])
+        table.refresh_requested.connect(table.refresh)
+
+        table.set_path('/srv/project', select_name='missing.txt')
+        self.assertEqual(table._pending_select_name, '')
+        self.assertEqual(table.currentItem().text(), '..')
+
+        table.refresh()
+        self.assertEqual(table.currentItem().text(), '..')
+
+    def test_remote_rename_failure_clears_pending_target_before_refresh(self) -> None:
+        panel = RemoteFilePanel()
+        panel.set_list_callback(lambda _path: [
+            {'name': 'beta.txt', 'is_dir': False, 'size': 1},
+        ])
+        handler = SftpUiHandler('tab-a', object(), panel.refresh)
+        panel.set_sftp_handler(handler)
+        beta = next(
+            panel.table.item(row, 0)
+            for row in range(panel.table.rowCount())
+            if panel.table.item(row, 0) is not None
+            and panel.table.item(row, 0).text() == 'beta.txt'
+        )
+        panel.table.setCurrentItem(beta)
+        beta.setSelected(True)
+        panel.table._pending_select_name = 'taken.txt'
+
+        handler.rename_failed.emit('taken.txt')
+        panel.table.refresh()
+
+        self.assertEqual(panel.table._pending_select_name, '')
+        self.assertEqual(panel.table.currentItem().text(), 'beta.txt')
+
+    def test_clear_remote_discards_pending_selection_state(self) -> None:
+        table = RemoteFileTable()
+        table._pending_select_name = 'taken.txt'
+        table._select_first_after_path_change = True
+        table._refresh_selection_names = ('beta.txt',)
+
+        table.clear_remote()
+
+        self.assertEqual(table._pending_select_name, '')
+        self.assertFalse(table._select_first_after_path_change)
+        self.assertIsNone(table._refresh_selection_names)
+
     def test_configured_remote_path_does_not_replace_remote_home(self) -> None:
         handler = SftpUiHandler('tab-a', object(), lambda: None)
 
@@ -337,6 +687,38 @@ class FileTableEditShortcutTests(unittest.TestCase):
             'report_2026_.tar.gz',
         )
         self.assertEqual(FileEditManager._safe_temp_name('CON.txt'), '_CON.txt')
+
+
+class SftpUiHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_rename_failure_emits_pending_target_name(self) -> None:
+        handler = SftpUiHandler(
+            'tab-a',
+            _FakeConnectionManager(_FakeSftp()),
+            lambda: None,
+        )
+        failed_names: list[str] = []
+        handler.rename_failed.connect(failed_names.append)
+
+        with (
+            patch(
+                'ui.sftp_ui_handler.rename',
+                new=AsyncMock(side_effect=OSError('denied')),
+            ),
+            patch.object(handler, '_warn', new=AsyncMock()),
+        ):
+            await handler._rename_async('beta.txt', 'taken.txt')
+
+        self.assertEqual(failed_names, ['taken.txt'])
+
+    async def test_remote_rename_without_session_emits_pending_target_name(self) -> None:
+        connection_manager = SimpleNamespace(get_session=lambda _tab_id: None)
+        handler = SftpUiHandler('tab-a', connection_manager, lambda: None)
+        failed_names: list[str] = []
+        handler.rename_failed.connect(failed_names.append)
+
+        await handler._rename_async('beta.txt', 'taken.txt')
+
+        self.assertEqual(failed_names, ['taken.txt'])
 
 
 class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):

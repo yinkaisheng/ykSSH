@@ -57,11 +57,19 @@ ykSSH stores runtime data under `config/` and writes logs under `logs/`. These d
 | `Ctrl+Shift+C` / `Shift+Delete` | Copy selected terminal text |
 | `Ctrl+Shift+V` / `Shift+Insert` | Paste |
 | `Ctrl+A` / `Ctrl+E` | Move to the start/end of the current shell input line |
+| `Ctrl+U` | Clear the current shell input line |
+| `Ctrl+W` | Delete the word before the cursor |
+| `Ctrl+R` | Search backward through shell command history |
+| `Ctrl+C` | Interrupt the foreground command or cancel the current shell input |
+| `Ctrl+D` | Send EOF; on an empty shell input line this commonly exits the shell |
 | `Alt+Left` / `Alt+Right` | Move backward/forward by one word |
 | `Alt+Backspace` / `Alt+Delete` | Delete the previous/next word |
 | `Ctrl+Shift+Home` | Jump to the oldest local scrollback content |
 | `Ctrl+Shift+End` | Return to the newest terminal output |
 | `Ctrl+Mouse Wheel` | Fast-scroll by one visible page minus one overlapping line |
+| `Ctrl+Alt+B` | Focus the remote file table for the current terminal tab, or the local file table when remote files are unavailable |
+| `Ctrl+;` | Focus the local file table for the current terminal tab |
+| `Ctrl+'` | Focus the remote file table for the current terminal tab |
 
 The shell editing shortcuts are sent to the remote shell and work with common
 readline, zsh, and fish configurations. Local scrollback shortcuts are only
@@ -79,6 +87,9 @@ These shortcuts apply while a local or remote file table has focus unless noted 
 | Shortcut | Action |
 |---|---|
 | Type text / `Ctrl+F` | Filter the current file list; `Esc` clears the active filter |
+| `Up` / `Down` in the filter field | Select the previous/next visible result while keeping focus in the filter field |
+| `Ctrl+R` | Refresh the current file list and restore selections that still exist |
+| `Ctrl+N` | Create a new folder in the current directory |
 | `Ctrl+D` | Open the favorites menu; press `1`–`9` or `0` to choose one of the first ten paths |
 | `F2` | Rename the single selected file or folder; `Esc` cancels and `Enter` confirms |
 | `F3` | Open selected files with their system-associated applications; folders are ignored |
@@ -100,8 +111,10 @@ These shortcuts apply while a local or remote file table has focus unless noted 
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+,` | Open Settings when focus is outside the terminal; when the terminal has focus, the key is sent to the remote session |
+| `Ctrl+;` | Focus the current tab's local file table from the terminal; no action outside the terminal |
+| `Ctrl+'` | Focus the current tab's remote file table from the terminal |
 | `Ctrl+L` | Return focus to the current connected terminal from elsewhere in the application |
+| `Ctrl+Alt+B` | From the current terminal, focus its remote file table; falls back to the local file table when disconnected |
 
 ## Configuration And Security
 

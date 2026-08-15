@@ -19,6 +19,7 @@
 - Tab 关闭时 `ConnectionManager.close_tab()` 必须 cancel 读任务并 `disconnect()`。
 - SSH、SFTP、远程文件及远程编辑相关日志必须至少包含 `tab_id`、`session_id`、`name` 之一；进入 Tab 生命周期后优先使用 `tab_id`，连接建立/失败等关键日志同时保留 `session_id` 与 `name`，以便跨层追踪同一连接。日志不得记录密码、密钥内容或其他凭据。
 - 不要提交 `config/` 下的运行时文件（含 `secret.key`、`credentials.json`）或任何真实凭据。
+- 允许 Skill 生成 spec、plan 等本地中间产物；除非用户明确要求，否则禁止将这些文件加入 Git 或提交。
 - 影响架构、配置 schema、连接/文件面板/终端关键行为或已知限制时，同步更新 [IMPLEMENTATION.md](IMPLEMENTATION.md)；纯样式、拼写或不改变行为的小修可跳过。
 - 当前处于开发阶段：修改配置 schema、API、配置格式或行为时直接按新设计落地，不保留旧字段、旧路径或旧行为兼容分支。
 

@@ -61,6 +61,49 @@ class TerminalCopyAllTests(unittest.TestCase):
         self.assertEqual(shortcuts[Qt.Key_A].text().split('\t')[0], 'Copy All')
         self.assertEqual(shortcuts[Qt.Key_S].text().split('\t')[0], 'Select All')
 
+    def test_change_directory_clears_input_and_executes_quoted_cd(self) -> None:
+        emitted: list[bytes] = []
+        self.widget.input_received.connect(emitted.append)
+
+        self.widget.change_directory("/srv/hello world's files")
+
+        self.assertEqual(
+            emitted,
+            [b'\x01\x0b', b'cd -- \'/srv/hello world\'"\'"\'s files\'\r'],
+        )
+
+    def test_change_directory_preserves_spaces_and_rejects_control_characters(self) -> None:
+        emitted: list[bytes] = []
+        self.widget.input_received.connect(emitted.append)
+
+        self.widget.change_directory('/srv/trailing ')
+        self.widget.change_directory('/srv/unsafe\nwhoami')
+
+        self.assertEqual(
+            emitted,
+            [b'\x01\x0b', b"cd -- '/srv/trailing '\r"],
+        )
+
+    def test_change_directory_does_not_reuse_previous_command_start(self) -> None:
+        screen = pyte.HistoryScreen(20, 3, history=20)  # type: ignore[attr-defined]
+        pyte.Stream(screen).feed('$ abcdef')  # type: ignore[attr-defined]
+        screen.cursor.x = 4
+        self.widget._main_screen = screen
+        self.widget.screen = screen
+        submitted: list[tuple[str, int]] = []
+        self.widget.command_submitted.connect(
+            lambda command, _sent_at, row: submitted.append((command, row))
+        )
+        self.widget._pending_command_start_y = 7
+        self.widget._pending_command_start_x = 4
+        self.widget._pending_command_text = 'old input'
+
+        self.widget.change_directory('/srv/project')
+
+        self.assertNotIn(7, self.widget._command_start_rows)
+        self.assertNotIn(7, [row for _command, row in submitted])
+        self.assertEqual([command for command, _row in submitted], ['cd -- /srv/project'])
+
 
 if __name__ == '__main__':
     unittest.main()

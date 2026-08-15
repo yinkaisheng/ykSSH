@@ -139,6 +139,8 @@ class _BaseFileTable(QTableWidget):
         self._filter_text = ''
         self._filter_edit_focused = False
         self._pending_select_name = ''
+        self._select_first_after_path_change = False
+        self._refresh_selection_names: tuple[str, ...] | None = None
         self._inline_rename_edit: _InlineRenameEdit | None = None
         self._inline_rename_item: QTableWidgetItem | None = None
         self.cellDoubleClicked.connect(self._on_cell_double_clicked)
@@ -165,6 +167,14 @@ class _BaseFileTable(QTableWidget):
         self._filter_edit_focused = focused
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key_R and event.modifiers() == Qt.ControlModifier:
+            self._request_refresh()
+            event.accept()
+            return
+        if event.key() == Qt.Key_N and event.modifiers() == Qt.ControlModifier:
+            self._mkdir()
+            event.accept()
+            return
         if event.key() == Qt.Key_Up and event.modifiers() == Qt.ControlModifier:
             self.path_focus_requested.emit()
             event.accept()
@@ -254,6 +264,12 @@ class _BaseFileTable(QTableWidget):
     def _rename(self) -> None:
         raise NotImplementedError
 
+    def _mkdir(self) -> None:
+        raise NotImplementedError
+
+    def _request_refresh(self) -> None:
+        raise NotImplementedError
+
     def _properties(self) -> None:
         raise NotImplementedError
 
@@ -290,8 +306,67 @@ class _BaseFileTable(QTableWidget):
         return False
 
     def _select_pending_entry(self) -> None:
-        if self._pending_select_name and self._select_entry_by_name(self._pending_select_name):
+        if self._pending_select_name:
+            if self._select_entry_by_name(self._pending_select_name):
+                self._pending_select_name = ''
+                self._select_first_after_path_change = False
+                self._refresh_selection_names = None
+                return
             self._pending_select_name = ''
+        if self._select_first_after_path_change:
+            if self._select_first_visible_row():
+                self._select_first_after_path_change = False
+                self._refresh_selection_names = None
+            return
+        selection_names = self._refresh_selection_names
+        self._refresh_selection_names = None
+        if selection_names and not self._restore_selection_names(selection_names):
+            self._select_first_visible_row()
+
+    def _prepare_path_change_selection(self) -> None:
+        self._select_first_after_path_change = True
+
+    def _select_first_visible_row(self) -> bool:
+        for row in range(self.rowCount()):
+            if self.isRowHidden(row):
+                continue
+            item = self.item(row, 0)
+            if item is None:
+                continue
+            index = self.model().index(row, 0)
+            self.clearSelection()
+            self.selectionModel().setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+            self.selectionModel().select(
+                index,
+                QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+            )
+            self.scrollToItem(item, QAbstractItemView.EnsureVisible)
+            return True
+        return False
+
+    def _restore_selection_names(self, names: tuple[str, ...]) -> bool:
+        wanted = set(names)
+        matched_rows = [
+            row
+            for row in range(self.rowCount())
+            if not self.isRowHidden(row)
+            and self.item(row, 0) is not None
+            and self.item(row, 0).text() in wanted
+        ]
+        if not matched_rows:
+            return False
+        self.clearSelection()
+        first_index = self.model().index(matched_rows[0], 0)
+        self.selectionModel().setCurrentIndex(first_index, QItemSelectionModel.NoUpdate)
+        for row in matched_rows:
+            self.selectionModel().select(
+                self.model().index(row, 0),
+                QItemSelectionModel.Select | QItemSelectionModel.Rows,
+            )
+        first_item = self.item(matched_rows[0], 0)
+        if first_item is not None:
+            self.scrollToItem(first_item, QAbstractItemView.EnsureVisible)
+        return True
 
     def _start_inline_rename(self, on_commit: Callable[[str, str], None]) -> None:
         selected_rows = sorted({idx.row() for idx in self.selectedIndexes()})
@@ -471,6 +546,17 @@ class _BaseFileTable(QTableWidget):
 
     def _begin_refresh(self) -> tuple[int, Qt.SortOrder]:
         sort_column, sort_order = self._current_sort()
+        if self._select_first_after_path_change or self._pending_select_name:
+            self._refresh_selection_names = None
+        else:
+            selected_names = {
+                self.item(index.row(), 0).text()
+                for index in self.selectedIndexes()
+                if self.item(index.row(), 0) is not None
+            }
+            self._refresh_selection_names = (
+                tuple(sorted(selected_names)) if selected_names else None
+            )
         self.setSortingEnabled(False)
         self.setRowCount(0)
         return sort_column, sort_order
@@ -541,6 +627,65 @@ class _BaseFileTable(QTableWidget):
         self._emit_status_counts()
         self.filter_text_changed.emit('')
         self.filter_cancelled.emit()
+
+    def move_filter_selection(self, direction: int) -> bool:
+        """Move a single selection through visible filtered rows."""
+        visible_rows = [
+            row
+            for row in range(self.rowCount())
+            if not self.isRowHidden(row) and self.item(row, 0) is not None
+        ]
+        if not visible_rows:
+            return False
+        selected_rows = {
+            index.row()
+            for index in self.selectedIndexes()
+            if not self.isRowHidden(index.row())
+        }
+        if len(selected_rows) != 1:
+            target_row = visible_rows[-1] if direction < 0 else visible_rows[0]
+        else:
+            current_row = next(iter(selected_rows))
+            try:
+                current_index = visible_rows.index(current_row)
+            except ValueError:
+                target_row = visible_rows[-1] if direction < 0 else visible_rows[0]
+            else:
+                target_index = max(0, min(len(visible_rows) - 1, current_index + direction))
+                target_row = visible_rows[target_index]
+        target_index = self.model().index(target_row, 0)
+        self.setCurrentIndex(target_index)
+        self.selectionModel().select(
+            target_index,
+            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+        )
+        item = self.item(target_row, 0)
+        if item is not None:
+            self.scrollToItem(item, QAbstractItemView.EnsureVisible)
+        return True
+
+    def clear_filter_from_edit(self) -> None:
+        """Clear filtering and keep the sole visible selection in view."""
+        selected_rows = {
+            index.row()
+            for index in self.selectedIndexes()
+            if not self.isRowHidden(index.row())
+        }
+        selected_item = (
+            self.item(next(iter(selected_rows)), 0)
+            if len(selected_rows) == 1
+            else None
+        )
+        self.clear_filter()
+        if selected_item is not None:
+            QTimer.singleShot(
+                0,
+                lambda item=selected_item: self._ensure_item_visible(item),
+            )
+
+    def _ensure_item_visible(self, item: QTableWidgetItem) -> None:
+        if item.tableWidget() is self and item.row() >= 0 and item.isSelected():
+            self.scrollToItem(item, QAbstractItemView.EnsureVisible)
 
     def _entry_matches_filter(self, name: str) -> bool:
         pattern = self._filter_text.casefold()

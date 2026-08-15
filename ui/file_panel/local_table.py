@@ -196,8 +196,8 @@ class LocalFileTable(_BaseFileTable):
                 )
                 menu.addSeparator()
             add_menu_key(menu, menu.addAction(tr('file.copy_name'), lambda: self._copy_selected_names(selected)), Qt.Key_C)
-            add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_P)
-            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
+            add_menu_key(menu, menu.addAction(tr('file.copy_path'), lambda: self._copy_selected_paths(selected)), Qt.Key_A)
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_P)
             menu.addSeparator()
             add_menu_key(
                 menu,
@@ -228,8 +228,11 @@ class LocalFileTable(_BaseFileTable):
                 )
         else:
             menu.addSeparator()
-            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_L)
+            add_menu_key(menu, menu.addAction(tr('file.copy_parent_path'), self._copy_current_directory_path), Qt.Key_P)
         exec_menu(menu, self.viewport().mapToGlobal(pos))
+
+    def _request_refresh(self) -> None:
+        self.refresh()
 
     def _mkdir(self) -> None:
         name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
@@ -410,6 +413,7 @@ class LocalFileTable(_BaseFileTable):
             entries = os.listdir(path)
         except OSError:
             self._end_refresh(sort_column, sort_order)
+            self._select_pending_entry()
             return
 
         dirs: list[tuple[str, int, float, str, int]] = []
@@ -443,6 +447,7 @@ class LocalFileTable(_BaseFileTable):
             self._current_path = parent or self._current_path
         else:
             self._current_path = os.path.join(self._current_path, name)
+        self._prepare_path_change_selection()
         self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh()
@@ -455,6 +460,7 @@ class LocalFileTable(_BaseFileTable):
             candidate = os.path.dirname(candidate) or self._current_path
         self._current_path = candidate or os.path.expanduser('~')
         self._pending_select_name = select_name
+        self._prepare_path_change_selection()
         self.clear_filter()
         self.path_changed.emit(self._current_path)
         self.refresh()
