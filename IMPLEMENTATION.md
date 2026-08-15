@@ -327,7 +327,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 `Ctrl+Shift+Home/End` 不在备用屏幕中拦截，避免影响 Vim 等 TUI 对 Home/End 的依赖。主屏幕停留在历史位置时，凡是将发送给远端并改变/导航输入的键盘操作（普通输入、IME、粘贴、方向键、按词移动/删除、Backspace/Delete、Ctrl+A/E、Enter 等）都会先恢复最新输出；复制和 scrollback 跳转等纯本地操作不触发恢复。
 
 - 终端获得焦点时绘制 1px 高亮边框，颜色由当前主题 `themes.<name>.terminal_focus_border` 配置（solarized `#cb4b16` / light `#e67e22` / dark `#f0a030`）。
-- 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
+- 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。已提交历史命令的起始行会在 gutter 绘制一行高的 `terminal.terminal_gutter_command_background_color` 背景标志；多行输入只标记第一行，未提交输入与 alt-screen 不标记，wheel 滚动时按命令绝对行和当前 viewport 重新换算位置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
 - 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
 - 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记并记录本地命令发送时间；普通键盘输入仅在当前终端行可见回显出命令时，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令右键「发送并执行」由客户端主动执行，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
@@ -444,6 +444,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
     "terminal_selection_background_color": "#094771",
     "terminal_left_gutter_width_px": 16,
     "terminal_gutter_background_color": "#323232",
+    "terminal_gutter_command_background_color": "#606060",
     "terminal_scrollbar_width_px": 10,
     "terminal_scrollbar_background_color": "#323232",
     "terminal_scrollbar_thumb_color": "#6A6A6A",

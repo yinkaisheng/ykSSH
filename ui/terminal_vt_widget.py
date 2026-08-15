@@ -53,6 +53,21 @@ class _Cell:
     underline: bool = False
 
 
+def _visible_command_marker_rows(
+    command_start_rows: list[int],
+    viewport_top: int,
+    viewport_rows: int,
+    *,
+    in_alt_screen: bool = False,
+) -> tuple[int, ...]:
+    """Map committed command start rows to visible viewport rows."""
+    if in_alt_screen or viewport_rows <= 0:
+        return ()
+    top = max(0, int(viewport_top))
+    bottom = top + int(viewport_rows)
+    return tuple(int(row) - top for row in command_start_rows if top <= int(row) < bottom)
+
+
 class TerminalVTWidget(QWidget):
     """
     A VT/xterm-like terminal viewport backed by pyte.
@@ -409,6 +424,9 @@ class TerminalVTWidget(QWidget):
 
     def _gutter_bg(self) -> QColor:
         return self._setting_color("terminal_gutter_background_color", "#353535")
+
+    def _gutter_command_bg(self) -> QColor:
+        return self._setting_color("terminal_gutter_command_background_color", "#606060")
 
     def _scrollbar_bg(self) -> QColor:
         return self._setting_color("terminal_scrollbar_background_color", "#353535")
@@ -2187,6 +2205,24 @@ class TerminalVTWidget(QWidget):
             return set()
         return set(range(start, end + 1))
 
+    def _draw_gutter_command_markers(self, painter: QPainter, gutter_width: int) -> None:
+        """Draw committed command starts at their current viewport rows."""
+        if gutter_width <= 0:
+            return
+        viewport_rows = int(getattr(self.screen, "lines", 0) or 0)
+        marker_rows = _visible_command_marker_rows(
+            self._command_start_rows,
+            self._viewport_top_row,
+            viewport_rows,
+            in_alt_screen=self._in_alt_screen,
+        )
+        marker_bg = self._gutter_command_bg()
+        for row in marker_rows:
+            painter.fillRect(
+                QRectF(0, row * self._cell_h, gutter_width, self._cell_h),
+                marker_bg,
+            )
+
     def paintEvent(self, event):  # type: ignore[override]
         t0 = time.perf_counter()
         self._last_paint_t = time.monotonic()
@@ -2199,6 +2235,7 @@ class TerminalVTWidget(QWidget):
         gutter_width = self._left_gutter_width()
         if gutter_width > 0:
             p.fillRect(QRectF(0, 0, gutter_width, self.height()), self._gutter_bg())
+            self._draw_gutter_command_markers(p, gutter_width)
         self._draw_scrollbar(p)
 
         overlay_lines = self._selection_lines()

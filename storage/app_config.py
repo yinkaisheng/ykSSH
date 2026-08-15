@@ -65,6 +65,7 @@ _TERMINAL_SETTING_DEFAULTS: dict[str, Any] = {
     'terminal_selection_background_color': '#094771',
     'terminal_left_gutter_width_px': 16,
     'terminal_gutter_background_color': '#323232',
+    'terminal_gutter_command_background_color': '#606060',
     'terminal_scrollbar_width_px': 10,
     'terminal_scrollbar_background_color': '#323232',
     'terminal_scrollbar_thumb_color': '#6A6A6A',
