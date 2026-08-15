@@ -143,6 +143,8 @@ class CommandHistoryPanel(QListWidget):
         add_menu_key(menu, send_exec_action, Qt.Key_T)
         copy_action = menu.addAction(tr('commands.copy_command'))
         add_menu_key(menu, copy_action, Qt.Key_C)
+        copy_with_time_action = menu.addAction(tr('history.copy_command_and_sent_time'))
+        add_menu_key(menu, copy_with_time_action, Qt.Key_A)
         action = exec_menu(menu, self.viewport().mapToGlobal(pos))
 
         if action == send_action:
@@ -151,3 +153,5 @@ class CommandHistoryPanel(QListWidget):
             self.command_send_requested.emit(history.command, True)
         elif action == copy_action and history.command:
             QApplication.clipboard().setText(history.command)
+        elif action == copy_with_time_action:
+            QApplication.clipboard().setText(f'{history.sent_at}\n{history.command}')

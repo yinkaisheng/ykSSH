@@ -2006,6 +2006,10 @@ class TerminalVTWidget(QWidget):
         line = self._line_from_screen_buffer(screen, y)
         if line is None:
             return ""
+        return self._safe_display_line_from_cells(line, cols)
+
+    def _safe_display_line_from_cells(self, line: Any, cols: int) -> str:
+        """Build display text from one pyte buffer or history line."""
         chars: list[str] = []
         x = 0
         while x < cols:
@@ -2837,6 +2841,39 @@ class TerminalVTWidget(QWidget):
         except Exception:
             pass
 
+    def _all_text(self) -> str:
+        """Return all available terminal text, independent of scroll position."""
+        cols = int(getattr(self.screen, "columns", self._calc_cols_rows()[0]) or 0)
+        rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+        lines: list[Any] = []
+        if not self._in_alt_screen:
+            history = getattr(self.screen, "history", None)
+            lines.extend(list(getattr(history, "top", ()) or ()))
+        buffer = getattr(self.screen, "buffer", None)
+        if buffer is not None:
+            for y in range(rows):
+                try:
+                    lines.append(buffer[y])
+                except Exception:
+                    lines.append(None)
+        if not self._in_alt_screen:
+            history = getattr(self.screen, "history", None)
+            lines.extend(list(getattr(history, "bottom", ()) or ()))
+        text_lines = [
+            self._safe_display_line_from_cells(line, cols).rstrip() if line is not None else ""
+            for line in lines
+        ]
+        return "\n".join(text_lines).rstrip()
+
+    def copy_all(self) -> None:
+        txt = self._all_text()
+        if not txt:
+            return
+        try:
+            QGuiApplication.clipboard().setText(txt)
+        except Exception:
+            pass
+
     def contextMenuEvent(self, event):  # type: ignore[override]
         menu = ShortcutMenu(self)
 
@@ -2845,12 +2882,15 @@ class TerminalVTWidget(QWidget):
         add_menu_key(menu, act_copy, Qt.Key_C)
         act_copy.setEnabled(has_sel)
         act_copy.triggered.connect(self.copy)
+        act_copy_all = menu.addAction(t("context.copy_all"))
+        add_menu_key(menu, act_copy_all, Qt.Key_A)
+        act_copy_all.triggered.connect(self.copy_all)
         act_paste = menu.addAction(t("context.paste"))
         add_menu_key(menu, act_paste, Qt.Key_V)
         act_paste.triggered.connect(self._paste_from_clipboard)
         menu.addSeparator()
         act_select_all = menu.addAction(t("context.select_all"))
-        add_menu_key(menu, act_select_all, Qt.Key_A)
+        add_menu_key(menu, act_select_all, Qt.Key_S)
         act_select_all.triggered.connect(self._select_all_visible)
         act_clear = menu.addAction(t("context.clear"))
         add_menu_key(menu, act_clear, Qt.Key_X)

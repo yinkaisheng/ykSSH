@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import Qt
 
 from storage.command_history_store import CommandHistoryStore
 from ui.command_history_panel import CommandHistoryPanel
@@ -58,6 +60,43 @@ class CommandHistoryPanelTests(unittest.TestCase):
         self.panel.itemDoubleClicked.emit(git_item)
         self.assertEqual(jumped, [('git status', '10:00', 5)])
         self.assertEqual(sent, [('git status', False)])
+
+    def test_context_menu_copies_sent_time_and_command(self) -> None:
+        self.panel.set_active_tab('tab-a')
+        self.panel.add_command('tab-a', 'echo first\necho second', '10:02', 12)
+        item = self.panel.item(0)
+        pos = self.panel.visualItemRect(item).center()
+
+        def choose_last_action(menu, _global_pos):
+            return menu.actions()[-1]
+
+        with patch('ui.command_history_panel.exec_menu', side_effect=choose_last_action):
+            self.panel._show_context_menu(pos)
+
+        self.assertEqual(
+            QApplication.clipboard().text(),
+            '10:02\necho first\necho second',
+        )
+
+    def test_context_menu_shortcuts_use_execute_t_and_copy_time_a(self) -> None:
+        self.panel.set_active_tab('tab-a')
+        self.panel.add_command('tab-a', 'pwd', '10:03', 15)
+        item = self.panel.item(0)
+        pos = self.panel.visualItemRect(item).center()
+        shortcuts: dict[str, int] = {}
+
+        def capture_shortcuts(menu, _global_pos):
+            shortcuts.update(menu._key_actions)
+            return None
+
+        with patch('ui.command_history_panel.exec_menu', side_effect=capture_shortcuts):
+            self.panel._show_context_menu(pos)
+
+        self.assertEqual(shortcuts[Qt.Key_T].text().split('\t')[0], 'Send and Execute')
+        self.assertEqual(
+            shortcuts[Qt.Key_A].text().split('\t')[0],
+            'Copy Command and Sent Time',
+        )
 
 
 if __name__ == '__main__':
