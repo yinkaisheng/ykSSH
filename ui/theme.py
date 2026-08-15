@@ -39,6 +39,7 @@ class ThemePalette:
     text_disabled: str
     background_hover: str
     background_menu_hover: str
+    side_panel_item_hover_background: str
     background_toggle_hover: str
     highlight: str
     highlight_hover: str

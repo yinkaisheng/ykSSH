@@ -606,11 +606,32 @@ QTreeWidget {{
 
 QTreeWidget::item {{
     padding: 2px 4px;
+    border: none;
+    outline: none;
 }}
 
 QTreeWidget#SessionTree::item {{
     height: {session_tree_row_height}px;
     padding: 0px 4px;
+}}
+
+QTreeWidget::item:selected,
+QTreeWidget::item:selected:!active {{
+    background-color: {p.tree_selected_background};
+    color: {p.text_primary};
+}}
+
+QTreeWidget#SessionTree::item:hover,
+QTreeWidget#CommandTree::item:hover,
+QListWidget#CommandHistoryList::item:hover {{
+    background-color: {p.side_panel_item_hover_background};
+}}
+
+QTreeWidget#SessionTree::item:selected:hover,
+QTreeWidget#CommandTree::item:selected:hover,
+QListWidget#CommandHistoryList::item:selected:hover {{
+    background-color: {p.tree_selected_background};
+    color: {p.text_primary};
 }}
 
 QTableWidget::item {{

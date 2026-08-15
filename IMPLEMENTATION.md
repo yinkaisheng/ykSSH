@@ -571,6 +571,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - 运行时色板：`ui/theme.py` → `ThemePalette` dataclass
 - QSS 由 `build_stylesheet(palette)` 动态生成
 - Tab Bar 样式：`tab_background`（非激活）、`tab_selected_background`（激活）、`tab_hover_background`（悬停）
+- SidePanel 的 Session、Command、History item 悬停色：`side_panel_item_hover_background`（选中项悬停仍使用 `tree_selected_background`）
 - 终端焦点边框：`terminal_focus_border`（终端控件获得焦点时的 1px 描边）
 - 文件表格非焦点选中行：`table_inactive_selected_background`（焦点表格仍使用 `table_selected_background`）
 - **动态垂直 padding（文字居中）：** Session 过滤框与文件面板路径 `QLineEdit` 按控件高度与 `QFontMetrics.lineSpacing` 计算 `filter_edit_pad_y` / `file_panel_toolbar_pad_y`，控件外框高度不变、仅调整内部 padding
