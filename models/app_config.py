@@ -15,10 +15,10 @@ class AppearanceConfig:
     ui_font_size_px: int
     table_font_size_px: int
     status_font_size_px: int
-    session_tree_font_size_px: int
-    session_tree_row_height_px: int
+    tree_font_size_px: int
+    tree_row_height_px: int
     filter_edit_height: int
-    filter_edit_font_size: int
+    filter_edit_font_size_px: int
     ui_font_families_win: tuple[str, ...]
     terminal_font_family: str
     terminal_font_size_px: int
@@ -35,21 +35,21 @@ class WindowConfig:
     tab_bar_height: int
     width: int | None
     height: int | None
-    session_tree_width: int | None
-    vertical_splitter: float | None
+    side_panel_width: int | None
+    vertical_splitter_ratio: float | None
 
 
 @dataclass(frozen=True)
 class FilePanelConfig:
     local_column_widths: dict[str, int]
     remote_column_widths: dict[str, int]
-    header_height_px: int
-    row_height_px: int
+    file_table_header_height: int
+    file_table_row_height: int
     file_panel_toolbar_height: int
     file_panel_toolbar_font_size: int
     file_panel_statusbar_font_size: int
     file_panel_favorites_menu_font_size: int
-    folder_name_bold: bool
+    file_panel_folder_name_bold: bool
     local_favorites: tuple[FavoritePath, ...]
     local_favorites_dialog_width: int
     local_favorites_dialog_height: int

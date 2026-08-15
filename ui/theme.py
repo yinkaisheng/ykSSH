@@ -45,7 +45,7 @@ class ThemePalette:
     highlight_pressed: str
     highlight_text: str
     table_selected_background: str
-    file_table_inactive_selected_background: str
+    table_inactive_selected_background: str
     tree_row_stripe_background: str
     tree_selected_background: str
     tab_selected_background: str
@@ -301,11 +301,11 @@ def _build_stylesheet(
     ui_size_px = appearance.ui_font_size_px
     tab_bar_height = get_app_config().window.tab_bar_height
     tab_padding_y = max(2, (tab_bar_height - ui_size_px - 2) // 2)
-    session_tree_row_height = appearance.session_tree_row_height_px
-    filter_edit_font_size = appearance.filter_edit_font_size
+    session_tree_row_height = appearance.tree_row_height_px
+    filter_edit_font_size_px = appearance.filter_edit_font_size_px
     filter_edit_height = appearance.filter_edit_height
     _filter_edit_font = QFont()
-    _filter_edit_font.setPixelSize(filter_edit_font_size)
+    _filter_edit_font.setPixelSize(filter_edit_font_size_px)
     _filter_edit_fm = QFontMetrics(_filter_edit_font)
     filter_edit_pad_y = max(
         0, (filter_edit_height - 2 - _filter_edit_fm.lineSpacing()) // 2,
@@ -333,7 +333,7 @@ def _build_stylesheet(
         tab_bar_height=tab_bar_height,
         tab_padding_y=tab_padding_y,
         session_tree_row_height=session_tree_row_height,
-        filter_edit_font_size=filter_edit_font_size,
+        filter_edit_font_size_px=filter_edit_font_size_px,
         filter_edit_pad_y=filter_edit_pad_y,
         file_panel_toolbar_font_size=file_panel_toolbar_font_size,
         file_panel_toolbar_pad_y=file_panel_toolbar_pad_y,

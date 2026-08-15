@@ -32,15 +32,15 @@ DEFAULT_FILE_PANEL_TOOLBAR_HEIGHT = 26
 DEFAULT_FILE_PANEL_TOOLBAR_FONT_SIZE = 14
 DEFAULT_FILE_PANEL_STATUSBAR_FONT_SIZE = 13
 DEFAULT_FILE_PANEL_FAVORITES_MENU_FONT_SIZE = 14
-DEFAULT_FOLDER_NAME_BOLD = True
+DEFAULT_FILE_PANEL_FOLDER_NAME_BOLD = True
 DEFAULT_LOCAL_FAVORITES_DIALOG_WIDTH = 820
 DEFAULT_LOCAL_FAVORITES_DIALOG_HEIGHT = 420
 DEFAULT_REMOTE_FAVORITES_DIALOG_WIDTH = 560
 DEFAULT_REMOTE_FAVORITES_DIALOG_HEIGHT = 380
 
 _FILE_PANEL_INT_BOUNDS: dict[str, tuple[int, int]] = {
-    'header_height_px': (18, 48),
-    'row_height_px': (18, 48),
+    'file_table_header_height': (18, 48),
+    'file_table_row_height': (18, 48),
     'file_panel_toolbar_height': (18, 48),
     'file_panel_toolbar_font_size': (8, 32),
     'file_panel_statusbar_font_size': (8, 32),
@@ -52,8 +52,8 @@ _FILE_PANEL_INT_BOUNDS: dict[str, tuple[int, int]] = {
 }
 
 _FILE_PANEL_INT_DEFAULTS: dict[str, int] = {
-    'header_height_px': DEFAULT_FILE_TABLE_HEADER_HEIGHT_PX,
-    'row_height_px': DEFAULT_FILE_TABLE_ROW_HEIGHT_PX,
+    'file_table_header_height': DEFAULT_FILE_TABLE_HEADER_HEIGHT_PX,
+    'file_table_row_height': DEFAULT_FILE_TABLE_ROW_HEIGHT_PX,
     'file_panel_toolbar_height': DEFAULT_FILE_PANEL_TOOLBAR_HEIGHT,
     'file_panel_toolbar_font_size': DEFAULT_FILE_PANEL_TOOLBAR_FONT_SIZE,
     'file_panel_statusbar_font_size': DEFAULT_FILE_PANEL_STATUSBAR_FONT_SIZE,
@@ -65,7 +65,7 @@ _FILE_PANEL_INT_DEFAULTS: dict[str, int] = {
 }
 
 _FILE_PANEL_BOOL_DEFAULTS: dict[str, bool] = {
-    'folder_name_bold': DEFAULT_FOLDER_NAME_BOLD,
+    'file_panel_folder_name_bold': DEFAULT_FILE_PANEL_FOLDER_NAME_BOLD,
 }
 
 DEFAULT_LOCAL_FAVORITES: list = []

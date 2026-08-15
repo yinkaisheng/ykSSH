@@ -14,7 +14,7 @@ def build_stylesheet(
     tab_bar_height: int,
     tab_padding_y: int,
     session_tree_row_height: int,
-    filter_edit_font_size: int,
+    filter_edit_font_size_px: int,
     filter_edit_pad_y: int,
     file_panel_toolbar_font_size: int,
     file_panel_toolbar_pad_y: int,
@@ -429,7 +429,7 @@ QLineEdit, QPlainTextEdit {{
 }}
 
 QLineEdit#SessionFilterEdit {{
-    font-size: {filter_edit_font_size}px;
+    font-size: {filter_edit_font_size_px}px;
     padding: {filter_edit_pad_y}px 4px;
 }}
 
@@ -629,7 +629,7 @@ QTableWidget::item:selected:!active {{
 }}
 
 QTableWidget#fileTable[panelFocused="false"]::item:selected {{
-    background-color: {p.file_table_inactive_selected_background};
+    background-color: {p.table_inactive_selected_background};
 }}
 
 QTableWidget#fileTable[panelFocused="true"]::item:selected {{

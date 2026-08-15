@@ -1232,12 +1232,12 @@ class SidePanel(QWidget):
         for symbol in self._drawer_symbols.values():
             symbol.setFont(symbol_font)
         tree_font = QFont()
-        tree_font.setPixelSize(appearance.session_tree_font_size_px)
+        tree_font.setPixelSize(appearance.tree_font_size_px)
         self.tree.setFont(tree_font)
         self.commands_tree.setFont(tree_font)
         self.history_list.setFont(tree_font)
         filter_font = QFont()
-        filter_font.setPixelSize(appearance.filter_edit_font_size)
+        filter_font.setPixelSize(appearance.filter_edit_font_size_px)
         self._filter_edit.setFont(filter_font)
         self._filter_edit.setFixedHeight(appearance.filter_edit_height)
 

@@ -167,8 +167,8 @@ ykSSH/
 | 字段 | 含义 |
 |------|------|
 | `window.width` / `window.height` | 主窗口尺寸 |
-| `window.session_tree_width` | 左侧 SidePanel 像素宽度（水平 splitter 左侧；字段名沿用历史命名） |
-| `window.vertical_splitter` | 终端|文件面板垂直比例（0~1） |
+| `window.side_panel_width` | 左侧 SidePanel 像素宽度（水平 splitter 左侧；字段名沿用历史命名） |
+| `window.vertical_splitter_ratio` | 终端|文件面板垂直比例（0~1） |
 | `window.tab_bar_height` / `window.title_bar_height` / `window.border_width` | Tab 栏 / 标题栏 / 边框高度 |
 
 拖动 splitter 后 500ms 防抖保存（`MainWindow._schedule_session_save`）。当前处于开发阶段，配置字段以当前 schema 为准，不为旧字段保留兼容分支。
@@ -425,10 +425,10 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
     "ui_font_size_px": 14,
     "table_font_size_px": 14,
     "status_font_size_px": 12,
-    "session_tree_font_size_px": 14,
-    "session_tree_row_height_px": 26,
+    "tree_font_size_px": 14,
+    "tree_row_height_px": 26,
     "filter_edit_height": 26,
-    "filter_edit_font_size": 14,
+    "filter_edit_font_size_px": 14,
     "terminal_font_family": "Consolas",
     "terminal_font_size_px": 22,
     ...
@@ -443,9 +443,9 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
     "terminal_background_color": "#1E1E1E",
     "terminal_selection_background_color": "#094771",
     "terminal_left_gutter_width_px": 16,
-    "terminal_gutter_background_color": "#252525",
+    "terminal_gutter_background_color": "#323232",
     "terminal_scrollbar_width_px": 10,
-    "terminal_scrollbar_background_color": "#252525",
+    "terminal_scrollbar_background_color": "#323232",
     "terminal_scrollbar_thumb_color": "#6A6A6A",
     "terminal_debug_gutter_selection": false,
     "terminal_debug_history_jump": false
@@ -453,8 +453,8 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
   "window": {
     "width": 1400,
     "height": 900,
-    "session_tree_width": 206,
-    "vertical_splitter": 0.636,
+    "side_panel_width": 206,
+    "vertical_splitter_ratio": 0.636,
     "border_width": 1,
     "title_bar_height": 32,
     "tab_bar_height": 28
@@ -472,13 +472,13 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
       "Modified": 144,
       "Permissions": 100
     },
-    "header_height_px": 22,
-    "row_height_px": 24,
+    "file_table_header_height": 22,
+    "file_table_row_height": 24,
     "file_panel_toolbar_height": 26,
     "file_panel_toolbar_font_size": 14,
     "file_panel_statusbar_font_size": 13,
     "file_panel_favorites_menu_font_size": 14,
-    "folder_name_bold": true,
+    "file_panel_folder_name_bold": true,
     "local_favorites": [
       { "path": "D:\\\\Projects", "note": "work" }
     ],
@@ -488,9 +488,9 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
     "remote_favorites_dialog_height": 380
   },
   "side_panel": {
-    "session_edit_dialog_width": 700,
+    "session_edit_dialog_width": 800,
     "session_edit_dialog_height": 520,
-    "command_edit_dialog_width": 480,
+    "command_edit_dialog_width": 680,
     "command_edit_dialog_height": 320
   },
   "editor": {
@@ -503,11 +503,11 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 | `file_panel` 字段 | 说明 |
 |-------------------|------|
 | `*_column_widths` | 本地/远端列宽 dict（键为列名如 `Name`/`Size`/`Modified`/`Permissions`；表头右键「保存列宽」写入） |
-| `header_height_px` / `row_height_px` | 表头 / 行高 |
+| `file_table_header_height` / `file_table_row_height` | 表头 / 行高 |
 | `file_panel_toolbar_height` / `file_panel_toolbar_font_size` | 路径栏高度、标签、路径输入框与导航按钮字号 |
 | `file_panel_statusbar_font_size` | 文件面板底部 statusbar 字号 |
 | `file_panel_favorites_menu_font_size` | 收藏弹出菜单字号 |
-| `folder_name_bold` | 文件夹名称是否粗体（默认 `true`；`..` 行也按目录粗体） |
+| `file_panel_folder_name_bold` | 文件夹名称是否粗体（默认 `true`；`..` 行也按目录粗体） |
 | `local_favorites` | 全局本地收藏路径列表（`path` + 可选 `note`） |
 | `local/remote_favorites_dialog_width/height` | 收藏管理对话框窗口尺寸 |
 
@@ -572,7 +572,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - QSS 由 `build_stylesheet(palette)` 动态生成
 - Tab Bar 样式：`tab_background`（非激活）、`tab_selected_background`（激活）、`tab_hover_background`（悬停）
 - 终端焦点边框：`terminal_focus_border`（终端控件获得焦点时的 1px 描边）
-- 文件表格非焦点选中行：`file_table_inactive_selected_background`（焦点表格仍使用 `table_selected_background`）
+- 文件表格非焦点选中行：`table_inactive_selected_background`（焦点表格仍使用 `table_selected_background`）
 - **动态垂直 padding（文字居中）：** Session 过滤框与文件面板路径 `QLineEdit` 按控件高度与 `QFontMetrics.lineSpacing` 计算 `filter_edit_pad_y` / `file_panel_toolbar_pad_y`，控件外框高度不变、仅调整内部 padding
 - 导航按钮样式：`#filePanelNavButton`（正方形 flat 按钮）
 - 终端配色尚未完全跟随 app theme（已知限制）
@@ -632,8 +632,8 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 ### 显示
 
-- `file_panel.folder_name_bold`：文件夹名（含 `..`）是否粗体
-- 文件表格失焦时使用当前主题的 `file_table_inactive_selected_background` 绘制选中行，以区分当前获得焦点的本地/远端面板。
+- `file_panel.file_panel_folder_name_bold`：文件夹名（含 `..`）是否粗体
+- 文件表格失焦时使用当前主题的 `table_inactive_selected_background` 绘制选中行，以区分当前获得焦点的本地/远端面板。
 
 ### 列宽
 

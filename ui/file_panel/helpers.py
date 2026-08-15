@@ -221,7 +221,7 @@ def _set_name_item_sort_keys(
 
 def _apply_entry_name_font(name_item: QTableWidgetItem, entry_type: str) -> None:
     font = QFont(name_item.font())
-    font.setBold(get_app_config().file_panel.folder_name_bold and entry_type == 'dir')
+    font.setBold(get_app_config().file_panel.file_panel_folder_name_bold and entry_type == 'dir')
     name_item.setFont(font)
 
 
@@ -443,11 +443,11 @@ def _apply_file_table_layout(
     header.setObjectName('fileTableHeader')
     header.setStretchLastSection(False)
     header.setSectionsMovable(False)
-    header.setFixedHeight(cfg.header_height_px)
+    header.setFixedHeight(cfg.file_table_header_height)
 
     vheader = table.verticalHeader()
-    vheader.setDefaultSectionSize(cfg.row_height_px)
-    vheader.setMinimumSectionSize(cfg.row_height_px)
+    vheader.setDefaultSectionSize(cfg.file_table_row_height)
+    vheader.setMinimumSectionSize(cfg.file_table_row_height)
 
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)

@@ -27,7 +27,7 @@ from log_util import logger
 from models.favorite_path import FavoritePath
 from models.session_item import SessionItem
 from storage.app_config import (
-    DEFAULT_SESSION_TREE_WIDTH,
+    DEFAULT_SIDE_PANEL_WIDTH,
     get_app_config,
     save_app_preferences,
     save_file_panel_local_favorites,
@@ -108,7 +108,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr('main.window_title'))
         self._main_splitter: QSplitter | None = None
         self._vertical_splitter: QSplitter | None = None
-        self._session_tree_width = DEFAULT_SESSION_TREE_WIDTH
+        self._side_panel_width = DEFAULT_SIDE_PANEL_WIDTH
         self._title_bar: WindowTitleBar | None = None
         self._shell_frame: QFrame | None = None
         self._init_ui()
@@ -131,7 +131,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._title_bar, 0)
         self._setup_menus()
 
-        self.session_panel = SidePanel(
+        self.side_panel = SidePanel(
             self.profile_store,
             self.credential_store,
             host_key_store=self.connection_manager.host_keys,
@@ -142,11 +142,11 @@ class MainWindow(QMainWindow):
         # 上区：Session 树与终端同高
         self._main_splitter = QSplitter(Qt.Horizontal)
         self._main_splitter.setObjectName('mainSplitter')
-        self._main_splitter.addWidget(self.session_panel)
+        self._main_splitter.addWidget(self.side_panel)
         self._main_splitter.addWidget(self.terminal_tabs)
         self._main_splitter.setStretchFactor(0, 0)
         self._main_splitter.setStretchFactor(1, 1)
-        self._main_splitter.setSizes([self._session_tree_width, 920])
+        self._main_splitter.setSizes([self._side_panel_width, 920])
 
         # 下区：双文件 Table 占满全宽
         self._vertical_splitter = QSplitter(Qt.Vertical)
@@ -186,10 +186,10 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self._about_action)
 
     def _connect_signals(self) -> None:
-        self.session_panel.session_connect_requested.connect(self._connect_session)
-        self.session_panel.command_send_requested.connect(self._send_command_to_active_terminal)
-        self.session_panel.history_jump_requested.connect(self._jump_to_active_terminal_command)
-        self.session_panel.sessions_changed.connect(self._schedule_session_save)
+        self.side_panel.session_connect_requested.connect(self._connect_session)
+        self.side_panel.command_send_requested.connect(self._send_command_to_active_terminal)
+        self.side_panel.history_jump_requested.connect(self._jump_to_active_terminal_command)
+        self.side_panel.sessions_changed.connect(self._schedule_session_save)
         self.terminal_tabs.tab_close_requested.connect(self._on_tab_close_requested)
         self.terminal_tabs.tab_closed.connect(self._on_tab_closed)
         self.terminal_tabs.currentChanged.connect(self._on_current_tab_changed)
@@ -214,14 +214,14 @@ class MainWindow(QMainWindow):
         self.resize(width, height)
         self._center_on_screen()
 
-        if window.session_tree_width is not None and self._main_splitter:
-            self._session_tree_width = int(window.session_tree_width)
-            QTimer.singleShot(0, self._apply_session_tree_width)
+        if window.side_panel_width is not None and self._main_splitter:
+            self._side_panel_width = int(window.side_panel_width)
+            QTimer.singleShot(0, self._apply_side_panel_width)
 
-        if window.vertical_splitter is not None and self._vertical_splitter:
+        if window.vertical_splitter_ratio is not None and self._vertical_splitter:
             QTimer.singleShot(
                 0,
-                lambda r=float(window.vertical_splitter): self._apply_vertical_splitter_ratio(r),
+                lambda r=float(window.vertical_splitter_ratio): self._apply_vertical_splitter_ratio(r),
             )
 
     def _center_on_screen(self) -> None:
@@ -233,25 +233,25 @@ class MainWindow(QMainWindow):
         y = available.y() + max(0, (available.height() - self.height()) // 2)
         self.move(x, y)
 
-    def _apply_session_tree_width(self) -> None:
+    def _apply_side_panel_width(self) -> None:
         if not self._main_splitter:
             return
         total = self._main_splitter.width()
         if total <= 0:
-            QTimer.singleShot(50, self._apply_session_tree_width)
+            QTimer.singleShot(50, self._apply_side_panel_width)
             return
         min_terminal = self.MIN_TERMINAL_PANE_WIDTH
-        max_tree = max(min_terminal, total - min_terminal)
-        tree_width = max(0, min(max_tree, self._session_tree_width))
-        self._session_tree_width = tree_width
-        self._main_splitter.setSizes([tree_width, max(min_terminal, total - tree_width)])
+        max_panel = max(min_terminal, total - min_terminal)
+        side_panel_width = max(0, min(max_panel, self._side_panel_width))
+        self._side_panel_width = side_panel_width
+        self._main_splitter.setSizes([side_panel_width, max(min_terminal, total - side_panel_width)])
 
     def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
         if not self._main_splitter:
             return
         sizes = self._main_splitter.sizes()
         if sizes:
-            self._session_tree_width = sizes[0]
+            self._side_panel_width = sizes[0]
         self._schedule_session_save()
 
     def _apply_vertical_splitter_ratio(self, ratio: float) -> None:
@@ -268,12 +268,12 @@ class MainWindow(QMainWindow):
             save_window_state(
                 width=self.width(),
                 height=self.height(),
-                session_tree_width=(
+                side_panel_width=(
                     self._main_splitter.sizes()[0]
                     if self._main_splitter and self._main_splitter.sizes()
-                    else self._session_tree_width
+                    else self._side_panel_width
                 ),
-                vertical_splitter=(
+                vertical_splitter_ratio=(
                     splitter_sizes_to_ratio(self._vertical_splitter.sizes())
                     if self._vertical_splitter
                     else self.DEFAULT_VERTICAL_SPLITTER_RATIO
@@ -339,7 +339,7 @@ class MainWindow(QMainWindow):
         if self._title_bar is not None:
             self._title_bar.set_title(tr('main.window_title'))
         self._setup_menus()
-        self.session_panel.retranslate_ui()
+        self.side_panel.retranslate_ui()
         self.terminal_tabs.retranslate_ui()
         self.file_panels.retranslate_ui()
 
@@ -466,7 +466,7 @@ class MainWindow(QMainWindow):
         session = self._session_item_for_tab(tab_id)
         if session is not None:
             session.local_favorites = list(session_entries)
-            self.session_panel.persist_sessions()
+            self.side_panel.persist_sessions()
 
     def _persist_local_favorites_for_tab(self, tab_id: str) -> None:
         panel = self.file_panels.get_panel(tab_id)
@@ -480,7 +480,7 @@ class MainWindow(QMainWindow):
         if session is None:
             return
         session.remote_favorites = list(entries)
-        self.session_panel.persist_sessions()
+        self.side_panel.persist_sessions()
 
     def _persist_remote_favorites_for_tab(self, tab_id: str) -> None:
         self._save_remote_favorites(tab_id, list(self._remote_favorites_for_tab(tab_id)))
@@ -609,7 +609,7 @@ class MainWindow(QMainWindow):
             panel.remote_file_panel.clear_remote()
 
     def _on_connect_clicked(self) -> None:
-        session = self.session_panel.current_session()
+        session = self.side_panel.current_session()
         if session is not None:
             self._connect_session(session)
 
@@ -643,7 +643,7 @@ class MainWindow(QMainWindow):
             host=session_item.host,
         )
         terminal.command_submitted.connect(
-            lambda command, sent_at, start_row, tid=tab_id: self.session_panel.add_history_command(
+            lambda command, sent_at, start_row, tid=tab_id: self.side_panel.add_history_command(
                 tid, command, sent_at, start_row
             )
         )
@@ -652,7 +652,7 @@ class MainWindow(QMainWindow):
         )
         self._tab_sessions[tab_id] = session_item
         self._active_tab_id = tab_id
-        self.session_panel.set_active_history_tab(tab_id)
+        self.side_panel.set_active_history_tab(tab_id)
         terminal.setFocus(Qt.OtherFocusReason)
         local_path = resolve_local_path(session_item.local_path)
         panel = self.file_panels.create_panel(tab_id, initial_local_path=local_path)
@@ -864,7 +864,7 @@ class MainWindow(QMainWindow):
         if remote_dialog is not None:
             remote_dialog.close()
         self.file_panels.remove_panel(tab_id)
-        self.session_panel.remove_history_tab(tab_id)
+        self.side_panel.remove_history_tab(tab_id)
         if was_active:
             self._active_tab_id = None
             index = self.terminal_tabs.currentIndex()
@@ -872,10 +872,10 @@ class MainWindow(QMainWindow):
                 new_tab_id = self.terminal_tabs._tab_ids.get(index)
                 if new_tab_id is not None:
                     self._active_tab_id = new_tab_id
-                    self.session_panel.set_active_history_tab(new_tab_id)
+                    self.side_panel.set_active_history_tab(new_tab_id)
                     self._attach_file_panel(new_tab_id)
             else:
-                self.session_panel.set_active_history_tab(None)
+                self.side_panel.set_active_history_tab(None)
                 self.file_panels.show_empty()
         self._track_background_task(
             asyncio.create_task(self._finalize_tab_close_async(tab_id, handler)),
@@ -928,16 +928,16 @@ class MainWindow(QMainWindow):
             self._save_active_tab_paths()
             self.file_panels.show_empty()
             self._active_tab_id = None
-            self.session_panel.set_active_history_tab(None)
+            self.side_panel.set_active_history_tab(None)
             return
         self._save_active_tab_paths()
         tab_id = self.terminal_tabs._tab_ids.get(index)
         self._active_tab_id = tab_id
         if tab_id is None:
             self.file_panels.show_empty()
-            self.session_panel.set_active_history_tab(None)
+            self.side_panel.set_active_history_tab(None)
             return
-        self.session_panel.set_active_history_tab(tab_id)
+        self.side_panel.set_active_history_tab(tab_id)
         panel = self.file_panels.get_panel(tab_id)
         if panel is None:
             self.file_panels.show_empty()
@@ -965,7 +965,7 @@ class MainWindow(QMainWindow):
             family,
         )
         self._apply_terminal_fonts(family, size_px)
-        self.session_panel.apply_appearance()
+        self.side_panel.apply_appearance()
         self.file_panels.apply_file_panel_layout()
         window_cfg = get_app_config().window
         if self._title_bar is not None:
@@ -1112,7 +1112,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._apply_session_tree_width()
+        self._apply_side_panel_width()
         if self._active_tab_id is not None:
             self._terminal_resize_timer.start()
 

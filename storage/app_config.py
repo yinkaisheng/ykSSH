@@ -64,9 +64,9 @@ _TERMINAL_SETTING_DEFAULTS: dict[str, Any] = {
     'terminal_background_color': '#1E1E1E',
     'terminal_selection_background_color': '#094771',
     'terminal_left_gutter_width_px': 16,
-    'terminal_gutter_background_color': '#252525',
+    'terminal_gutter_background_color': '#323232',
     'terminal_scrollbar_width_px': 10,
-    'terminal_scrollbar_background_color': '#252525',
+    'terminal_scrollbar_background_color': '#323232',
     'terminal_scrollbar_thumb_color': '#6A6A6A',
     'terminal_debug_gutter_selection': False,
     'terminal_debug_history_jump': False,
@@ -81,9 +81,9 @@ _MAX_TITLE_BAR_HEIGHT = 48
 DEFAULT_TAB_BAR_HEIGHT = 28
 _MIN_TAB_BAR_HEIGHT = 20
 _MAX_TAB_BAR_HEIGHT = 48
-DEFAULT_SESSION_TREE_WIDTH = 280
-_MIN_SESSION_TREE_WIDTH = 120
-_MAX_SESSION_TREE_WIDTH = 800
+DEFAULT_SIDE_PANEL_WIDTH = 280
+_MIN_SIDE_PANEL_WIDTH = 120
+_MAX_SIDE_PANEL_WIDTH = 800
 
 
 _config_cache: AppConfig | None = None
@@ -215,10 +215,10 @@ def _appearance_to_config(appearance: dict[str, Any]) -> AppearanceConfig:
         ui_font_size_px=appearance['ui_font_size_px'],
         table_font_size_px=appearance['table_font_size_px'],
         status_font_size_px=appearance['status_font_size_px'],
-        session_tree_font_size_px=appearance['session_tree_font_size_px'],
-        session_tree_row_height_px=appearance['session_tree_row_height_px'],
+        tree_font_size_px=appearance['tree_font_size_px'],
+        tree_row_height_px=appearance['tree_row_height_px'],
         filter_edit_height=appearance['filter_edit_height'],
-        filter_edit_font_size=appearance['filter_edit_font_size'],
+        filter_edit_font_size_px=appearance['filter_edit_font_size_px'],
         ui_font_families_win=tuple(appearance['ui_font_families_win']),
         terminal_font_family=appearance['terminal_font_family'],
         terminal_font_size_px=appearance['terminal_font_size_px'],
@@ -303,13 +303,13 @@ def _file_panel_to_config(file_panel: dict[str, Any]) -> FilePanelConfig:
     return FilePanelConfig(
         local_column_widths=dict(file_panel['local_column_widths']),
         remote_column_widths=dict(file_panel['remote_column_widths']),
-        header_height_px=file_panel['header_height_px'],
-        row_height_px=file_panel['row_height_px'],
+        file_table_header_height=file_panel['file_table_header_height'],
+        file_table_row_height=file_panel['file_table_row_height'],
         file_panel_toolbar_height=file_panel['file_panel_toolbar_height'],
         file_panel_toolbar_font_size=file_panel['file_panel_toolbar_font_size'],
         file_panel_statusbar_font_size=file_panel['file_panel_statusbar_font_size'],
         file_panel_favorites_menu_font_size=file_panel['file_panel_favorites_menu_font_size'],
-        folder_name_bold=file_panel['folder_name_bold'],
+        file_panel_folder_name_bold=file_panel['file_panel_folder_name_bold'],
         local_favorites=tuple(favorite_paths_from_raw(file_panel.get('local_favorites'))),
         local_favorites_dialog_width=file_panel['local_favorites_dialog_width'],
         local_favorites_dialog_height=file_panel['local_favorites_dialog_height'],
@@ -383,19 +383,19 @@ def _normalize_window(raw: Any) -> dict[str, Any]:
     }
     width = raw.get('width')
     height = raw.get('height')
-    vertical_splitter = raw.get('vertical_splitter')
+    vertical_splitter_ratio = raw.get('vertical_splitter_ratio')
     if isinstance(width, int) and width > 0:
         normalized['width'] = width
     if isinstance(height, int) and height > 0:
         normalized['height'] = height
-    normalized['session_tree_width'] = _clamp_int(
-        raw.get('session_tree_width'),
-        DEFAULT_SESSION_TREE_WIDTH,
-        _MIN_SESSION_TREE_WIDTH,
-        _MAX_SESSION_TREE_WIDTH,
+    normalized['side_panel_width'] = _clamp_int(
+        raw.get('side_panel_width'),
+        DEFAULT_SIDE_PANEL_WIDTH,
+        _MIN_SIDE_PANEL_WIDTH,
+        _MAX_SIDE_PANEL_WIDTH,
     )
-    if isinstance(vertical_splitter, (int, float)) and 0.0 <= float(vertical_splitter) <= 1.0:
-        normalized['vertical_splitter'] = round(float(vertical_splitter), 3)
+    if isinstance(vertical_splitter_ratio, (int, float)) and 0.0 <= float(vertical_splitter_ratio) <= 1.0:
+        normalized['vertical_splitter_ratio'] = round(float(vertical_splitter_ratio), 3)
     return normalized
 
 
@@ -406,8 +406,8 @@ def _window_to_config(window: dict[str, Any]) -> WindowConfig:
         tab_bar_height=window['tab_bar_height'],
         width=window.get('width'),
         height=window.get('height'),
-        session_tree_width=window.get('session_tree_width'),
-        vertical_splitter=window.get('vertical_splitter'),
+        side_panel_width=window.get('side_panel_width'),
+        vertical_splitter_ratio=window.get('vertical_splitter_ratio'),
     )
 
 
@@ -562,10 +562,10 @@ def save_app_preferences(
         'ui_font_size_px': current.ui_font_size_px,
         'table_font_size_px': current.table_font_size_px,
         'status_font_size_px': current.status_font_size_px,
-        'session_tree_font_size_px': current.session_tree_font_size_px,
-        'session_tree_row_height_px': current.session_tree_row_height_px,
+        'tree_font_size_px': current.tree_font_size_px,
+        'tree_row_height_px': current.tree_row_height_px,
         'filter_edit_height': current.filter_edit_height,
-        'filter_edit_font_size': current.filter_edit_font_size,
+        'filter_edit_font_size_px': current.filter_edit_font_size_px,
         'ui_font_families_win': list(current.ui_font_families_win),
         'terminal_font_family': terminal_font_family,
         'terminal_font_size_px': terminal_font_size_px,
@@ -593,8 +593,8 @@ def save_window_state(
     *,
     width: int,
     height: int,
-    session_tree_width: int,
-    vertical_splitter: float,
+    side_panel_width: int,
+    vertical_splitter_ratio: float,
     path: Path = CONFIG_FILE,
 ) -> AppConfig:
     global _config_cache, _raw_config_cache
@@ -603,13 +603,13 @@ def save_window_state(
     window = dict(_raw_config_cache.get('window', {}))
     window['width'] = max(1, int(width))
     window['height'] = max(1, int(height))
-    window['session_tree_width'] = _clamp_int(
-        session_tree_width,
-        DEFAULT_SESSION_TREE_WIDTH,
-        _MIN_SESSION_TREE_WIDTH,
-        _MAX_SESSION_TREE_WIDTH,
+    window['side_panel_width'] = _clamp_int(
+        side_panel_width,
+        DEFAULT_SIDE_PANEL_WIDTH,
+        _MIN_SIDE_PANEL_WIDTH,
+        _MAX_SIDE_PANEL_WIDTH,
     )
-    window['vertical_splitter'] = round(float(vertical_splitter), 3)
+    window['vertical_splitter_ratio'] = round(float(vertical_splitter_ratio), 3)
     data = dict(_raw_config_cache)
     data['window'] = _normalize_window(window)
     _save_config(path, data)

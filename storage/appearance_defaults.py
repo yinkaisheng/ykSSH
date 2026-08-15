@@ -12,10 +12,10 @@ DEFAULT_THEME = 'solarized'
 DEFAULT_UI_FONT_SIZE_PX = 14
 DEFAULT_TABLE_FONT_SIZE_PX = 14
 DEFAULT_STATUS_FONT_SIZE_PX = 12
-DEFAULT_SESSION_TREE_FONT_SIZE_PX = 14
-DEFAULT_SESSION_TREE_ROW_HEIGHT_PX = 26
+DEFAULT_TREE_FONT_SIZE_PX = 14
+DEFAULT_TREE_ROW_HEIGHT_PX = 26
 DEFAULT_FILTER_EDIT_HEIGHT = 26
-DEFAULT_FILTER_EDIT_FONT_SIZE = 14
+DEFAULT_FILTER_EDIT_FONT_SIZE_PX = 14
 DEFAULT_UI_FONT_FAMILIES_WIN: tuple[str, ...] = (
     'Microsoft YaHei UI',
     'Segoe UI',
@@ -43,10 +43,10 @@ _APPEARANCE_INT_DEFAULTS: dict[str, int] = {
     'ui_font_size_px': DEFAULT_UI_FONT_SIZE_PX,
     'table_font_size_px': DEFAULT_TABLE_FONT_SIZE_PX,
     'status_font_size_px': DEFAULT_STATUS_FONT_SIZE_PX,
-    'session_tree_font_size_px': DEFAULT_SESSION_TREE_FONT_SIZE_PX,
-    'session_tree_row_height_px': DEFAULT_SESSION_TREE_ROW_HEIGHT_PX,
+    'tree_font_size_px': DEFAULT_TREE_FONT_SIZE_PX,
+    'tree_row_height_px': DEFAULT_TREE_ROW_HEIGHT_PX,
     'filter_edit_height': DEFAULT_FILTER_EDIT_HEIGHT,
-    'filter_edit_font_size': DEFAULT_FILTER_EDIT_FONT_SIZE,
+    'filter_edit_font_size_px': DEFAULT_FILTER_EDIT_FONT_SIZE_PX,
     'terminal_font_size_px': DEFAULT_TERMINAL_FONT_SIZE_PX,
     'terminal_font_size_min': DEFAULT_TERMINAL_FONT_SIZE_MIN,
     'terminal_font_size_max': DEFAULT_TERMINAL_FONT_SIZE_MAX,
@@ -56,10 +56,10 @@ _APPEARANCE_INT_BOUNDS: dict[str, tuple[int, int]] = {
     'ui_font_size_px': (8, 32),
     'table_font_size_px': (8, 32),
     'status_font_size_px': (8, 24),
-    'session_tree_font_size_px': (8, 32),
-    'session_tree_row_height_px': (18, 48),
+    'tree_font_size_px': (8, 32),
+    'tree_row_height_px': (18, 48),
     'filter_edit_height': (18, 48),
-    'filter_edit_font_size': (8, 32),
+    'filter_edit_font_size_px': (8, 32),
     'terminal_font_size_px': (8, 48),
     'terminal_font_size_min': (6, 32),
     'terminal_font_size_max': (8, 72),
