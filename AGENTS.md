@@ -33,7 +33,7 @@
 ## 验证
 
 ```powershell
-cd E:\codes\python\ykSSH
+# 在项目根目录执行
 pip install -r requirements.txt
 python -c "from ui.main_window import MainWindow"
 python main.py

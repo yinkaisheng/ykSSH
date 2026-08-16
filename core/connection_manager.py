@@ -21,7 +21,7 @@ from storage.host_key_store import HostKeyStore
 class ConnectionManager(QObject):
     """Maps terminal tab IDs to live SSH sessions."""
 
-    remote_list_updated = pyqtSignal(str)
+    remote_list_updated = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -84,7 +84,7 @@ class ConnectionManager(QObject):
             logger.warning(f'Remote list failed: tab_id={tab_id}, path={path}, error={exc}')
             return cache.get(path, [])
         cache[path] = entries
-        self.remote_list_updated.emit(tab_id)
+        self.remote_list_updated.emit(tab_id, path)
         return entries
 
     async def resolve_remote_path(self, tab_id: str, configured: str) -> str:

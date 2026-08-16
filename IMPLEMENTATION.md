@@ -46,7 +46,7 @@ loguru
 - **启动：**
 
 ```powershell
-cd E:\codes\python\ykSSH
+# 在项目根目录执行
 pip install -r requirements.txt
 python main.py
 ```
@@ -289,7 +289,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 
 1. `ConnectionManager.get_remote_list_callback(tab_id)` 返回同步回调
 2. 回调先读 `_remote_cache`；未命中则 `asyncio.create_task(refresh_remote_list)` 并返回空列表
-3. 异步完成后 emit `remote_list_updated(tab_id)` → 刷新当前 Tab 的 `RemoteFileTable`
+3. 异步完成后 emit `remote_list_updated(tab_id, path)` → 仅当活动 Tab 的远端面板仍显示该路径时刷新 `RemoteFileTable`
 
 **SFTP 操作桥接：** `SftpUiHandler` 接收 Table 的 signal（upload/download/delete/rename/mkdir），内部 `asyncio.create_task` 调用 `sftp_service`，完成后 `on_refresh_ui` 刷新文件列表。
 
@@ -314,7 +314,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
 - 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。
-- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。终端内的文件面板焦点快捷键由 `MainWindow.eventFilter` 本地拦截且不发送给远端 shell：`Ctrl+Alt+B` 优先切到当前 Tab 的远端文件 Table，断连等远端 Table 隐藏或禁用时回退到本地文件 Table；`Ctrl+;` 固定切到本地文件 Table；`Ctrl+'` 固定切到可用的远端文件 Table。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
+- 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。终端获得焦点时会优先接受 `ShortcutOverride`，因此未由 `MainWindow.eventFilter` 显式处理的应用级 QAction 快捷键（包括退出快捷键）不会触发，而会交给终端处理。终端内的文件面板焦点快捷键由 `MainWindow.eventFilter` 本地拦截且不发送给远端 shell：`Ctrl+Alt+B` 优先切到当前 Tab 的远端文件 Table，断连等远端 Table 隐藏或禁用时回退到本地文件 Table；`Ctrl+;` 固定切到本地文件 Table；`Ctrl+'` 固定切到可用的远端文件 Table。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
 
 #### 终端快捷键速查
@@ -467,7 +467,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
   "window": {
     "width": 1400,
     "height": 900,
-    "side_panel_width": 206,
+    "side_panel_width": 280,
     "vertical_splitter_ratio": 0.636,
     "border_width": 1,
     "title_bar_height": 32,
@@ -692,7 +692,7 @@ sequenceDiagram
     SSH-->>MainWindow: on_connected
     MainWindow->>MainWindow: _init_file_panel_for_session
     MainWindow->>ConnMgr: refresh_remote_list
-    ConnMgr-->>MainWindow: remote_list_updated
+    ConnMgr-->>MainWindow: remote_list_updated(tab_id, path)
     MainWindow->>Files: remote_file_panel.refresh()
 ```
 

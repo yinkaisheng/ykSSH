@@ -498,11 +498,11 @@ class MainWindow(QMainWindow):
     def _persist_remote_favorites_for_tab(self, tab_id: str) -> None:
         self._save_remote_favorites(tab_id, list(self._remote_favorites_for_tab(tab_id)))
 
-    def _on_remote_list_updated(self, tab_id: str) -> None:
+    def _on_remote_list_updated(self, tab_id: str, path: str) -> None:
         if self._active_tab_id != tab_id:
             return
         panel = self.file_panels.get_panel(tab_id)
-        if panel is not None:
+        if panel is not None and panel.remote_file_panel.current_path() == path:
             panel.remote_file_panel.refresh()
 
     def _on_local_path_changed_for_tab(self, tab_id: str, path: str) -> None:
@@ -580,10 +580,14 @@ class MainWindow(QMainWindow):
             self._save_session()
             await self._close_all_async()
             logger.info('Application close sequence done')
-            self._closing_after_transfer_confirm = True
-            self.close()
+        except Exception:
+            logger.exception('Application close sequence failed; forcing window close')
         finally:
-            self._close_in_progress = False
+            self._closing_after_transfer_confirm = True
+            try:
+                self.close()
+            finally:
+                self._close_in_progress = False
 
     def _refresh_file_panels_for_tab(self, tab_id: str) -> None:
         panel = self.file_panels.get_panel(tab_id)
@@ -896,7 +900,7 @@ class MainWindow(QMainWindow):
             self._active_tab_id = None
             index = self.terminal_tabs.currentIndex()
             if index >= 0:
-                new_tab_id = self.terminal_tabs._tab_ids.get(index)
+                new_tab_id = self.terminal_tabs.tab_id_at(index)
                 if new_tab_id is not None:
                     self._active_tab_id = new_tab_id
                     self.side_panel.set_active_history_tab(new_tab_id)
@@ -958,7 +962,7 @@ class MainWindow(QMainWindow):
             self.side_panel.set_active_history_tab(None)
             return
         self._save_active_tab_paths()
-        tab_id = self.terminal_tabs._tab_ids.get(index)
+        tab_id = self.terminal_tabs.tab_id_at(index)
         self._active_tab_id = tab_id
         if tab_id is None:
             self.file_panels.show_empty()

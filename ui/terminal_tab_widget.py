@@ -63,6 +63,10 @@ class TerminalTabWidget(QTabWidget):
     def get_terminal(self, tab_id: str) -> TerminalVTWidget | None:
         return self._terminals.get(tab_id)
 
+    def tab_id_at(self, index: int) -> str | None:
+        """Return the stable tab ID at *index*, if present."""
+        return self._tab_ids.get(index)
+
     def set_tab_title(self, tab_id: str, title: str) -> None:
         self._display_titles[tab_id] = title
         for index, stored_id in self._tab_ids.items():
