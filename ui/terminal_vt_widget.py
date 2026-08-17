@@ -8,6 +8,7 @@ import string
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPoint, QPointF, QRectF, QEvent
 from PyQt5.QtGui import (
@@ -45,6 +46,20 @@ from ui.theme import (
 import pyte  # type: ignore
 
 
+_PRIVATE_WORKING_DIRECTORY_OSC_PREFIX = "\x1b]777;ykssh-cwd;"
+_STANDARD_WORKING_DIRECTORY_OSC_PREFIX = "\x1b]7;"
+_WORKING_DIRECTORY_OSC_PREFIXES = (
+    _PRIVATE_WORKING_DIRECTORY_OSC_PREFIX,
+    _STANDARD_WORKING_DIRECTORY_OSC_PREFIX,
+)
+_SHELL_PROMPT_CWD_RE = re.compile(
+    r"(?:^|\s)[^\s@]+@[^\s:]+:(?P<path>/[^\r\n]*?)\s*[#$]\s*$"
+)
+_SHELL_PROMPT_READY_RE = re.compile(
+    r"(?:^|\s)[^\s@]+@[^\s:]+:[^\r\n]*[#$]\s*$"
+)
+
+
 @dataclass(frozen=True)
 class _Cell:
     ch: str
@@ -79,6 +94,7 @@ class TerminalVTWidget(QWidget):
     input_received = pyqtSignal(bytes)
     command_submitted = pyqtSignal(str, str, int)
     reconnect_requested = pyqtSignal()
+    working_directory_reported = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -125,6 +141,10 @@ class TerminalVTWidget(QWidget):
 
         # Handle escape sequences potentially split across packets
         self._esc_pending = ""
+        self._working_directory_osc_pending = ""
+        self._working_directory_path: str | None = None
+        self._working_directory_request_pending = False
+        self._restore_input_after_working_directory_report = False
         self._decset_re = re.compile(r"\x1b\[\?([0-9;]*)([hl])")
         self._tui_control_re = re.compile(r"\x1b\[[?]?[0-9;:<>]*[ABCDHJKSTfhhlr]")
         self._full_clear_re = re.compile(r"\x1b\[(?:0*2|0*3)J|\x1b\[H\x1b\[(?:0*2|0*3)J|\x1b\[(?:0*2|0*3)J\x1b\[H")
@@ -823,10 +843,32 @@ class TerminalVTWidget(QWidget):
     # -------------------------
     def set_reconnect_enabled(self, enabled: bool) -> None:
         """When enabled, Enter requests reconnect instead of sending CR to SSH."""
-        self._reconnect_enabled = bool(enabled)
+        enabled = bool(enabled)
+        if enabled:
+            self._working_directory_osc_pending = ''
+            self._working_directory_path = None
+            self._working_directory_request_pending = False
+            self._restore_input_after_working_directory_report = False
+        self._reconnect_enabled = enabled
 
     def is_reconnect_enabled(self) -> bool:
         return self._reconnect_enabled
+
+    def shell_prompt_ready(self) -> bool:
+        """Return whether the cursor is currently positioned after a shell prompt."""
+        if self._in_alt_screen or self._scroll_lines != 0 or self._pending_command_text:
+            return False
+        cursor = getattr(self.screen, 'cursor', None)
+        visible_y = self._cursor_y()
+        if cursor is None or visible_y is None:
+            return False
+        try:
+            cursor_x = max(0, int(getattr(cursor, 'x', 0)))
+        except Exception:
+            return False
+        return bool(_SHELL_PROMPT_READY_RE.search(
+            self._line_text(visible_y)[:cursor_x]
+        ))
 
     def write_text(self, text: str) -> None:
         if not self._is_alive():
@@ -834,6 +876,7 @@ class TerminalVTWidget(QWidget):
         self._process_input(text, record=True)
 
     def _process_input(self, text: str, record: bool) -> None:
+        text = self._extract_working_directory_reports(text)
         if not text:
             return
         t0 = time.perf_counter()
@@ -1001,6 +1044,132 @@ class TerminalVTWidget(QWidget):
         if self._debug_enabled:
             self._debug_dump_colored_numeric_cells()
 
+    @staticmethod
+    def _valid_working_directory(path: str) -> bool:
+        return bool(path.startswith('/')) and not any(
+            ord(char) < 32 or 0x7F <= ord(char) < 0xA0
+            for char in path
+        )
+
+    @staticmethod
+    def _working_directory_from_osc(prefix: str, payload: str) -> str | None:
+        if prefix == _PRIVATE_WORKING_DIRECTORY_OSC_PREFIX:
+            path = payload
+        else:
+            try:
+                uri = urlsplit(payload)
+            except ValueError:
+                return None
+            if uri.scheme.lower() != 'file':
+                return None
+            path = unquote(uri.path)
+        return path if TerminalVTWidget._valid_working_directory(path) else None
+
+    def _remember_working_directory(self, path: str) -> None:
+        if not self._valid_working_directory(path):
+            return
+        self._working_directory_path = path
+        if self._working_directory_request_pending:
+            self._working_directory_request_pending = False
+            self.working_directory_reported.emit(path)
+
+    @staticmethod
+    def _working_directory_from_prompt(prompt: str) -> str | None:
+        match = _SHELL_PROMPT_CWD_RE.search(prompt or '')
+        if match is None:
+            return None
+        path = match.group('path').rstrip()
+        return path if TerminalVTWidget._valid_working_directory(path) else None
+
+    def _capture_working_directory_from_prompt(self, prompt: str) -> None:
+        path = self._working_directory_from_prompt(prompt)
+        if path is not None:
+            self._remember_working_directory(path)
+
+    def _capture_working_directory_from_current_prompt(self) -> None:
+        if self._in_alt_screen or self._scroll_lines != 0:
+            return
+        cursor = getattr(self.screen, 'cursor', None)
+        if cursor is None:
+            return
+        try:
+            cursor_x = int(getattr(cursor, 'x', 0))
+        except Exception:
+            return
+        visible_y = self._cursor_y()
+        if visible_y is None:
+            return
+        if self._pending_command_start_y is not None:
+            visible_y = self._abs_y_to_visible_y(self._pending_command_start_y)
+            cursor_x = max(0, int(self._pending_command_start_x or 0))
+            _cols, rows = self._calc_cols_rows()
+            if visible_y < 0 or visible_y >= rows:
+                return
+        self._capture_working_directory_from_prompt(
+            self._line_text(visible_y)[:cursor_x]
+        )
+
+    @staticmethod
+    def _next_working_directory_osc(data: str, cursor: int) -> tuple[int, str] | None:
+        matches = (
+            (data.find(prefix, cursor), prefix)
+            for prefix in _WORKING_DIRECTORY_OSC_PREFIXES
+        )
+        found = [(start, prefix) for start, prefix in matches if start >= 0]
+        return min(found, default=None, key=lambda item: item[0])
+
+    def _extract_working_directory_reports(self, text: str) -> str:
+        """Remove cwd OSC reports from output and cache valid remote paths."""
+        data = self._working_directory_osc_pending + (text or '')
+        self._working_directory_osc_pending = ''
+        visible: list[str] = []
+        cursor = 0
+
+        while cursor < len(data):
+            found = self._next_working_directory_osc(data, cursor)
+            if found is None:
+                tail = data[cursor:]
+                keep = 0
+                max_prefix = min(
+                    len(tail),
+                    max(len(prefix) for prefix in _WORKING_DIRECTORY_OSC_PREFIXES) - 1,
+                )
+                for length in range(max_prefix, 0, -1):
+                    if any(
+                        tail.endswith(prefix[:length])
+                        for prefix in _WORKING_DIRECTORY_OSC_PREFIXES
+                        if length < len(prefix)
+                    ):
+                        keep = length
+                        break
+                if keep:
+                    visible.append(tail[:-keep])
+                    self._working_directory_osc_pending = tail[-keep:]
+                else:
+                    visible.append(tail)
+                break
+
+            start, prefix = found
+            visible.append(data[cursor:start])
+            payload_start = start + len(prefix)
+            bel_end = data.find('\x07', payload_start)
+            st_end = data.find('\x1b\\', payload_start)
+            terminators = [(end, size) for end, size in ((bel_end, 1), (st_end, 2)) if end >= 0]
+            if not terminators:
+                self._working_directory_osc_pending = data[start:]
+                break
+
+            end, terminator_size = min(terminators, key=lambda item: item[0])
+            path = self._working_directory_from_osc(prefix, data[payload_start:end])
+            if path is not None:
+                self._remember_working_directory(path)
+            if self._restore_input_after_working_directory_report:
+                self._restore_input_after_working_directory_report = False
+                self.input_received.emit(b'\x19')
+            cursor = end + terminator_size
+
+        return ''.join(visible)
+
     def _answer_terminal_queries(self, data: str) -> str:
         """
         Respond to terminal status queries commonly emitted by TUI frameworks.
@@ -1140,6 +1309,10 @@ class TerminalVTWidget(QWidget):
         self.stream = self._main_stream
 
         self._esc_pending = ""
+        self._working_directory_osc_pending = ""
+        self._working_directory_path = None
+        self._working_directory_request_pending = False
+        self._restore_input_after_working_directory_report = False
         self._app_cursor_keys = False
         self._bracketed_paste_mode = False
         self._mouse_track_1000 = False
@@ -2378,6 +2551,11 @@ class TerminalVTWidget(QWidget):
             self._pending_command_start_x = int(getattr(cursor, "x", 0)) if cursor is not None else 0
         except Exception:
             self._pending_command_start_x = 0
+        visible_y = self._cursor_y()
+        if visible_y is not None:
+            self._capture_working_directory_from_prompt(
+                self._line_text(visible_y)[:max(0, int(self._pending_command_start_x or 0))]
+            )
 
     def _commit_command_start(self, *, check_continuation: bool = False) -> None:
         if self._in_alt_screen:
@@ -2520,6 +2698,25 @@ class TerminalVTWidget(QWidget):
         self._pending_command_history_forced = False
         self.input_received.emit(b'\x01\x0b')
         self.send_command_text(f'cd -- {shlex.quote(path)}', execute=True)
+
+    def request_working_directory(self) -> None:
+        """Report a passively learned cwd, falling back to an interactive query."""
+        self._capture_working_directory_from_current_prompt()
+        if self._working_directory_path is not None:
+            self.working_directory_reported.emit(self._working_directory_path)
+            return
+        if self._in_alt_screen or self._reconnect_enabled:
+            return
+        self._prepare_for_terminal_input()
+        self._working_directory_request_pending = True
+        self._restore_input_after_working_directory_report = bool(
+            self._pending_command_text
+        )
+        command = (
+            b"\x01\x0b printf '\\033[1A\\033[2K\\r\\033]777;ykssh-cwd;%s\\007' "
+            b'"$PWD"\r'
+        )
+        self.input_received.emit(command)
 
     def scroll_to_command(self, command: str, sent_at: str, command_start_row: int = -1) -> bool:
         rows_count = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)

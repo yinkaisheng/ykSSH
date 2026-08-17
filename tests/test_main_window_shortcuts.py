@@ -9,10 +9,11 @@ from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtGui import QKeyEvent
+from PyQt5.QtGui import QColor, QKeyEvent, QPalette
 from PyQt5.QtWidgets import QApplication, QLineEdit
 
 from ui.main_window import MainWindow
+from ui.theme import get_theme_palette
 
 
 class MainWindowShortcutTests(unittest.TestCase):
@@ -61,6 +62,19 @@ class MainWindowShortcutTests(unittest.TestCase):
         terminal.keyPressEvent(clear_event)
         self.assertEqual(emitted, [b'\x0c'])
 
+        window.hide()
+        window.deleteLater()
+        self.app.processEvents()
+
+    def test_side_panel_filter_placeholder_uses_theme_secondary_text(self) -> None:
+        with patch.object(MainWindow, '_restore_session'):
+            window = MainWindow()
+        window._apply_appearance()
+
+        expected = QColor(get_theme_palette(window._current_theme()).text_secondary)
+        actual = window.side_panel._filter_edit.palette().color(QPalette.PlaceholderText)
+
+        self.assertEqual(actual, expected)
         window.hide()
         window.deleteLater()
         self.app.processEvents()
@@ -251,6 +265,50 @@ class MainWindowShortcutTests(unittest.TestCase):
         with patch.object(terminal, 'change_directory') as change_directory:
             panel.remote_file_panel.table.terminal_path_change_requested.emit('/srv/project')
         change_directory.assert_called_once_with('/srv/project')
+
+        with patch.object(terminal, 'request_working_directory') as request_path:
+            panel.remote_file_panel.table.terminal_path_requested.emit()
+        request_path.assert_not_called()
+
+        with patch.object(
+            window.connection_manager,
+            'get_session',
+            return_value=object(),
+        ), patch.object(terminal, 'request_working_directory') as request_path:
+            panel.remote_file_panel.table.terminal_path_requested.emit()
+        request_path.assert_called_once_with()
+
+        panel.remote_file_panel.set_list_callback(lambda _path: [])
+        terminal.working_directory_reported.emit('/var/www')
+        self.assertEqual(panel.remote_file_panel.current_path(), '/var/www')
+        window.hide()
+        window.deleteLater()
+        self.app.processEvents()
+
+    def test_terminal_paths_are_isolated_between_two_tabs(self) -> None:
+        with patch.object(MainWindow, '_restore_session'):
+            window = MainWindow()
+        tab_a, terminal_a = window.terminal_tabs.add_terminal_tab('A', tab_id='tab-a')
+        tab_b, terminal_b = window.terminal_tabs.add_terminal_tab('B', tab_id='tab-b')
+        panel_a = window.file_panels.create_panel(tab_a)
+        panel_b = window.file_panels.create_panel(tab_b)
+        window._register_files_panel(tab_a, panel_a)
+        window._register_files_panel(tab_b, panel_b)
+        panel_a.remote_file_panel.set_list_callback(lambda _path: [])
+        panel_b.remote_file_panel.set_list_callback(lambda _path: [])
+        terminal_a._working_directory_path = '/srv/tab-a'
+        terminal_b._working_directory_path = '/srv/tab-b'
+
+        with patch.object(
+            window.connection_manager,
+            'get_session',
+            side_effect=lambda tab_id: object() if tab_id in {tab_a, tab_b} else None,
+        ):
+            panel_a.remote_file_panel.table.terminal_path_requested.emit()
+            panel_b.remote_file_panel.table.terminal_path_requested.emit()
+
+        self.assertEqual(panel_a.remote_file_panel.current_path(), '/srv/tab-a')
+        self.assertEqual(panel_b.remote_file_panel.current_path(), '/srv/tab-b')
         window.hide()
         window.deleteLater()
         self.app.processEvents()

@@ -18,6 +18,11 @@ from storage.credential_store import CredentialStore
 from storage.host_key_store import HostKeyStore
 
 
+_INITIAL_SHELL_IDLE_SECONDS = 0.5
+_INITIAL_SHELL_PROMPT_TIMEOUT_SECONDS = 5.0
+_INITIAL_SHELL_IDLE_TIMEOUT_SECONDS = 1.0
+
+
 class ConnectionManager(QObject):
     """Maps terminal tab IDs to live SSH sessions."""
 
@@ -106,10 +111,23 @@ class ConnectionManager(QObject):
         path = (remote_path or '').strip()
         if not path or tab_id not in self._sessions:
             return
-        # Brief delay so login banner / first prompt can settle.
-        await asyncio.sleep(0.15)
         ssh = self._sessions.get(tab_id)
-        if ssh is None:
+        terminal = self._terminals.get(tab_id)
+        if ssh is None or terminal is None:
+            return
+        prompt_ready = await ssh.wait_for_shell_ready(
+            terminal.shell_prompt_ready,
+            timeout_seconds=_INITIAL_SHELL_PROMPT_TIMEOUT_SECONDS,
+        )
+        if not prompt_ready:
+            await ssh.wait_for_output_idle(
+                idle_seconds=_INITIAL_SHELL_IDLE_SECONDS,
+                timeout_seconds=_INITIAL_SHELL_IDLE_TIMEOUT_SECONDS,
+            )
+        if (
+            self._sessions.get(tab_id) is not ssh
+            or self._terminals.get(tab_id) is not terminal
+        ):
             return
         # write() no-ops when the shell process is already gone
         ssh.write(f'cd {shlex.quote(path)}\r'.encode('utf-8'))

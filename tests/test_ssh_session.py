@@ -104,6 +104,9 @@ class _FakeTerminal:
     def write_text(self, text: str) -> None:
         self.output.append(text)
 
+    def shell_prompt_ready(self) -> bool:
+        return True
+
 
 class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
@@ -136,6 +139,71 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
                     await connection.acquire('test-tab')
 
             probe.assert_awaited_once_with('example.com', 2222)
+
+    async def test_wait_for_output_idle_restarts_after_output_activity(self) -> None:
+        session = SSHSession('tab-a')
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        wait_task = asyncio.create_task(session.wait_for_output_idle(
+            idle_seconds=0.03,
+            timeout_seconds=0.2,
+        ))
+
+        await asyncio.sleep(0.015)
+        session._output_activity.set()
+        await wait_task
+
+        self.assertGreaterEqual(loop.time() - started_at, 0.04)
+
+    async def test_wait_for_shell_ready_rechecks_after_output_activity(self) -> None:
+        session = SSHSession('tab-a')
+        ready = False
+        wait_task = asyncio.create_task(session.wait_for_shell_ready(
+            lambda: ready,
+            timeout_seconds=0.2,
+        ))
+
+        await asyncio.sleep(0)
+        ready = True
+        session._output_activity.set()
+
+        self.assertTrue(await wait_task)
+
+    async def test_cd_shell_waits_for_prompt_before_single_write(self) -> None:
+        manager = ConnectionManager(credential_store=Mock())
+        ssh = Mock()
+        terminal = Mock()
+        terminal.shell_prompt_ready.return_value = True
+        ssh.wait_for_shell_ready = AsyncMock(return_value=True)
+        ssh.wait_for_output_idle = AsyncMock()
+        manager._sessions['tab-a'] = ssh
+        manager._terminals['tab-a'] = terminal
+
+        await manager.cd_shell('tab-a', '/mnt/sdb/yks')
+
+        ssh.wait_for_shell_ready.assert_awaited_once_with(
+            terminal.shell_prompt_ready,
+            timeout_seconds=5.0,
+        )
+        ssh.wait_for_output_idle.assert_not_awaited()
+        ssh.write.assert_called_once_with(b'cd /mnt/sdb/yks\r')
+
+    async def test_cd_shell_uses_idle_fallback_after_prompt_timeout(self) -> None:
+        manager = ConnectionManager(credential_store=Mock())
+        ssh = Mock()
+        terminal = Mock()
+        ssh.wait_for_shell_ready = AsyncMock(return_value=False)
+        ssh.wait_for_output_idle = AsyncMock()
+        manager._sessions['tab-a'] = ssh
+        manager._terminals['tab-a'] = terminal
+
+        await manager.cd_shell('tab-a', '/srv/project')
+
+        ssh.wait_for_output_idle.assert_awaited_once_with(
+            idle_seconds=0.5,
+            timeout_seconds=1.0,
+        )
+        ssh.write.assert_called_once_with(b'cd /srv/project\r')
 
     async def test_trusted_key_is_passed_directly_to_real_connection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

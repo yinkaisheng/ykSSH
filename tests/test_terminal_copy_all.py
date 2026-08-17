@@ -104,6 +104,173 @@ class TerminalCopyAllTests(unittest.TestCase):
         self.assertNotIn(7, [row for _command, row in submitted])
         self.assertEqual([command for command, _row in submitted], ['cd -- /srv/project'])
 
+    def test_working_directory_report_handles_split_osc_without_displaying_it(self) -> None:
+        screen = pyte.HistoryScreen(40, 4, history=20)  # type: ignore[attr-defined]
+        stream = pyte.Stream(screen)  # type: ignore[attr-defined]
+        self.widget._main_screen = screen
+        self.widget._main_stream = stream
+        self.widget.screen = screen
+        self.widget.stream = stream
+        paths: list[str] = []
+        self.widget.working_directory_reported.connect(paths.append)
+
+        self.widget.write_text('before\r\n\x1b]777;ykssh-')
+        self.widget.write_text('cwd;/srv/hello world\x07after')
+
+        self.assertEqual(paths, [])
+        visible = '\n'.join(
+            self.widget._line_text(row)
+            for row in range(int(getattr(self.widget.screen, 'lines', 0)))
+        )
+        self.assertIn('before', visible)
+        self.assertIn('after', visible)
+        self.assertNotIn('ykssh-cwd', visible)
+
+        emitted: list[bytes] = []
+        self.widget.input_received.connect(emitted.append)
+        self.widget.request_working_directory()
+
+        self.assertEqual(paths, ['/srv/hello world'])
+        self.assertEqual(emitted, [])
+
+    def test_standard_osc_7_is_cached_decoded_and_removed_from_output(self) -> None:
+        screen = pyte.HistoryScreen(50, 4, history=20)  # type: ignore[attr-defined]
+        stream = pyte.Stream(screen)  # type: ignore[attr-defined]
+        self.widget._main_screen = screen
+        self.widget._main_stream = stream
+        self.widget.screen = screen
+        self.widget.stream = stream
+        paths: list[str] = []
+        emitted: list[bytes] = []
+        self.widget.working_directory_reported.connect(paths.append)
+        self.widget.input_received.connect(emitted.append)
+
+        self.widget.write_text('before\x1b]7;file://remote/srv/hello%20')
+        self.widget.write_text('world\x1b\\after')
+        self.widget.request_working_directory()
+
+        self.assertEqual(paths, ['/srv/hello world'])
+        self.assertEqual(emitted, [])
+        visible = '\n'.join(
+            self.widget._line_text(row)
+            for row in range(int(getattr(self.widget.screen, 'lines', 0)))
+        )
+        self.assertIn('before', visible)
+        self.assertIn('after', visible)
+        self.assertNotIn('file://', visible)
+
+    def test_prompt_path_cache_avoids_terminal_input_for_multiline_command(self) -> None:
+        screen = pyte.HistoryScreen(80, 4, history=20)  # type: ignore[attr-defined]
+        stream = pyte.Stream(screen)  # type: ignore[attr-defined]
+        stream.feed('hy@ps:/mnt/sdb/yks$ ')
+        self.widget._main_screen = screen
+        self.widget._main_stream = stream
+        self.widget.screen = screen
+        self.widget.stream = stream
+        emitted: list[bytes] = []
+        paths: list[str] = []
+        self.widget.input_received.connect(emitted.append)
+        self.widget.working_directory_reported.connect(paths.append)
+
+        self.widget._append_pending_command_text('ls \\\n-lh')
+        self.widget.request_working_directory()
+
+        self.assertEqual(paths, ['/mnt/sdb/yks'])
+        self.assertEqual(emitted, [])
+        self.assertEqual(self.widget._pending_command_text, 'ls \\\n-lh')
+
+    def test_root_prompt_path_is_recognized(self) -> None:
+        self.assertEqual(
+            self.widget._working_directory_from_prompt('root@host:/var/lib/app# '),
+            '/var/lib/app',
+        )
+
+    def test_shell_prompt_ready_distinguishes_banner_from_prompt(self) -> None:
+        screen = pyte.HistoryScreen(80, 4, history=20)  # type: ignore[attr-defined]
+        stream = pyte.Stream(screen)  # type: ignore[attr-defined]
+        self.widget._main_screen = screen
+        self.widget._main_stream = stream
+        self.widget.screen = screen
+        self.widget.stream = stream
+
+        stream.feed('Maintenance window #')
+        self.assertFalse(self.widget.shell_prompt_ready())
+
+        stream.feed('\r\nhy@st-Rack-Server:~$ ')
+        self.assertTrue(self.widget.shell_prompt_ready())
+
+    def test_alt_screen_uses_cached_path_without_active_query(self) -> None:
+        emitted: list[bytes] = []
+        paths: list[str] = []
+        self.widget.input_received.connect(emitted.append)
+        self.widget.working_directory_reported.connect(paths.append)
+        self.widget._in_alt_screen = True
+
+        self.widget.request_working_directory()
+        self.assertEqual(emitted, [])
+        self.assertEqual(paths, [])
+
+        self.widget._working_directory_path = '/srv/cached'
+        self.widget.request_working_directory()
+        self.assertEqual(emitted, [])
+        self.assertEqual(paths, ['/srv/cached'])
+
+    def test_reconnect_state_does_not_query_working_directory(self) -> None:
+        emitted: list[bytes] = []
+        self.widget.input_received.connect(emitted.append)
+        self.widget.set_reconnect_enabled(True)
+
+        self.widget.request_working_directory()
+
+        self.assertEqual(emitted, [])
+
+    def test_disconnect_clears_cached_working_directory(self) -> None:
+        emitted: list[bytes] = []
+        self.widget.input_received.connect(emitted.append)
+        self.widget._working_directory_path = '/srv/old-connection'
+
+        self.widget.set_reconnect_enabled(True)
+        self.widget.set_reconnect_enabled(False)
+        self.widget.request_working_directory()
+
+        self.assertEqual(
+            emitted,
+            [
+                b"\x01\x0b printf '\\033[1A\\033[2K\\r\\033]777;ykssh-cwd;%s\\007' "
+                b'"$PWD"\r',
+            ],
+        )
+
+    def test_request_working_directory_restores_pending_input_after_report(self) -> None:
+        emitted: list[bytes] = []
+        self.widget.input_received.connect(emitted.append)
+        self.widget._pending_command_text = 'unfinished'
+
+        self.widget.request_working_directory()
+
+        self.assertEqual(
+            emitted,
+            [
+                b"\x01\x0b printf '\\033[1A\\033[2K\\r\\033]777;ykssh-cwd;%s\\007' "
+                b'"$PWD"\r',
+            ],
+        )
+        self.assertEqual(self.widget._pending_command_text, 'unfinished')
+
+        self.widget.write_text('\x1b]777;ykssh-cwd;/srv/project\x07')
+
+        self.assertEqual(emitted[-1], b'\x19')
+        self.assertEqual(self.widget._pending_command_text, 'unfinished')
+
+    def test_request_working_directory_does_not_yank_old_input_when_line_is_empty(self) -> None:
+        emitted: list[bytes] = []
+        self.widget.input_received.connect(emitted.append)
+
+        self.widget.request_working_directory()
+        self.widget.write_text('\x1b]777;ykssh-cwd;/srv/project\x07')
+
+        self.assertEqual(len(emitted), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

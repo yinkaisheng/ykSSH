@@ -131,6 +131,7 @@ class RemoteFileTable(_BaseFileTable):
     properties_requested = pyqtSignal(list, object)
     terminal_text_requested = pyqtSignal(str)
     terminal_path_change_requested = pyqtSignal(str)
+    terminal_path_requested = pyqtSignal()
     PEER_FOCUS_KEY = Qt.Key_Left
 
     def __init__(self, parent: QWidget = None) -> None:
@@ -240,6 +241,11 @@ class RemoteFileTable(_BaseFileTable):
                 menu.addAction(tr('file.change_terminal_path_to_this'), self._change_terminal_path),
                 Qt.Key_Q,
             )
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.go_to_terminal_path'), self.terminal_path_requested.emit),
+                Qt.Key_W,
+            )
             menu.addSeparator()
             add_menu_key(
                 menu,
@@ -267,6 +273,11 @@ class RemoteFileTable(_BaseFileTable):
                 menu,
                 menu.addAction(tr('file.change_terminal_path_to_this'), self._change_terminal_path),
                 Qt.Key_Q,
+            )
+            add_menu_key(
+                menu,
+                menu.addAction(tr('file.go_to_terminal_path'), self.terminal_path_requested.emit),
+                Qt.Key_W,
             )
         exec_menu(menu, self.viewport().mapToGlobal(pos))
 

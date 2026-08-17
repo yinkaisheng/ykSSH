@@ -50,6 +50,7 @@ from ui.terminal_tab_widget import TerminalTabWidget
 from ui.terminal_vt_widget import TerminalVTWidget
 from ui.window_title_bar import WindowTitleBar
 from ui.theme import (
+    apply_app_font,
     apply_app_theme,
     apply_main_window_border,
     apply_window_title_bar,
@@ -372,6 +373,14 @@ class MainWindow(QMainWindow):
         panel.remote_file_panel.table.terminal_path_change_requested.connect(
             lambda path, tid=tab_id: self._change_terminal_path_for_tab(tid, path),
         )
+        panel.remote_file_panel.table.terminal_path_requested.connect(
+            lambda tid=tab_id: self._request_terminal_path_for_tab(tid),
+        )
+        terminal = self.terminal_tabs.get_terminal(tab_id)
+        if terminal is not None:
+            terminal.working_directory_reported.connect(
+                lambda path, tid=tab_id: self._set_remote_path_for_tab(tid, path),
+            )
         panel.local_file_panel.path_changed.connect(
             lambda path, tid=tab_id: self._on_local_path_changed_for_tab(tid, path),
         )
@@ -651,6 +660,22 @@ class MainWindow(QMainWindow):
         terminal.change_directory(path)
         terminal.setFocus(Qt.OtherFocusReason)
 
+    def _request_terminal_path_for_tab(self, tab_id: str) -> None:
+        terminal = self.terminal_tabs.get_terminal(tab_id)
+        if (
+            terminal is None
+            or not self._terminal_is_alive(terminal)
+            or self.connection_manager.get_session(tab_id) is None
+        ):
+            return
+        terminal.request_working_directory()
+
+    def _set_remote_path_for_tab(self, tab_id: str, path: str) -> None:
+        panel = self.file_panels.get_panel(tab_id)
+        if panel is None:
+            return
+        panel.remote_file_panel.set_path(path)
+
     def _jump_to_active_terminal_command(self, command: str, sent_at: str, command_start_row: int) -> None:
         terminal = self.terminal_tabs.get_current_terminal()
         if terminal is None or not self._terminal_is_alive(terminal):
@@ -864,10 +889,18 @@ class MainWindow(QMainWindow):
             tab_id,
             session_item.remote_path,
         )
-        if self.file_panels.get_panel(tab_id) is None:
+        if (
+            self.file_panels.get_panel(tab_id) is not panel
+            or self.connection_manager.get_session(tab_id) is None
+        ):
             return
         if (session_item.remote_path or '').strip():
             await self.connection_manager.cd_shell(tab_id, remote_path)
+        if (
+            self.file_panels.get_panel(tab_id) is not panel
+            or self.connection_manager.get_session(tab_id) is None
+        ):
+            return
         if handler.try_init_session_paths(local_path, remote_path, remote_home):
             panel.local_file_panel.set_path(local_path)
             panel.remote_file_panel.set_path(remote_path)
@@ -878,7 +911,11 @@ class MainWindow(QMainWindow):
             handler.set_remote_dir(remote_dir)
             panel.remote_file_panel.set_path(remote_dir)
             await self.connection_manager.refresh_remote_list(tab_id, remote_dir)
-        if self._active_tab_id != tab_id or self.file_panels.get_panel(tab_id) is None:
+        if (
+            self._active_tab_id != tab_id
+            or self.file_panels.get_panel(tab_id) is not panel
+            or self.connection_manager.get_session(tab_id) is None
+        ):
             return
         self._attach_file_panel(tab_id)
         panel.remote_file_panel.refresh()
@@ -989,6 +1026,7 @@ class MainWindow(QMainWindow):
         appearance = self._appearance()
         family = normalize_terminal_font_family(appearance.terminal_font_family)
         size_px = normalize_terminal_font_size(appearance.terminal_font_size_px)
+        apply_app_font(app)
         apply_app_theme(
             app,
             self._current_theme(),
@@ -1023,6 +1061,7 @@ class MainWindow(QMainWindow):
         try:
             save_app_preferences(
                 theme=settings.theme,
+                ui_font_size_px=settings.ui_font_size_px,
                 terminal_font_family=settings.family,
                 terminal_font_size_px=settings.size,
                 language=settings.language,
@@ -1041,6 +1080,7 @@ class MainWindow(QMainWindow):
         prompt_app_settings(
             self,
             self._current_theme(),
+            appearance.ui_font_size_px,
             appearance.terminal_font_size_px,
             appearance.terminal_font_family,
             get_app_config().language,

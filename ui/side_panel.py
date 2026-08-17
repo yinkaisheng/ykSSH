@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QKeyEvent
+from PyQt5.QtGui import QColor, QFont, QKeyEvent, QPalette
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -41,6 +41,7 @@ from ui.favorite_tree_widget import (
     ROLE_TYPE,
 )
 from ui.session_dialog import SessionDialog
+from ui.theme import get_theme_palette, normalize_theme_name
 
 
 DRAWER_SESSIONS = 'sessions'
@@ -1240,6 +1241,13 @@ class SidePanel(QWidget):
         filter_font.setPixelSize(appearance.filter_edit_font_size_px)
         self._filter_edit.setFont(filter_font)
         self._filter_edit.setFixedHeight(appearance.filter_edit_height)
+        filter_palette = self._filter_edit.palette()
+        theme_palette = get_theme_palette(normalize_theme_name(appearance.theme))
+        filter_palette.setColor(
+            QPalette.PlaceholderText,
+            QColor(theme_palette.text_secondary),
+        )
+        self._filter_edit.setPalette(filter_palette)
 
     def _refresh_tooltips(self, item: QTreeWidgetItem | None = None) -> None:
         if item is None:

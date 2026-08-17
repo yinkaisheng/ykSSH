@@ -548,6 +548,7 @@ def get_setting(key: str, default: Any = None) -> Any:
 def save_app_preferences(
     *,
     theme: str,
+    ui_font_size_px: int,
     terminal_font_family: str,
     terminal_font_size_px: int,
     language: str,
@@ -560,7 +561,7 @@ def save_app_preferences(
     current = cfg.appearance
     appearance = _normalize_appearance({
         'theme': theme,
-        'ui_font_size_px': current.ui_font_size_px,
+        'ui_font_size_px': ui_font_size_px,
         'table_font_size_px': current.table_font_size_px,
         'status_font_size_px': current.status_font_size_px,
         'tree_font_size_px': current.tree_font_size_px,

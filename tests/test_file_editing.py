@@ -14,7 +14,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtGui import QKeyEvent
-from PyQt5.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox, QSpinBox, QWidget
+from PyQt5.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QSpinBox, QWidget
 
 from ui.file_edit_manager import FileEditManager, _RemoteEditSession
 from ui.file_panel.local_table import LocalFileTable
@@ -353,8 +353,10 @@ class FileTableEditShortcutTests(unittest.TestCase):
         pos = table.visualItemRect(item).center()
         emitted: list[str] = []
         changed_paths: list[str] = []
+        terminal_path_requests: list[bool] = []
         table.terminal_text_requested.connect(emitted.append)
         table.terminal_path_change_requested.connect(changed_paths.append)
+        table.terminal_path_requested.connect(lambda: terminal_path_requests.append(True))
         captured = {}
 
         def capture_menu(menu, _global_pos):
@@ -384,6 +386,16 @@ class FileTableEditShortcutTests(unittest.TestCase):
         )
         captured[Qt.Key_Q].trigger()
         self.assertEqual(changed_paths, ['/srv/project'])
+        self.assertEqual(
+            captured[Qt.Key_W].text().split('\t')[0],
+            'Go to Terminal Path',
+        )
+        captured[Qt.Key_W].trigger()
+        self.assertEqual(terminal_path_requests, [True])
+
+        actions = captured['actions']
+        change_index = actions.index(captured[Qt.Key_Q])
+        self.assertIs(actions[change_index + 1], captured[Qt.Key_W])
 
     def test_remote_terminal_text_actions_reject_control_characters(self) -> None:
         table = RemoteFileTable()
@@ -657,6 +669,7 @@ class FileTableEditShortcutTests(unittest.TestCase):
             result = prompt_app_settings(
                 None,
                 'dark',
+                14,
                 22,
                 'Consolas',
                 'en',
@@ -668,10 +681,48 @@ class FileTableEditShortcutTests(unittest.TestCase):
         dialog = captured[0]
         editor_edit = dialog.findChild(QLineEdit, 'DefaultEditorPathEdit')
         size_spin = dialog.findChild(QSpinBox, 'RemoteEditLargeFileSpin')
+        ui_size_spin = dialog.findChild(QSpinBox, 'UiFontSizeSpin')
+        config_hint = dialog.findChild(QLabel, 'SettingsConfigFileHint')
         self.assertIsNotNone(editor_edit)
         self.assertIsNotNone(size_spin)
+        self.assertIsNotNone(ui_size_spin)
+        self.assertIsNotNone(config_hint)
         self.assertEqual(editor_edit.text(), r'C:\Tools\editor.exe')
         self.assertEqual(size_spin.value(), 25)
+        self.assertEqual(ui_size_spin.value(), 14)
+        self.assertIn('config/config.json', config_hint.text())
+
+    def test_settings_dialog_saves_ui_font_size(self) -> None:
+        saved = []
+
+        def create_dialog(parent, title, *, min_width=400):
+            dialog = QDialog(parent)
+            dialog.setWindowTitle(title)
+            dialog.setMinimumWidth(min_width)
+
+            def update_and_accept() -> None:
+                dialog.findChild(QSpinBox, 'UiFontSizeSpin').setValue(19)
+                dialog.accept()
+
+            QTimer.singleShot(0, update_and_accept)
+            return dialog
+
+        with patch('ui.settings_dialog.create_dialog', side_effect=create_dialog):
+            result = prompt_app_settings(
+                None,
+                'dark',
+                14,
+                22,
+                'Consolas',
+                'en',
+                '',
+                25,
+                on_save=saved.append,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.ui_font_size_px, 19)
+        self.assertEqual([settings.ui_font_size_px for settings in saved], [19])
 
     def test_editor_config_normalizes_path_and_threshold(self) -> None:
         normalized = _normalize_editor({

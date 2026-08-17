@@ -267,6 +267,7 @@ class SSHSession(QObject):
         self._process: asyncssh.SSHClientProcess | None = None
         self._sftp: asyncssh.SFTPClient | None = None
         self._read_task: asyncio.Task | None = None
+        self._output_activity = asyncio.Event()
         self._disconnect_lock = asyncio.Lock()
         self._aborted = False
         self._session_item: SessionItem | None = None
@@ -314,6 +315,7 @@ class SSHSession(QObject):
         self._connection = connection
         self._cols = cols
         self._rows = rows
+        self._output_activity.clear()
 
         try:
             conn = await connection.acquire(self.tab_id)
@@ -415,6 +417,7 @@ class SSHSession(QObject):
                 data = await self._process.stdout.read(4096)
                 if not data:
                     break
+                self._output_activity.set()
                 self.data_received.emit(data)
         except asyncio.CancelledError:
             cancelled = True
@@ -427,6 +430,53 @@ class SSHSession(QObject):
                 await self.disconnect()
             if self._read_task is asyncio.current_task():
                 self._read_task = None
+
+    async def wait_for_output_idle(
+        self,
+        *,
+        idle_seconds: float,
+        timeout_seconds: float,
+    ) -> None:
+        """Wait until shell output stays quiet, bounded by an overall timeout."""
+        idle_seconds = max(0.0, float(idle_seconds))
+        timeout_seconds = max(0.0, float(timeout_seconds))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while idle_seconds > 0:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return
+            self._output_activity.clear()
+            try:
+                await asyncio.wait_for(
+                    self._output_activity.wait(),
+                    timeout=min(idle_seconds, remaining),
+                )
+            except asyncio.TimeoutError:
+                return
+
+    async def wait_for_shell_ready(
+        self,
+        ready: Callable[[], bool],
+        *,
+        timeout_seconds: float,
+    ) -> bool:
+        """Wait for output processing to expose the first interactive prompt."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(timeout_seconds))
+        while True:
+            if ready():
+                return True
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            self._output_activity.clear()
+            if ready():
+                return True
+            try:
+                await asyncio.wait_for(self._output_activity.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return bool(ready())
 
     def write(self, data: bytes) -> None:
         if self._process is None or self._process.stdin is None:

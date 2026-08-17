@@ -18,3 +18,7 @@ class TerminalPort(Protocol):
     def write_text(self, text: str) -> None:
         """Feed decoded SSH output into the terminal."""
         ...
+
+    def shell_prompt_ready(self) -> bool:
+        """Return whether the current terminal line looks like an idle shell prompt."""
+        ...

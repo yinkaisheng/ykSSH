@@ -12,6 +12,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt5.QtWidgets import QApplication
 
 from core.connection_manager import ConnectionManager
+from models.session_item import SessionItem
 from ui.main_window import MainWindow
 from ui.terminal_tab_widget import TerminalTabWidget
 
@@ -70,6 +71,38 @@ class ReviewFollowupAsyncTests(unittest.IsolatedAsyncioTestCase):
             await manager.refresh_remote_list('tab-a', '/srv/project')
 
         self.assertEqual(updates, [('tab-a', '/srv/project')])
+
+    async def test_file_panel_init_stops_when_tab_closes_during_shell_wait(self) -> None:
+        panel = object()
+        panels = SimpleNamespace(get_panel=Mock(return_value=panel))
+        handler = Mock()
+        connection_manager = SimpleNamespace(
+            get_session=Mock(return_value=object()),
+            resolve_remote_path=AsyncMock(side_effect=['/home/user', '/srv/project']),
+            cd_shell=AsyncMock(),
+        )
+
+        async def close_tab_during_wait(_tab_id: str, _path: str) -> None:
+            panels.get_panel.return_value = None
+            connection_manager.get_session.return_value = None
+
+        connection_manager.cd_shell.side_effect = close_tab_during_wait
+        window = SimpleNamespace(
+            file_panels=panels,
+            connection_manager=connection_manager,
+            _ensure_sftp_handler=Mock(return_value=handler),
+            _active_tab_id='tab-a',
+        )
+
+        with patch('ui.main_window.resolve_local_path', return_value='/tmp'):
+            await MainWindow._init_file_panel_for_session(
+                window,
+                'tab-a',
+                SessionItem(remote_path='/srv/project'),
+            )
+
+        connection_manager.cd_shell.assert_awaited_once_with('tab-a', '/srv/project')
+        handler.try_init_session_paths.assert_not_called()
 
     async def test_finish_close_closes_window_after_cleanup_failure(self) -> None:
         window = SimpleNamespace(

@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
     QVBoxLayout,
@@ -18,6 +19,7 @@ from PyQt5.QtWidgets import (
 
 from i18n import get_language, list_languages, register_retranslator, tr, unregister_retranslator
 from storage.app_config import get_app_config
+from storage.appearance_defaults import UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN
 from ui.dialog_common import (
     add_form_field,
     create_dialog,
@@ -40,6 +42,7 @@ from ui.widgets import ArrowComboBox, GlyphSpinBox
 @dataclass(frozen=True)
 class AppSettings:
     theme: ThemeName
+    ui_font_size_px: int
     size: int
     family: str
     language: str
@@ -59,6 +62,7 @@ def _select_body_font_family(combo: ArrowComboBox, family: str) -> None:
 def prompt_app_settings(
     parent: QWidget,
     current_theme: str,
+    current_ui_font_size_px: int,
     current_size: int,
     current_family: str,
     current_language: str,
@@ -71,6 +75,7 @@ def prompt_app_settings(
     dialog = create_dialog(parent, tr('settings.title'), min_width=min_width)
     initial = AppSettings(
         theme=normalize_theme_name(current_theme),
+        ui_font_size_px=current_ui_font_size_px,
         size=current_size,
         family=normalize_terminal_font_family(current_family),
         language=current_language or get_language(),
@@ -95,6 +100,18 @@ def prompt_app_settings(
     select_combo_by_data(language_combo, initial.language)
     language_label = add_form_field(grid, 1, tr('settings.language'), language_combo)
 
+    ui_size_spin = GlyphSpinBox()
+    ui_size_spin.setObjectName('UiFontSizeSpin')
+    ui_size_spin.setRange(UI_FONT_SIZE_MIN, UI_FONT_SIZE_MAX)
+    ui_size_spin.setValue(initial.ui_font_size_px)
+    ui_size_spin.setMinimumWidth(120)
+    ui_size_label = add_form_field(
+        grid,
+        2,
+        tr('settings.ui_font_size'),
+        ui_size_spin,
+    )
+
     family_combo = ArrowComboBox()
     family_combo.setMinimumWidth(min_width - 48)
     db = QFontDatabase()
@@ -110,13 +127,13 @@ def prompt_app_settings(
             family_combo.addItem(family_name)
             seen.add(family_name)
     _select_body_font_family(family_combo, initial.family)
-    family_label = add_form_field(grid, 2, tr('settings.editor_font_family'), family_combo)
+    family_label = add_form_field(grid, 3, tr('settings.editor_font_family'), family_combo)
 
     spin = GlyphSpinBox()
     spin.setRange(terminal_font_size_min(), terminal_font_size_max())
     spin.setValue(initial.size)
     spin.setMinimumWidth(120)
-    size_label = add_form_field(grid, 3, tr('settings.editor_font_size'), spin)
+    size_label = add_form_field(grid, 4, tr('settings.editor_font_size'), spin)
 
     editor_field = QWidget()
     editor_layout = QHBoxLayout(editor_field)
@@ -128,7 +145,7 @@ def prompt_app_settings(
     editor_browse.setObjectName('DefaultEditorBrowseButton')
     editor_layout.addWidget(editor_edit, 1)
     editor_layout.addWidget(editor_browse)
-    editor_label = add_form_field(grid, 4, tr('settings.default_editor'), editor_field)
+    editor_label = add_form_field(grid, 5, tr('settings.default_editor'), editor_field)
 
     remote_size_spin = GlyphSpinBox()
     remote_size_spin.setObjectName('RemoteEditLargeFileSpin')
@@ -137,7 +154,7 @@ def prompt_app_settings(
     remote_size_spin.setSuffix(' MiB')
     remote_size_label = add_form_field(
         grid,
-        5,
+        6,
         tr('settings.remote_edit_large_file'),
         remote_size_spin,
     )
@@ -157,6 +174,7 @@ def prompt_app_settings(
     def current_settings() -> AppSettings:
         return AppSettings(
             theme=normalize_theme_name(theme_combo.currentData()),
+            ui_font_size_px=ui_size_spin.value(),
             size=spin.value(),
             family=normalize_terminal_font_family(family_combo.currentText()),
             language=language_combo.currentData(),
@@ -193,10 +211,15 @@ def prompt_app_settings(
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     layout.addLayout(grid)
+    config_hint = QLabel(tr('settings.config_file_hint'))
+    config_hint.setObjectName('SettingsConfigFileHint')
+    config_hint.setWordWrap(True)
+    layout.addWidget(config_hint)
     layout.addWidget(buttons)
 
     theme_combo.currentIndexChanged.connect(lambda _i: update_apply_enabled())
     language_combo.currentIndexChanged.connect(lambda _i: update_apply_enabled())
+    ui_size_spin.valueChanged.connect(lambda _v: update_apply_enabled())
     family_combo.currentIndexChanged.connect(lambda _i: update_apply_enabled())
     spin.valueChanged.connect(lambda _v: update_apply_enabled())
     editor_edit.textChanged.connect(lambda _text: update_apply_enabled())
@@ -206,11 +229,13 @@ def prompt_app_settings(
         dialog.setWindowTitle(tr('settings.title'))
         theme_label.setText(tr('settings.theme'))
         language_label.setText(tr('settings.language'))
+        ui_size_label.setText(tr('settings.ui_font_size'))
         family_label.setText(tr('settings.editor_font_family'))
         size_label.setText(tr('settings.editor_font_size'))
         editor_label.setText(tr('settings.default_editor'))
         editor_browse.setText(tr('settings.browse'))
         remote_size_label.setText(tr('settings.remote_edit_large_file'))
+        config_hint.setText(tr('settings.config_file_hint'))
         refresh_combo_items(
             theme_combo,
             [(tr(f'theme.{theme_name}'), theme_name) for theme_name in THEME_OPTIONS],

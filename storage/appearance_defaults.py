@@ -10,6 +10,8 @@ AppearanceDict = dict[str, object]
 DEFAULT_THEME = 'solarized'
 
 DEFAULT_UI_FONT_SIZE_PX = 14
+UI_FONT_SIZE_MIN = 8
+UI_FONT_SIZE_MAX = 32
 DEFAULT_TABLE_FONT_SIZE_PX = 14
 DEFAULT_STATUS_FONT_SIZE_PX = 12
 DEFAULT_TREE_FONT_SIZE_PX = 14
@@ -53,7 +55,7 @@ _APPEARANCE_INT_DEFAULTS: dict[str, int] = {
 }
 
 _APPEARANCE_INT_BOUNDS: dict[str, tuple[int, int]] = {
-    'ui_font_size_px': (8, 32),
+    'ui_font_size_px': (UI_FONT_SIZE_MIN, UI_FONT_SIZE_MAX),
     'table_font_size_px': (8, 32),
     'status_font_size_px': (8, 24),
     'tree_font_size_px': (8, 32),
