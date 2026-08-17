@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import replace
 from typing import Any, Awaitable, Callable
 
 import asyncssh
@@ -15,6 +16,7 @@ from storage.host_key_store import HostKeyStore
 
 _SSH_CONNECT_TIMEOUT_SECONDS = 15.0
 HostKeyConfirm = Callable[[str, int, str, str], Awaitable[bool]]
+ConnectionLostCallback = Callable[['SSHConnection'], Awaitable[None]]
 
 
 class HostKeyChangedError(RuntimeError):
@@ -30,66 +32,121 @@ class HostKeyRejectedError(RuntimeError):
     """The user declined the first-seen SSH server key."""
 
 
-class SSHSession(QObject):
-    """Async SSH shell session with Qt signals."""
-
-    connected = pyqtSignal()
-    disconnected = pyqtSignal()
-    data_received = pyqtSignal(str)
-    error = pyqtSignal(str)
+class SSHConnection:
+    """A shared authenticated connection for all tabs of one saved Session."""
 
     def __init__(
         self,
-        tab_id: str,
-        parent: QObject = None,
-        host_key_store: HostKeyStore | None = None,
+        session_item: SessionItem,
+        *,
+        password: str | None,
+        host_key_store: HostKeyStore,
+        host_key_confirm: HostKeyConfirm | None,
+        on_connection_lost: ConnectionLostCallback,
     ) -> None:
-        super().__init__(parent)
-        self.tab_id = tab_id
+        self.session_item = replace(session_item)
+        self._password = password
+        self._host_key_store = host_key_store
+        self._host_key_confirm = host_key_confirm
+        self._on_connection_lost = on_connection_lost
         self._conn: asyncssh.SSHClientConnection | None = None
-        self._process: asyncssh.SSHClientProcess | None = None
-        self._sftp: asyncssh.SFTPClient | None = None
-        self._read_task: asyncio.Task | None = None
-        self._disconnecting = False
-        self._aborted = False
-        self._session_item: SessionItem | None = None
-        self._cols = 80
-        self._rows = 24
-        self._host_key_store = host_key_store or HostKeyStore()
+        self._connect_task: asyncio.Task[asyncssh.SSHClientConnection] | None = None
+        self._monitor_task: asyncio.Task | None = None
+        self._members: set[str] = set()
+        self._closing = False
+        self._closed = False
+        self._connection_lost = False
 
     @property
-    def session_item(self) -> SessionItem | None:
-        return self._session_item
+    def session_id(self) -> str:
+        return self.session_item.id
+
+    @property
+    def member_count(self) -> int:
+        return len(self._members)
 
     @property
     def is_connected(self) -> bool:
-        return self._conn is not None and not self._conn.is_closing()
+        return (
+            self._conn is not None
+            and not self._conn.is_closed()
+            and not self._closed
+        )
 
     @property
-    def is_aborted(self) -> bool:
-        return self._aborted
+    def is_closed(self) -> bool:
+        return self._closed
 
-    def request_abort(self) -> None:
-        """Mark connect/in-flight work as aborted (e.g. tab closed while connecting)."""
-        self._aborted = True
-
-    async def connect(
-        self,
-        session_item: SessionItem,
-        *,
-        password: str | None = None,
-        cols: int = 80,
-        rows: int = 24,
-        host_key_confirm: HostKeyConfirm | None = None,
-    ) -> None:
+    async def acquire(self, tab_id: str) -> asyncssh.SSHClientConnection:
+        """Attach a tab, sharing any in-flight authentication with other tabs."""
+        if self._closed or self._connection_lost:
+            raise RuntimeError('SSH connection is closed')
+        self._members.add(tab_id)
         if self.is_connected:
-            await self.disconnect()
+            logger.info(
+                f'SSH connection reused: tab_id={tab_id}, session_id={self.session_id}, '
+                f'members={self.member_count}'
+            )
+            assert self._conn is not None
+            return self._conn
 
-        self._aborted = False
-        self._session_item = session_item
-        self._cols = cols
-        self._rows = rows
+        if self._connect_task is None:
+            self._connect_task = asyncio.create_task(self._connect(tab_id))
+        try:
+            return await asyncio.shield(self._connect_task)
+        except asyncio.CancelledError:
+            await self.release(tab_id)
+            raise
+        except Exception:
+            await self.release(tab_id)
+            raise
 
+    async def release(self, tab_id: str) -> None:
+        self._members.discard(tab_id)
+        if not self._members and not self._connection_lost:
+            await self.close()
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        if self._closing:
+            monitor = self._monitor_task
+            if monitor is not None and monitor is not asyncio.current_task():
+                await asyncio.gather(monitor, return_exceptions=True)
+            return
+
+        self._closing = True
+        try:
+            connect_task = self._connect_task
+            if connect_task is not None and not connect_task.done():
+                connect_task.cancel()
+            if connect_task is not None:
+                await asyncio.gather(connect_task, return_exceptions=True)
+
+            conn = self._conn
+            if conn is not None:
+                try:
+                    conn.close()
+                    await conn.wait_closed()
+                except Exception as exc:
+                    logger.warning(
+                        f'SSH shared connection close error: session_id={self.session_id}, '
+                        f'error={exc}'
+                    )
+
+            monitor = self._monitor_task
+            if monitor is not None and monitor is not asyncio.current_task():
+                await asyncio.gather(monitor, return_exceptions=True)
+            self._conn = None
+            self._closed = True
+            logger.info(f'SSH shared connection closed: session_id={self.session_id}')
+        finally:
+            self._password = None
+            self._host_key_confirm = None
+            self._closing = False
+
+    async def _connect(self, tab_id: str) -> asyncssh.SSHClientConnection:
+        session_item = self.session_item
         options: dict[str, Any] = {
             'host': session_item.host,
             'port': session_item.port,
@@ -97,21 +154,20 @@ class SSHSession(QObject):
             'connect_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
             'login_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
         }
-
         if session_item.auth_type == AUTH_PUBLIC_KEY and session_item.key_path:
             key_path = os.path.expanduser(session_item.key_path.strip())
             if key_path:
                 options['client_keys'] = [key_path]
-        elif session_item.auth_type == AUTH_PASSWORD and password:
-            options['password'] = password
+        elif session_item.auth_type == AUTH_PASSWORD and self._password:
+            options['password'] = self._password
 
+        logger.info(
+            'SSH connecting: '
+            f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
+            f'host={session_item.host}, port={session_item.port}, '
+            f'username={session_item.username}, auth_type={session_item.auth_type}'
+        )
         try:
-            logger.info(
-                'SSH connecting: '
-                f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
-                f'host={session_item.host}, port={session_item.port}, '
-                f'username={session_item.username}, auth_type={session_item.auth_type}'
-            )
             server_key = await asyncio.wait_for(
                 asyncssh.get_server_host_key(session_item.host, session_item.port),
                 timeout=_SSH_CONNECT_TIMEOUT_SECONDS,
@@ -129,8 +185,8 @@ class SSHSession(QObject):
                 )
             if status == 'unknown':
                 accepted = False
-                if host_key_confirm is not None:
-                    accepted = await host_key_confirm(
+                if self._host_key_confirm is not None:
+                    accepted = await self._host_key_confirm(
                         session_item.host,
                         session_item.port,
                         server_key.get_algorithm(),
@@ -142,16 +198,131 @@ class SSHSession(QObject):
                     )
                 self._host_key_store.trust(session_item.host, session_item.port, server_key)
 
-            # This key was already checked against HostKeyStore above. Passing
-            # it directly also works when AsyncSSH represents default port 22
-            # as ``None`` during known-host matching.
+            # The key was checked above. Passing it directly also handles the
+            # default-port representation used by AsyncSSH known-host matching.
             options['known_hosts'] = ([server_key], [], [])
-            self._conn = await asyncssh.connect(**options)
+            conn = await asyncssh.connect(**options)
+            self._conn = conn
+            self._monitor_task = asyncio.create_task(self._monitor_connection(conn))
+            logger.info(
+                'SSH shared connection established: '
+                f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, port={session_item.port}'
+            )
+            return conn
+        except asyncio.CancelledError:
+            logger.info(
+                f'SSH shared connection cancelled: tab_id={tab_id}, '
+                f'session_id={session_item.id}'
+            )
+            raise
+        except Exception as exc:
+            logger.warning(
+                'SSH shared connection failed: '
+                f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, port={session_item.port}, error={exc}'
+            )
+            raise
+        finally:
+            self._password = None
+            self._host_key_confirm = None
+
+    async def _monitor_connection(self, conn: asyncssh.SSHClientConnection) -> None:
+        try:
+            await conn.wait_closed()
+            if self._closing or self._conn is not conn:
+                return
+            self._connection_lost = True
+            self._closed = True
+            logger.warning(
+                f'SSH shared connection lost: session_id={self.session_id}, '
+                f'members={self.member_count}'
+            )
+            await self._on_connection_lost(self)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                f'SSH shared connection monitor failed: session_id={self.session_id}, error={exc}'
+            )
+
+
+class SSHSession(QObject):
+    """Per-tab shell and SFTP channels on a shared SSH connection."""
+
+    connected = pyqtSignal()
+    disconnected = pyqtSignal()
+    data_received = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        tab_id: str,
+        parent: QObject = None,
+    ) -> None:
+        super().__init__(parent)
+        self.tab_id = tab_id
+        self._connection: SSHConnection | None = None
+        self._attached = False
+        self._process: asyncssh.SSHClientProcess | None = None
+        self._sftp: asyncssh.SFTPClient | None = None
+        self._read_task: asyncio.Task | None = None
+        self._disconnect_lock = asyncio.Lock()
+        self._aborted = False
+        self._session_item: SessionItem | None = None
+        self._cols = 80
+        self._rows = 24
+
+    @property
+    def session_item(self) -> SessionItem | None:
+        return self._session_item
+
+    @property
+    def shared_connection(self) -> SSHConnection | None:
+        return self._connection
+
+    @property
+    def is_connected(self) -> bool:
+        return (
+            self._attached
+            and self._process is not None
+            and self._connection is not None
+            and self._connection.is_connected
+        )
+
+    @property
+    def is_aborted(self) -> bool:
+        return self._aborted
+
+    def request_abort(self) -> None:
+        """Mark connect/in-flight work as aborted (e.g. tab closed while connecting)."""
+        self._aborted = True
+
+    async def connect(
+        self,
+        session_item: SessionItem,
+        connection: SSHConnection,
+        *,
+        cols: int = 80,
+        rows: int = 24,
+    ) -> None:
+        if self.is_connected:
+            await self.disconnect()
+
+        self._aborted = False
+        self._session_item = session_item
+        self._connection = connection
+        self._cols = cols
+        self._rows = rows
+
+        try:
+            conn = await connection.acquire(self.tab_id)
+            self._attached = True
             if self._aborted:
                 await self.disconnect()
                 raise asyncio.CancelledError()
 
-            self._process = await self._conn.create_process(
+            self._process = await conn.create_process(
                 '',
                 term_type='xterm-256color',
                 term_size=(cols, rows),
@@ -161,7 +332,7 @@ class SSHSession(QObject):
                 await self.disconnect()
                 raise asyncio.CancelledError()
 
-            self._sftp = await self._conn.start_sftp_client()
+            self._sftp = await conn.start_sftp_client()
             if self._aborted:
                 await self.disconnect()
                 raise asyncio.CancelledError()
@@ -188,18 +359,16 @@ class SSHSession(QObject):
             raise
 
     async def disconnect(self) -> None:
-        if self._disconnecting:
-            return
-        self._disconnecting = True
-        self._aborted = True
-        session_item = self._session_item
-        if session_item is not None:
-            logger.info(
-                'SSH disconnecting: '
-                f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
-                f'host={session_item.host}, port={session_item.port}'
-            )
-        try:
+        async with self._disconnect_lock:
+            self._aborted = True
+            session_item = self._session_item
+            if session_item is not None:
+                logger.info(
+                    'SSH disconnecting: '
+                    f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                    f'host={session_item.host}, port={session_item.port}'
+                )
+
             current_task = asyncio.current_task()
             if self._read_task is not None and self._read_task is not current_task:
                 self._read_task.cancel()
@@ -226,13 +395,9 @@ class SSHSession(QObject):
                     logger.warning(f'SFTP exit error: tab_id={self.tab_id}, error={exc}')
                 self._sftp = None
 
-            if self._conn is not None:
-                try:
-                    self._conn.close()
-                    await self._conn.wait_closed()
-                except Exception as exc:
-                    logger.warning(f'SSH connection close error: tab_id={self.tab_id}, error={exc}')
-                self._conn = None
+            if self._attached and self._connection is not None:
+                self._attached = False
+                await self._connection.release(self.tab_id)
 
             self.disconnected.emit()
             if session_item is not None:
@@ -241,11 +406,10 @@ class SSHSession(QObject):
                     f'tab_id={self.tab_id}, session_id={session_item.id}, name={session_item.name}, '
                     f'host={session_item.host}, port={session_item.port}'
                 )
-        finally:
-            self._disconnecting = False
 
     async def _read_loop(self) -> None:
         assert self._process is not None
+        cancelled = False
         try:
             while True:
                 data = await self._process.stdout.read(4096)
@@ -253,12 +417,13 @@ class SSHSession(QObject):
                     break
                 self.data_received.emit(data)
         except asyncio.CancelledError:
+            cancelled = True
             raise
         except Exception as exc:
             logger.warning(f'SSH read loop error: tab_id={self.tab_id}, error={exc}')
             self.error.emit(str(exc))
         finally:
-            if self._conn is not None and not self._disconnecting:
+            if not cancelled and self._attached:
                 await self.disconnect()
             if self._read_task is asyncio.current_task():
                 self._read_task = None

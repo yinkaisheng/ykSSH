@@ -90,6 +90,42 @@ class ReviewFollowupAsyncTests(unittest.IsolatedAsyncioTestCase):
         window.close.assert_called_once_with()
         log_exception.assert_called_once()
 
+    async def test_shared_connection_loss_discards_every_related_tab(self) -> None:
+        manager = ConnectionManager(credential_store=Mock())
+        connection = SimpleNamespace(session_id='session-a', member_count=0)
+        ssh_a = SimpleNamespace(
+            shared_connection=connection,
+            disconnect=AsyncMock(),
+            data_received=Mock(),
+            disconnected=Mock(),
+            error=Mock(),
+            deleteLater=Mock(),
+        )
+        ssh_b = SimpleNamespace(
+            shared_connection=connection,
+            disconnect=AsyncMock(),
+            data_received=Mock(),
+            disconnected=Mock(),
+            error=Mock(),
+            deleteLater=Mock(),
+        )
+        manager._connections['session-a'] = connection
+        manager._sessions.update({'tab-a': ssh_a, 'tab-b': ssh_b})
+        manager._terminals.update({'tab-a': None, 'tab-b': None})
+        manager._tab_titles.update({'tab-a': 'A', 'tab-b': 'B'})
+        manager._remote_cache.update({'tab-a': {'/': []}, 'tab-b': {'/': []}})
+
+        with patch.object(manager, '_disconnect_ssh_signals'):
+            await manager._on_shared_connection_lost(connection)
+
+        ssh_a.disconnect.assert_awaited_once_with()
+        ssh_b.disconnect.assert_awaited_once_with()
+        self.assertEqual(manager._connections, {})
+        self.assertEqual(manager._sessions, {})
+        self.assertEqual(manager._terminals, {})
+        self.assertEqual(manager._tab_titles, {})
+        self.assertEqual(manager._remote_cache, {})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -90,8 +90,8 @@ ykSSH/
 │   └── favorite_path.py         # FavoritePath（path + note）
 │
 ├── core/
-│   ├── ssh_session.py           # 单条 SSH 连接（Shell PTY + SFTP）
-│   ├── connection_manager.py    # tab_id ↔ SSHSession 映射与远程列表缓存
+│   ├── ssh_session.py           # 共享 SSHConnection + 每 Tab Shell/SFTP channel
+│   ├── connection_manager.py    # Session ID 连接池、Tab 会话映射与远程列表缓存
 │   ├── terminal_port.py         # connection 层使用的终端能力协议
 │   ├── path_resolver.py         # 本地/远程初始路径解析
 │   ├── file_permissions.py      # 本地/远程权限字符串格式化
@@ -312,7 +312,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 
 - 连接时创建 `xterm-256color` PTY，尺寸经 `TerminalPort.terminal_size()` 获取
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
-- Tab 关闭：`ConnectionManager.close_tab()` cancel 读任务并 `disconnect()`
+- Tab 关闭：`ConnectionManager.close_tab()` cancel 该 Tab 读任务并关闭其 Shell/SFTP channel；同 Session 的最后一个 Tab 关闭时才关闭底层 SSH connection
 - 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。
 - 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。终端获得焦点时会优先接受 `ShortcutOverride`，因此未由 `MainWindow.eventFilter` 显式处理的应用级 QAction 快捷键（包括退出快捷键）不会触发，而会交给终端处理。终端内的文件面板焦点快捷键由 `MainWindow.eventFilter` 本地拦截且不发送给远端 shell：`Ctrl+Alt+B` 优先切到当前 Tab 的远端文件 Table，断连等远端 Table 隐藏或禁用时回退到本地文件 Table；`Ctrl+;` 固定切到本地文件 Table；`Ctrl+'` 固定切到可用的远端文件 Table。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
@@ -360,7 +360,10 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
       1. terminal_tabs.add_terminal_tab()        → 新 tab_id + TerminalVTWidget
       2. file_panels.create_panel(tab_id)        → 新 FilesPanel
       3. connection_manager.open_tab()
-           → SSHSession.connect（Shell + SFTP）
+           → 按 SessionItem.id 获取/创建共享 SSHConnection
+                → 首个 Tab：TOFU + asyncssh.connect
+                → 后续 Tab：复用已认证 connection
+           → SSHSession.connect（每 Tab 独立 Shell + SFTP channel）
            → on_connected → _init_file_panel_for_session
                 → resolve 本地/远程路径
                 → 若配置了 remote_path：cd_shell 发送 cd 到 Shell
@@ -377,7 +380,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
   → force_close_tab
   → pop handler / 关收藏对话框 / remove_panel
   → cancel 连接中 task（若 connect 尚未完成）
-  → await close_tab（abort 连接中会话、cancel 读任务、disconnect、deleteLater）
+  → await close_tab（abort 连接中会话、cancel 读任务、关闭本 Tab channel、释放共享 connection、deleteLater）
   → handler.deleteLater()
 ```
 
@@ -387,6 +390,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 |------|----|----|
 | `_active_tab_id` | — | 当前终端 Tab ID |
 | `_sftp_handlers` | tab_id | SftpUiHandler |
+| ConnectionManager._connections | Session ID | SSHConnection |
 | ConnectionManager._sessions | tab_id | SSHSession |
 | ConnectionManager._terminals | tab_id | TerminalVTWidget |
 | FilePanelsContainer._panels | tab_id | FilesPanel |
@@ -396,13 +400,21 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 ## 7. SSH 连接实现
 
-`SSHSession`（`core/ssh_session.py`）：
+`SSHConnection`（`core/ssh_session.py`）：
 
 - 认证前使用 `asyncssh.get_server_host_key()` 获取服务器主机密钥，并由 `HostKeyStore` 执行 TOFU 校验；首次连接展示算法和 SHA256 指纹供用户确认，确认后写入 `config/host_keys.json`，后续指纹变化会阻止连接。实际 `asyncssh.connect()` 使用本次已确认密钥构造的 `known_hosts` 再次校验，避免探测与认证之间密钥被替换；`connect_timeout` / `login_timeout` 当前为 15 秒
 - 认证：`AUTH_PASSWORD`（密码来自 CredentialStore）或 `AUTH_PUBLIC_KEY`（`key_path`）
-- 同时打开 Shell process 与 SFTP client
+- `ConnectionManager` 按稳定 `SessionItem.id` 复用；不同 ID 即使连接参数相同也不共享
+- 共享对象创建时复制 `SessionItem` 连接字段快照；运行中编辑同 ID Session 不迁移既有/正在建立的 connection，连接组完全关闭后的下一次连接才使用新配置
+- 同一 Session 的并发打开共享一个 shield 后的建连 task，单个 Tab 取消不会中断其他等待者；最后一个成员释放时关闭 connection
+- 监控底层 `wait_closed()`；意外断开时由 `ConnectionManager` 清理该组全部 Tab 的会话、远端缓存和刷新任务
+
+`SSHSession`（`core/ssh_session.py`）：
+
+- 每个 Tab 在共享 connection 上分别创建一个 Shell process 和一个 SFTP client/channel，终端尺寸、I/O 与文件操作互相隔离
+- 关闭或 Shell EOF 只释放本 Tab channel；仅当它是最后一个成员时才触发底层 connection 关闭
 - Signal：`connected` / `disconnected` / `data_received` / `error`
-- 若远端主动断开或读循环结束，`ConnectionManager` 会移除对应 `_sessions` / 远端缓存并断开 Qt signal，MainWindow 会取消该 Tab 的 SFTP 任务并清空远端文件面板；曾成功连接的终端进入可重连模式，可按 Enter 在原 Tab 中重连，首次连接失败则不启用该模式。
+- 单个 Shell 结束时只清理对应 Tab；底层 connection 断开时清理所有关联 Tab。MainWindow 会分别取消 SFTP 任务并清空远端文件面板；曾成功连接的终端仍可按 Enter 重连，首个重连 Tab 建立新共享 connection，之后的 Tab 加入该 connection。
 
 `ConnectionManager.cd_shell()`：向交互式 Shell 写入 `cd <path>\r`（延迟 150ms 等待 banner），使终端工作目录与文件面板远端路径一致。
 
@@ -682,13 +694,16 @@ sequenceDiagram
     participant User
     participant MainWindow
     participant ConnMgr as ConnectionManager
+    participant Shared as SSHConnection
     participant SSH as SSHSession
     participant Files as FilePanelsContainer
 
     User->>MainWindow: 连接 Session
     MainWindow->>MainWindow: add_terminal_tab + create_panel
     MainWindow->>ConnMgr: open_tab(tab_id, session)
-    ConnMgr->>SSH: connect (Shell + SFTP)
+    ConnMgr->>Shared: acquire(session_id)
+    Shared-->>ConnMgr: 复用/建立 SSHClientConnection
+    ConnMgr->>SSH: connect (独立 Shell + SFTP channel)
     SSH-->>MainWindow: on_connected
     MainWindow->>MainWindow: _init_file_panel_for_session
     MainWindow->>ConnMgr: refresh_remote_list

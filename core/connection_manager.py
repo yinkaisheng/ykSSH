@@ -10,7 +10,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from core.path_resolver import resolve_remote_path
 from core.sftp_service import listdir
-from core.ssh_session import HostKeyConfirm, SSHSession
+from core.ssh_session import HostKeyConfirm, SSHConnection, SSHSession
 from core.terminal_port import TerminalPort
 from log_util import logger
 from models.session_item import SessionItem
@@ -31,6 +31,7 @@ class ConnectionManager(QObject):
         super().__init__(parent)
         self.keyring = credential_store or CredentialStore()
         self.host_keys = HostKeyStore()
+        self._connections: dict[str, SSHConnection] = {}
         self._sessions: dict[str, SSHSession] = {}
         self._terminals: dict[str, TerminalPort] = {}
         self._tab_titles: dict[str, str] = {}
@@ -128,7 +129,6 @@ class ConnectionManager(QObject):
             logger.info(f'Connection tab already exists, closing old tab first: tab_id={tab_id}')
             await self.close_tab(tab_id)
 
-        password = self.keyring.get_password(session_item.id)
         cols, rows = terminal.terminal_size()
         logger.info(
             'Open connection tab: '
@@ -136,7 +136,19 @@ class ConnectionManager(QObject):
             f'host={session_item.host}, port={session_item.port}, username={session_item.username}'
         )
 
-        ssh = SSHSession(tab_id, self, self.host_keys)
+        connection = self._connections.get(session_item.id)
+        if connection is None or connection.is_closed:
+            password = self.keyring.get_password(session_item.id)
+            connection = SSHConnection(
+                session_item,
+                password=password,
+                host_key_store=self.host_keys,
+                host_key_confirm=host_key_confirm,
+                on_connection_lost=self._on_shared_connection_lost,
+            )
+            self._connections[session_item.id] = connection
+
+        ssh = SSHSession(tab_id, self)
         self._sessions[tab_id] = ssh
         self._terminals[tab_id] = terminal
         self._tab_titles[tab_id] = session_item.name
@@ -179,10 +191,9 @@ class ConnectionManager(QObject):
         try:
             await ssh.connect(
                 session_item,
-                password=password,
+                connection,
                 cols=cols,
                 rows=rows,
-                host_key_confirm=host_key_confirm,
             )
         except asyncio.CancelledError:
             logger.info(
@@ -234,9 +245,11 @@ class ConnectionManager(QObject):
                 if task is not None and not task.done():
                     task.cancel()
         if ssh is not None:
+            connection = ssh.shared_connection
             ssh.request_abort()
             self._disconnect_ssh_signals(ssh, terminal)
             await ssh.disconnect()
+            self._discard_unused_connection(connection)
             ssh.deleteLater()
         logger.info(f'Connection tab closed: tab_id={tab_id}')
 
@@ -251,6 +264,7 @@ class ConnectionManager(QObject):
             self._terminals.pop(tab_id, None)
             self._tab_titles.pop(tab_id, None)
             self._remote_cache.pop(tab_id, None)
+        self._discard_unused_connection(ssh.shared_connection)
         self._disconnect_ssh_signals(ssh, terminal)
         ssh.deleteLater()
 
@@ -273,7 +287,35 @@ class ConnectionManager(QObject):
                 if task is not None and not task.done():
                     task.cancel()
         self._disconnect_ssh_signals(ssh, terminal)
+        self._discard_unused_connection(ssh.shared_connection)
         ssh.deleteLater()
+
+    def _discard_unused_connection(self, connection: SSHConnection | None) -> None:
+        if connection is None or connection.member_count:
+            return
+        if self._connections.get(connection.session_id) is connection:
+            self._connections.pop(connection.session_id, None)
+
+    async def _on_shared_connection_lost(self, connection: SSHConnection) -> None:
+        if self._connections.get(connection.session_id) is connection:
+            self._connections.pop(connection.session_id, None)
+        affected = [
+            (tab_id, ssh, self._terminals.get(tab_id))
+            for tab_id, ssh in list(self._sessions.items())
+            if ssh.shared_connection is connection
+        ]
+        logger.warning(
+            f'Discarding tabs on lost SSH connection: session_id={connection.session_id}, '
+            f'tabs={len(affected)}'
+        )
+        for tab_id, ssh, terminal in affected:
+            try:
+                await ssh.disconnect()
+            except Exception as exc:
+                logger.warning(
+                    f'SSH tab cleanup after connection loss failed: tab_id={tab_id}, error={exc}'
+                )
+            self._discard_disconnected_session(tab_id, ssh, terminal)
 
     @staticmethod
     def _disconnect_ssh_signals(ssh: SSHSession, terminal) -> None:
