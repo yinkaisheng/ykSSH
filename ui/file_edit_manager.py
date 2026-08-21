@@ -225,7 +225,9 @@ class FileEditManager(QObject):
                     self._watch_session(existing)
                 local_paths.append(existing.local_path)
                 continue
-            local_path = self._temp_path(tab_id, remote_path)
+            session_item = ssh.session_item
+            host = session_item.host if session_item is not None else ''
+            local_path = self._temp_path(tab_id, host, remote_path)
             try:
                 await download(sftp, remote_path, local_path, tab_id=tab_id)
                 self._set_local_mtime(local_path, remote_signature, tab_id)
@@ -465,10 +467,11 @@ class FileEditManager(QObject):
                 return_exceptions=True,
             )
 
-    def _temp_path(self, tab_id: str, remote_path: str) -> str:
+    def _temp_path(self, tab_id: str, host: str, remote_path: str) -> str:
         digest = hashlib.sha256(f'{tab_id}\0{remote_path}'.encode('utf-8')).hexdigest()[:20]
+        host_directory = self._safe_temp_name(host)
         name = self._safe_temp_name(posixpath.basename(remote_path.rstrip('/')))
-        directory = self._runtime_dir / digest
+        directory = self._runtime_dir / host_directory / digest
         directory.mkdir(parents=True, exist_ok=True)
         return str(directory / name)
 

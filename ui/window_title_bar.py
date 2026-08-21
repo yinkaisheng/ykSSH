@@ -9,6 +9,7 @@ from PyQt5.QtGui import QMouseEvent, QPainter, QPen, QPalette, QColor
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QMenuBar, QApplication, QSizePolicy, QToolButton, QWidget
 
 from i18n import tr
+from log_util import logger
 from ui.theme import active_theme_palette
 
 _TITLE_GLYPH_LINE_PX = 2
@@ -198,7 +199,7 @@ class WindowTitleBar(QWidget):
         self._window_buttons = (self._min_btn, self._max_btn, self._close_btn)
         self._min_btn.clicked.connect(self._window.showMinimized)
         self._max_btn.clicked.connect(self._toggle_maximize)
-        self._close_btn.clicked.connect(self._window.close)
+        self._close_btn.clicked.connect(self._request_window_close)
         for btn in self._window_buttons:
             self._controls_layout.addWidget(btn, 0)
         layout.addWidget(self._controls_box, 0)
@@ -208,6 +209,10 @@ class WindowTitleBar(QWidget):
 
     def set_title(self, title: str) -> None:
         self._title_label.setText(title)
+
+    def _request_window_close(self) -> None:
+        logger.info('[EXIT-DIAG] Window close requested: source=title_bar_button')
+        self._window.close()
 
     def apply_layout(self, height: int, *, border_width: int = 0) -> None:
         self._height = max(24, min(48, int(height)))

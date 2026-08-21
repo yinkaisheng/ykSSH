@@ -9,9 +9,11 @@ from unittest.mock import AsyncMock, Mock, patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtWidgets import QApplication
 
 from core.connection_manager import ConnectionManager
+from main import ApplicationExitEventFilter
 from models.session_item import SessionItem
 from ui.main_window import MainWindow
 from ui.terminal_tab_widget import TerminalTabWidget
@@ -36,6 +38,18 @@ class ReviewFollowupTests(unittest.TestCase):
         self.assertEqual(tabs.tab_id_at(1), 'tab-a')
         self.assertIsNone(tabs.tab_id_at(-1))
         self.assertIsNone(tabs.tab_id_at(2))
+
+    def test_application_exit_event_filter_logs_close_event(self) -> None:
+        event_filter = ApplicationExitEventFilter()
+
+        with patch('main.logger.info') as log_info:
+            filtered = event_filter.eventFilter(self.app, QCloseEvent())
+
+        self.assertFalse(filtered)
+        self.assertIn(
+            '[EXIT-DIAG] Qt exit-related event',
+            log_info.call_args.args[0],
+        )
 
     def test_remote_list_update_refreshes_only_current_path(self) -> None:
         remote_panel = Mock()
@@ -103,6 +117,29 @@ class ReviewFollowupAsyncTests(unittest.IsolatedAsyncioTestCase):
 
         connection_manager.cd_shell.assert_awaited_once_with('tab-a', '/srv/project')
         handler.try_init_session_paths.assert_not_called()
+
+    async def test_duplicate_window_close_is_logged_and_ignored(self) -> None:
+        event = QCloseEvent()
+        window = SimpleNamespace(
+            _closing_after_transfer_confirm=False,
+            _close_in_progress=True,
+            terminal_tabs=SimpleNamespace(count=Mock(return_value=2)),
+            isVisible=Mock(return_value=True),
+            _has_running_transfers=Mock(return_value=False),
+        )
+
+        with patch('ui.main_window.logger.info') as log_info:
+            MainWindow.closeEvent(window, event)
+
+        self.assertFalse(event.isAccepted())
+        self.assertTrue(any(
+            '[EXIT-DIAG] MainWindow.closeEvent received' in call.args[0]
+            for call in log_info.call_args_list
+        ))
+        self.assertTrue(any(
+            'Duplicate MainWindow close ignored' in call.args[0]
+            for call in log_info.call_args_list
+        ))
 
     async def test_finish_close_closes_window_after_cleanup_failure(self) -> None:
         window = SimpleNamespace(

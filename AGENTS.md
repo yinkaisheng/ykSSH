@@ -1,48 +1,67 @@
 # AGENTS.md
 
-面向 AI 代理与协作者：这里记录**改动边界与必守规则**。架构、数据流和详细验证见 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
+面向 AI Agent 与协作者：本文件只保留所有任务都必须遵守的全局护栏和规范入口。架构与真实数据流见 [IMPLEMENTATION.md](IMPLEMENTATION.md)，分领域工程细则见 `.trellis/spec/`。
 
-## 项目概况
+## 项目与全局护栏
 
 - **ykSSH**：本地 PyQt5 SSH 客户端，包含 Session 树、多 Tab 终端和 SFTP 文件管理。
-- **技术栈**：PyQt5 + asyncssh + qasync + pyte；改动时保持该技术栈，不要切换到 PyQt6 或 paramiko。
-- 界面文案与注释默认中文；**用户可见字符串**必须走 i18n（`tr('namespace.key')`），不要在业务逻辑中硬编码中英文。
-
-## 必守规则
-
-- asyncssh / SFTP 操作必须在 **qasync 事件循环**内执行；UI 更新走 **pyqtSignal** 或 `asyncio.create_task()`。禁止在 QThread 中另起 asyncio 循环连接 SSH。
-- UI 框架保持 PyQt5 写法（如 `Qt.StrongFocus` 等 enum）。
-- Session 密码只经 Fernet 加密存入 `config/credentials.json`，密钥在 `config/secret.key`；禁止写入 `sessions.json` 或日志。私钥路径可存 config。
-- 保持最小改动，不顺手重构无关模块；`terminal_vt_widget.py` 体量大，仅在终端行为相关时修改。
-- 新增 UI 文案时，同时更新 `i18n/builtin_strings.py`、`Languages/en/strings.txt` 与 `Languages/zh-CN/strings.txt`；相关 Widget 注册 `register_retranslator(self.retranslate_ui)` 并实现 `retranslate_ui()`。
-- 文件面板 SFTP 操作经 `SftpUiHandler` 桥接，不要在 `ui/file_panel/` 中直接调用 asyncssh。
-- Tab 关闭时 `ConnectionManager.close_tab()` 必须 cancel 读任务并 `disconnect()`。
-- SSH、SFTP、远程文件及远程编辑相关日志必须至少包含 `tab_id`、`session_id`、`name` 之一；进入 Tab 生命周期后优先使用 `tab_id`，连接建立/失败等关键日志同时保留 `session_id` 与 `name`，以便跨层追踪同一连接。日志不得记录密码、密钥内容或其他凭据。
-- 不要提交 `config/` 下的运行时文件（含 `secret.key`、`credentials.json`）或任何真实凭据。
-- 允许 Skill 生成 spec、plan 等本地中间产物；除非用户明确要求，否则禁止将这些文件加入 Git 或提交。
-- 影响架构、配置 schema、连接/文件面板/终端关键行为或已知限制时，同步更新 [IMPLEMENTATION.md](IMPLEMENTATION.md)；纯样式、拼写或不改变行为的小修可跳过。
-- 当前处于开发阶段：修改配置 schema、API、配置格式或行为时直接按新设计落地，不保留旧字段、旧路径或旧行为兼容分支。
-
-## 代码约定
-
-- Python 3.10+，`from __future__ import annotations`，UTF-8，`# -*- coding: utf-8 -*-`。
-- 类型标注使用 Python 3.10+ 现代语法：使用 `list[str]`、`dict[str, int]`、`tuple[...]`、`T | None`，不要使用 `typing.List`、`typing.Dict`、`typing.Tuple`、`typing.Optional`、`typing.Union` 等旧式别名；`Any`、`Callable`、`Literal`、`Protocol`、`Sequence` 等仍按需从 `typing` 导入。
-- 新代码匹配现有风格：类型标注、简短 docstring、分层清晰（models → core → storage → ui）。
+- **技术栈固定**：保持 PyQt5 + asyncssh + qasync + pyte，不切换到 PyQt6、PySide 或 paramiko。
+- **异步边界**：SSH、SFTP 和远程编辑操作只在主 qasync 事件循环中执行；禁止在线程中创建第二个 asyncio 循环连接 SSH。
+- **凭据安全**：Session 密码只以 Fernet 密文进入 `config/credentials.json`，不得进入 `sessions.json`、日志、测试夹具或任务文档；任何真实凭据和 `config/` 运行时文件都不得提交。
+- **改动边界**：保持最小改动，保留用户已有修改，不借当前任务重构无关模块。
+- **Git 授权**：Skill 可以生成 spec、plan、research 等本地中间产物；未经用户明确要求，不执行 `git add`、`git commit`，也不把这些产物加入 Git。
+- **设计阶段策略**：配置 schema、API、路径或行为直接按新设计落地，不增加旧字段、旧路径或旧行为兼容分支。
+- **文档同步**：改变架构、配置 schema、连接、文件面板、终端关键行为或已知限制时，同步更新 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
+- **语言**：界面文案与注释默认中文；所有用户可见字符串必须通过 `tr('namespace.key')` 获取。
 - 移植或对齐 `../http-requester`、`../nebula-shell` 时保持 PyQt5，并改为 ykSSH 包结构。
 
-## 验证
+## 修改前按范围读取规范
+
+任何代码修改先阅读 `.trellis/spec/desktop/index.md`，再按改动范围读取下列专项规范。一个任务涉及多个领域时，读取所有匹配项；不要无差别加载整个目录。
+
+| 改动范围 | 必读规范 |
+| --- | --- |
+| 新模块、跨层数据流、职责或目录归属 | `.trellis/spec/desktop/architecture.md` |
+| SSH、qasync、连接、重连、Tab 关闭或后台任务 | `.trellis/spec/desktop/async-ssh-lifecycle.md` |
+| 配置、Session 字段、JSON 存储、凭据或 host key | `.trellis/spec/desktop/storage-security.md` |
+| PyQt5 Widget、用户文案、i18n、主题或快捷键 | `.trellis/spec/desktop/ui-i18n-theme.md` |
+| SFTP、文件面板、上传下载、远程 CRUD 或远程编辑 | `.trellis/spec/desktop/sftp-file-operations.md` |
+| 终端渲染、pyte、输入输出、滚动历史或 gutter | `.trellis/spec/desktop/terminal.md` |
+| 日志、异常、取消或用户错误提示 | `.trellis/spec/desktop/logging-errors.md` |
+| 任何 Python 代码、测试或最终验证 | `.trellis/spec/desktop/quality-testing.md` |
+
+修改配置、signal、Tab 状态、SSH/SFTP、远程缓存或用户文案等跨层行为时，同时阅读 `.trellis/spec/guides/cross-layer-thinking-guide.md`。新增 helper、字段、文案、主题 token 或本地/远端对称行为时，同时阅读 `.trellis/spec/guides/code-reuse-thinking-guide.md`。
+
+## 验证与完成条件
+
+根据 `.trellis/spec/desktop/quality-testing.md` 选择并运行与改动对应的测试。代码改动的最低自动化验证为：
 
 ```powershell
-# 在项目根目录执行
-pip install -r requirements.txt
 python -c "from ui.main_window import MainWindow"
-python main.py
+python -m compileall .
+python -m unittest discover -s tests -v
 ```
 
-无自动化测试套件。改动后至少确认：
+涉及 GUI 时运行 `python main.py` 并检查目标交互；涉及 SSH/SFTP 时手工确认连接、终端输出、远程刷新和关闭清理。环境或凭据不允许手工验证时，在汇报中明确列出未验证项，不得声称已经验证。
 
-1. `MainWindow` 可 import，主窗口能启动。
-2. Session 树可新建分组/Session。
-3. 若改动 SSH/SFTP：能连接、终端有输出、远程文件列表可刷新。
+<!-- TRELLIS:START -->
+# Trellis Instructions
 
-若环境无法启动 GUI，执行 `python -m compileall .` 并在汇报中说明限制。
+These instructions are for AI assistants working in this project.
+
+This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
+
+- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
+- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
+- `.trellis/workspace/` — per-developer journals and session traces
+- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
+
+If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
+
+If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
+- `.agents/skills/` — reusable Trellis skills
+- `.codex/agents/` — optional custom subagents
+
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
+
+<!-- TRELLIS:END -->

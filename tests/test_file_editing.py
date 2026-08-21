@@ -35,8 +35,11 @@ class _FakeSftp:
 
 
 class _FakeConnectionManager:
-    def __init__(self, sftp: _FakeSftp) -> None:
-        self._ssh = SimpleNamespace(get_sftp=lambda: sftp)
+    def __init__(self, sftp: _FakeSftp, *, host: str = '192.168.2.48') -> None:
+        self._ssh = SimpleNamespace(
+            get_sftp=lambda: sftp,
+            session_item=SimpleNamespace(host=host),
+        )
 
     def get_session(self, _tab_id: str):
         return self._ssh
@@ -805,6 +808,15 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(launch.call_count, 2)
         first_path = launch.call_args_list[0].args[0][0]
         self.assertEqual(launch.call_args_list[1].args[0], [first_path])
+        self.assertEqual(Path(first_path).parent.parent.name, '192.168.2.48')
+
+    async def test_remote_temp_path_exposes_sanitized_host_directory(self) -> None:
+        first = Path(self.manager._temp_path('tab-a', 'server-a.example', '/tmp/a.txt'))
+        second = Path(self.manager._temp_path('tab-b', '2001:db8::48', '/tmp/a.txt'))
+
+        self.assertEqual(first.parent.parent.name, 'server-a.example')
+        self.assertEqual(second.parent.parent.name, '2001_db8__48')
+        self.assertNotEqual(first.parent, second.parent)
 
     async def test_reopening_remote_file_refreshes_changed_remote_copy(self) -> None:
         contents = iter(('old1', 'new2'))
@@ -859,7 +871,7 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
         download_file.assert_not_awaited()
 
     async def test_remote_change_can_reload_and_skip_upload(self) -> None:
-        local_path = Path(self.manager._temp_path('tab-a', '/tmp/a.txt'))
+        local_path = Path(self.manager._temp_path('tab-a', '192.168.2.48', '/tmp/a.txt'))
         local_path.write_text('local', encoding='utf-8')
         session = _RemoteEditSession(
             tab_id='tab-a',
@@ -891,7 +903,9 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(local_path.read_text(encoding='utf-8'), 'remote')
 
     async def test_local_change_prompts_once_for_observed_signature(self) -> None:
-        local_path = Path(self.manager._temp_path('tab-a', '/tmp/watch.txt'))
+        local_path = Path(
+            self.manager._temp_path('tab-a', '192.168.2.48', '/tmp/watch.txt')
+        )
         local_path.write_text('before', encoding='utf-8')
         session = _RemoteEditSession(
             tab_id='tab-a',
@@ -919,7 +933,9 @@ class FileEditManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(prompt.await_args.kwargs['foreground'])
 
     async def test_sync_task_is_reported_until_finished(self) -> None:
-        local_path = Path(self.manager._temp_path('tab-a', '/tmp/sync.txt'))
+        local_path = Path(
+            self.manager._temp_path('tab-a', '192.168.2.48', '/tmp/sync.txt')
+        )
         local_path.write_text('changed', encoding='utf-8')
         signature = self.manager._local_signature(str(local_path))
         session = _RemoteEditSession(

@@ -172,7 +172,9 @@ class MainWindow(QMainWindow):
         session_menu.addSeparator()
         self._exit_action = QAction(tr('menu.exit'), self)
         self._exit_action.setShortcut(QKeySequence.Quit)
-        self._exit_action.triggered.connect(self.close)
+        self._exit_action.triggered.connect(
+            lambda _checked=False: self._request_window_close('menu_or_shortcut')
+        )
         session_menu.addAction(self._exit_action)
 
         settings_menu = menubar.addMenu(tr('menu.settings'))
@@ -290,12 +292,26 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             logger.warning(f'Failed to save window state: {exc}')
 
+    def _request_window_close(self, source: str) -> None:
+        logger.info(f'[EXIT-DIAG] Window close requested: source={source}')
+        self.close()
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        logger.info(
+            '[EXIT-DIAG] MainWindow.closeEvent received: '
+            f'spontaneous={event.spontaneous()}, visible={self.isVisible()}, '
+            f'tab_count={self.terminal_tabs.count()}, '
+            f'closing_after_cleanup={self._closing_after_transfer_confirm}, '
+            f'close_in_progress={self._close_in_progress}, '
+            f'running_transfers={self._has_running_transfers()}'
+        )
         if self._closing_after_transfer_confirm:
+            logger.info('[EXIT-DIAG] MainWindow close accepted after cleanup')
             self._save_session()
             super().closeEvent(event)
             return
         if self._close_in_progress:
+            logger.info('[EXIT-DIAG] Duplicate MainWindow close ignored during cleanup')
             event.ignore()
             return
         if self._has_running_transfers():
@@ -317,6 +333,7 @@ class MainWindow(QMainWindow):
             self._cancel_all_transfers()
         event.ignore()
         self._close_in_progress = True
+        logger.info('[EXIT-DIAG] MainWindow close deferred for asynchronous cleanup')
         self._track_background_task(asyncio.create_task(self._finish_close_async()))
 
     def _track_background_task(
@@ -584,16 +601,17 @@ class MainWindow(QMainWindow):
         await self.connection_manager.close_all()
 
     async def _finish_close_async(self) -> None:
-        logger.info('Application close sequence start')
+        logger.info('[EXIT-DIAG] Application close sequence start')
         try:
             self._save_session()
             await self._close_all_async()
-            logger.info('Application close sequence done')
+            logger.info('[EXIT-DIAG] Application close sequence done')
         except Exception:
             logger.exception('Application close sequence failed; forcing window close')
         finally:
             self._closing_after_transfer_confirm = True
             try:
+                logger.info('[EXIT-DIAG] Requesting final MainWindow close after cleanup')
                 self.close()
             finally:
                 self._close_in_progress = False
