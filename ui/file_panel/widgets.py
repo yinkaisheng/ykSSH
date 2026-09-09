@@ -98,6 +98,23 @@ from ui.file_panel.local_table import (
 )
 from ui.file_panel.helpers import _format_size
 
+
+_TRANSFER_CALCULATION_KEYS = {
+    'upload': 'file.calculating_upload_size',
+    'download': 'file.calculating_download_size',
+}
+
+
+def _format_truncated_percent(transferred_bytes: int, total_bytes: int) -> str:
+    """Format a clamped percentage to one decimal place without rounding."""
+    total = max(0, int(total_bytes))
+    if total == 0:
+        return '0.0%'
+    transferred = max(0, min(int(transferred_bytes), total))
+    tenths = transferred * 1000 // total
+    return f'{tenths // 10}.{tenths % 10}%'
+
+
 class _FileNavToolbar(QWidget):
     """Square flat navigation buttons for local/remote file panel toolbars."""
 
@@ -251,6 +268,7 @@ class _FilePanelStatusBar(QWidget):
         self._transfer_kind = transfer_kind
         self._transfer_active = False
         self._transfer_progress = 0.0
+        self._transfer_calculating = False
         self.setObjectName('filePanelStatusBar')
         self._progress_bar = _FileTransferProgressBar(self, transfer_kind=transfer_kind)
         layout = QHBoxLayout(self)
@@ -360,24 +378,32 @@ class _FilePanelStatusBar(QWidget):
         progress: float,
         transferred_bytes: int,
         total_bytes: int,
+        calculating: bool,
     ) -> None:
         if kind != self._transfer_kind:
             return
         self._transfer_active = active
         self._transfer_progress = max(0.0, min(1.0, float(progress)))
-        percent = f'{self._transfer_progress * 100:.0f}%'
-        self._speed_label.setText(f'{speed_text}  {percent}' if speed_text else percent)
-        self._speed_label.setToolTip(
-            tr(
-                'file.transfer_tooltip',
-                transferred=_format_size(max(0, int(transferred_bytes))),
-                total=_format_size(max(0, int(total_bytes))),
-            ) if active else ''
-        )
+        self._transfer_calculating = active and calculating
+        if self._transfer_calculating:
+            transfer_text = tr(_TRANSFER_CALCULATION_KEYS[kind])
+        else:
+            detail = (
+                f'{_format_size(max(0, int(transferred_bytes)))}/'
+                f'{_format_size(max(0, int(total_bytes)))}  '
+                f'{_format_truncated_percent(transferred_bytes, total_bytes)}'
+            )
+            transfer_text = f'{speed_text}  {detail}' if speed_text else detail
+        self._speed_label.setText(transfer_text)
+        self._speed_label.setToolTip('')
         self._speed_label.setVisible(active)
         self._transfer_button.setVisible(active)
         self._update_progress_bar_geometry()
         self._progress_bar.set_progress(self._transfer_progress if active else 0.0, active)
+
+    def retranslate_ui(self) -> None:
+        if self._transfer_calculating:
+            self._speed_label.setText(tr(_TRANSFER_CALCULATION_KEYS[self._transfer_kind]))
 
     def set_property_status(self, active: bool, done: int, total: int, failed: int) -> None:
         if not active:

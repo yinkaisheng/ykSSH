@@ -281,7 +281,8 @@ class FavoriteTreeWidget(QTreeWidget):
             moved = self.takeTopLevelItem(item_idx)
             if moved is None:
                 moved = item
-            if item_parent is target_parent or (target_parent is None and item_idx < target_idx):
+            # 只有移除位于目标之前的根节点，才会使目标索引前移。
+            if target_parent is None and item_idx < target_idx:
                 target_idx -= 1
 
         insert_idx = target_idx if above else target_idx + 1

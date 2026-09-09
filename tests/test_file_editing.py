@@ -480,6 +480,62 @@ class FileTableEditShortcutTests(unittest.TestCase):
         self.assertEqual(selected_rows(), [visible_rows[0]])
         self.assertTrue(edit.hasFocus())
 
+    def test_download_status_shows_total_progress_without_tooltip(self) -> None:
+        table = RemoteFileTable()
+        statusbar = _FilePanelStatusBar(table, transfer_kind='download')
+
+        statusbar.set_transfer_status(
+            'download',
+            '12.3 KB/s',
+            True,
+            0.61725,
+            12_345,
+            20_000,
+            False,
+        )
+
+        self.assertEqual(
+            statusbar._speed_label.text(),
+            '12.3 KB/s  12.1 KB/19.5 KB  61.7%',
+        )
+        self.assertEqual(statusbar._speed_label.toolTip(), '')
+
+    def test_upload_status_matches_download_total_progress_format(self) -> None:
+        table = LocalFileTable(initial_path=str(Path.cwd()))
+        statusbar = _FilePanelStatusBar(table, transfer_kind='upload')
+
+        statusbar.set_transfer_status(
+            'upload',
+            '8.0 MB/s',
+            True,
+            0.61725,
+            12_345,
+            20_000,
+            False,
+        )
+
+        self.assertEqual(
+            statusbar._speed_label.text(),
+            '8.0 MB/s  12.1 KB/19.5 KB  61.7%',
+        )
+        self.assertEqual(statusbar._speed_label.toolTip(), '')
+
+    def test_transfer_status_shows_localized_size_calculation_phase(self) -> None:
+        table = RemoteFileTable()
+        statusbar = _FilePanelStatusBar(table, transfer_kind='download')
+
+        statusbar.set_transfer_status(
+            'download',
+            '',
+            True,
+            0.99595,
+            0,
+            0,
+            True,
+        )
+
+        self.assertEqual(statusbar._speed_label.text(), 'Calculating total download size...')
+
     def test_filter_edit_escape_keeps_single_selection_visible(self) -> None:
         table = RemoteFileTable()
         table.set_list_callback(lambda _path: [
@@ -744,6 +800,75 @@ class FileTableEditShortcutTests(unittest.TestCase):
 
 
 class SftpUiHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_upload_size_calculation_runs_off_event_loop(self) -> None:
+        connection_manager = _FakeConnectionManager(_FakeSftp())
+        connection_manager.invalidate_remote_cache = Mock()
+        handler = SftpUiHandler(
+            'tab-a',
+            connection_manager,
+            lambda: None,
+        )
+        emitted: list[tuple] = []
+        handler.transfer_status_changed.connect(lambda *args: emitted.append(args))
+
+        with (
+            patch(
+                'ui.sftp_ui_handler.asyncio.to_thread',
+                new=AsyncMock(return_value=123),
+            ) as to_thread,
+            patch('ui.sftp_ui_handler.upload', new=AsyncMock()),
+        ):
+            await handler._upload_async(['/local/folder'])
+
+        to_thread.assert_awaited_once()
+        self.assertEqual(emitted[0][0:7], ('upload', '', True, 0.0, 0, 0, True))
+        self.assertEqual(emitted[1][4:7], (0, 123, False))
+
+    async def test_download_calculation_status_precedes_remote_scan(self) -> None:
+        handler = SftpUiHandler(
+            'tab-a',
+            _FakeConnectionManager(_FakeSftp()),
+            lambda: None,
+        )
+        emitted: list[tuple] = []
+        handler.transfer_status_changed.connect(lambda *args: emitted.append(args))
+
+        async def remote_size(*_args) -> int:
+            self.assertEqual(emitted[-1][0:7], ('download', '', True, 0.0, 0, 0, True))
+            return 456
+
+        with (
+            patch.object(handler, '_remote_path_size', side_effect=remote_size),
+            patch('ui.sftp_ui_handler.download', new=AsyncMock()),
+        ):
+            await handler._download_async(['/remote/folder'], '/local')
+
+        self.assertEqual(emitted[1][4:7], (0, 456, False))
+
+    async def test_transfer_signal_preserves_large_byte_counts(self) -> None:
+        handler = SftpUiHandler('tab-a', object(), lambda: None)
+        emitted: list[tuple] = []
+        handler.transfer_status_changed.connect(lambda *args: emitted.append(args))
+
+        handler._begin_transfer_status('download', 5_000_000_000)
+
+        self.assertEqual(emitted[-1][5], 5_000_000_000)
+
+    async def test_download_progress_emits_batch_sizes(self) -> None:
+        handler = SftpUiHandler('tab-a', object(), lambda: None)
+        emitted: list[tuple] = []
+        handler.transfer_status_changed.connect(lambda *args: emitted.append(args))
+        handler._begin_transfer_status(
+            'download',
+            300,
+        )
+        progress = handler._make_progress_handler('download')
+
+        progress('/remote/a.bin', '/local/a.bin', 50, 100)
+        progress('/remote/b.bin', '/local/b.bin', 10, 200)
+
+        self.assertEqual(emitted[-1][4:7], (60, 300, False))
+
     async def test_remote_rename_failure_emits_pending_target_name(self) -> None:
         handler = SftpUiHandler(
             'tab-a',

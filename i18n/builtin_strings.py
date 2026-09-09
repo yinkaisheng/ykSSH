@@ -208,7 +208,8 @@ BUILTIN_STRINGS: dict[str, str] = {
         'Selected {selected_files}/{total_files} files, '
         '{selected_dirs}/{total_dirs} folders'
     ),
-    'file.transfer_tooltip': '{transferred} / {total}',
+    'file.calculating_upload_size': 'Calculating total upload size...',
+    'file.calculating_download_size': 'Calculating total download size...',
     'file.conflict_title': 'File Already Exists',
     'file.conflict_body': 'The target {kind} already exists:\n{target}',
     'file.file': 'file',

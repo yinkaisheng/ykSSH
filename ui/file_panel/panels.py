@@ -301,6 +301,7 @@ class LocalFilePanel(QWidget):
     def retranslate_ui(self) -> None:
         self._label.setText(tr('file.local'))
         self._nav_toolbar.retranslate_ui()
+        self.statusbar.retranslate_ui()
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         self.table.setHorizontalHeaderLabels(_file_table_header_labels())
         self.table._emit_status_counts()
@@ -582,6 +583,7 @@ class RemoteFilePanel(QWidget):
     def retranslate_ui(self) -> None:
         self._label.setText(tr('file.remote'))
         self._nav_toolbar.retranslate_ui()
+        self.statusbar.retranslate_ui()
         self.placeholder.setText(tr('file.not_connected'))
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
         self.table.setHorizontalHeaderLabels(_file_table_header_labels())

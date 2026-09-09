@@ -41,7 +41,9 @@ def _remote_parent_and_name(path: str) -> tuple[str, str]:
 
 
 class SftpUiHandler(QObject):
-    transfer_status_changed = pyqtSignal(str, str, bool, float, int, int)
+    transfer_status_changed = pyqtSignal(
+        str, str, bool, float, object, object, bool,
+    )
     property_status_changed = pyqtSignal(bool, int, int, int)
     rename_failed = pyqtSignal(str)
 
@@ -267,14 +269,24 @@ class SftpUiHandler(QObject):
             total += await self._remote_path_size(sftp, child, visited_dirs)
         return total
 
-    def _begin_transfer_status(self, kind: str, total_bytes: int) -> None:
+    def _begin_transfer_status(
+        self,
+        kind: str,
+        total_bytes: int,
+    ) -> None:
+        normalized_total = max(0, int(total_bytes))
         self._transfer_stats[kind] = {
             'last_time': time.monotonic(),
             'last_bytes': 0,
-            'total_bytes': max(0, int(total_bytes)),
+            'total_bytes': normalized_total,
             'paths': {},
         }
-        self.transfer_status_changed.emit(kind, '', True, 0.0, 0, max(0, int(total_bytes)))
+        self.transfer_status_changed.emit(
+            kind, '', True, 0.0, 0, normalized_total, False,
+        )
+
+    def _set_transfer_calculating(self, kind: str) -> None:
+        self.transfer_status_changed.emit(kind, '', True, 0.0, 0, 0, True)
 
     def _make_progress_handler(self, kind: str):
         def _on_progress(src, _dst, bytes_so_far: int, _total: int) -> None:
@@ -284,7 +296,7 @@ class SftpUiHandler(QObject):
             path_key = os.fsdecode(src)
             paths = stats['paths']
             is_new_path = path_key not in paths
-            paths[path_key] = max(int(bytes_so_far), int(paths.get(path_key, 0)))
+            paths[path_key] = max(0, int(bytes_so_far), int(paths.get(path_key, 0)))
             current_total = sum(int(value) for value in paths.values())
             now = time.monotonic()
             if is_new_path and int(bytes_so_far) > 0:
@@ -292,7 +304,15 @@ class SftpUiHandler(QObject):
                 stats['last_bytes'] = current_total
                 total_bytes = int(stats['total_bytes'])
                 progress = min(1.0, current_total / total_bytes) if total_bytes > 0 else 0.0
-                self.transfer_status_changed.emit(kind, '', True, progress, current_total, total_bytes)
+                self.transfer_status_changed.emit(
+                    kind,
+                    '',
+                    True,
+                    progress,
+                    current_total,
+                    total_bytes,
+                    False,
+                )
                 return
             elapsed = max(0.001, now - float(stats['last_time']))
             delta = max(0, current_total - int(stats['last_bytes']))
@@ -309,13 +329,14 @@ class SftpUiHandler(QObject):
                 progress,
                 current_total,
                 total_bytes,
+                False,
             )
 
         return _on_progress
 
     def _end_transfer_status(self, kind: str) -> None:
         self._transfer_stats.pop(kind, None)
-        self.transfer_status_changed.emit(kind, '', False, 0.0, 0, 0)
+        self.transfer_status_changed.emit(kind, '', False, 0.0, 0, 0, False)
 
     def _dialog_parent(self) -> QWidget | None:
         parent = self.parent()
@@ -367,16 +388,19 @@ class SftpUiHandler(QObject):
         if sftp is None:
             return
         remote_dir = self._remote_dir.rstrip('/') or '/'
-        total_bytes = sum(self._local_path_size(path) for path in local_paths)
-        self._transfer_conflict_policy['upload'] = None
-        self._begin_transfer_status('upload', total_bytes)
-        logger.info(
-            'Upload batch start: '
-            f'tab_id={self.tab_id}, count={len(local_paths)}, total_bytes={total_bytes}, '
-            f'remote_dir={remote_dir}'
-        )
-        user_cancelled = False
+        self._set_transfer_calculating('upload')
         try:
+            total_bytes = await asyncio.to_thread(
+                lambda: sum(self._local_path_size(path) for path in local_paths),
+            )
+            self._transfer_conflict_policy['upload'] = None
+            self._begin_transfer_status('upload', total_bytes)
+            logger.info(
+                'Upload batch start: '
+                f'tab_id={self.tab_id}, count={len(local_paths)}, total_bytes={total_bytes}, '
+                f'remote_dir={remote_dir}'
+            )
+            user_cancelled = False
             for local in local_paths:
                 name = os.path.basename(local.rstrip(os.sep))
                 remote = f'{remote_dir}/{name}' if remote_dir != '/' else f'/{name}'
@@ -442,19 +466,20 @@ class SftpUiHandler(QObject):
         sftp = ssh.get_sftp()
         if sftp is None:
             return
-        total_bytes = 0
-        visited_dirs: set[str] = set()
-        for remote in remote_paths:
-            total_bytes += await self._remote_path_size(sftp, remote, visited_dirs)
-        self._transfer_conflict_policy['download'] = None
-        self._begin_transfer_status('download', total_bytes)
-        logger.info(
-            'Download batch start: '
-            f'tab_id={self.tab_id}, count={len(remote_paths)}, total_bytes={total_bytes}, '
-            f'local_dir={local_dir}'
-        )
-        user_cancelled = False
+        self._set_transfer_calculating('download')
         try:
+            total_bytes = 0
+            visited_dirs: set[str] = set()
+            for remote in remote_paths:
+                total_bytes += await self._remote_path_size(sftp, remote, visited_dirs)
+            self._transfer_conflict_policy['download'] = None
+            self._begin_transfer_status('download', total_bytes)
+            logger.info(
+                'Download batch start: '
+                f'tab_id={self.tab_id}, count={len(remote_paths)}, total_bytes={total_bytes}, '
+                f'local_dir={local_dir}'
+            )
+            user_cancelled = False
             for remote in remote_paths:
                 name = os.path.basename(remote.rstrip('/'))
                 local = os.path.join(local_dir, name)
