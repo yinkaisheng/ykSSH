@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from typing import Callable
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QKeyEvent, QPalette
@@ -19,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from core.ssh_config import SshConfigError, session_host_key_endpoints
 from i18n import tr
 from models.command_item import CommandItem
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
@@ -54,20 +56,25 @@ def _session_tooltip(session: SessionItem) -> str:
     """Build a multi-line tooltip with connection details (never includes password)."""
     if session.is_folder():
         return ''
-    auth = (
-        tr('sessions.auth_publickey')
-        if session.auth_type == AUTH_PUBLIC_KEY
-        else tr('sessions.auth_password')
-    )
     lines = [
         f"{tr('sessions.name')}: {session.name}",
         f"{tr('sessions.host')}: {session.host}",
-        f"{tr('sessions.port')}: {session.port}",
-        f"{tr('sessions.username')}: {session.username}",
-        f"{tr('sessions.auth_type')}: {auth}",
     ]
-    if session.auth_type == AUTH_PUBLIC_KEY and session.key_path:
-        lines.append(f"{tr('sessions.key_path')}: {session.key_path}")
+    if session.uses_ssh_config():
+        lines.append(f"{tr('sessions.ssh_config_path')}: {session.ssh_config_path}")
+    else:
+        auth = (
+            tr('sessions.auth_publickey')
+            if session.auth_type == AUTH_PUBLIC_KEY
+            else tr('sessions.auth_password')
+        )
+        lines.extend([
+            f"{tr('sessions.port')}: {session.port}",
+            f"{tr('sessions.username')}: {session.username}",
+            f"{tr('sessions.auth_type')}: {auth}",
+        ])
+        if session.auth_type == AUTH_PUBLIC_KEY and session.key_path:
+            lines.append(f"{tr('sessions.key_path')}: {session.key_path}")
     if session.local_path:
         lines.append(f"{tr('sessions.local_path')}: {session.local_path}")
     if session.remote_path:
@@ -87,6 +94,32 @@ def _command_tooltip(command: CommandItem) -> str:
     if command.description:
         lines.append(f"{tr('commands.description')}: {command.description}")
     return '\n'.join(lines)
+
+
+def _apply_tree_expanded(
+    tree_item: QTreeWidgetItem,
+    model_item: SessionItem | CommandItem,
+) -> None:
+    if not model_item.is_folder():
+        return
+    for index, child in enumerate(model_item.children):
+        child_item = tree_item.child(index)
+        if child_item is not None:
+            _apply_tree_expanded(child_item, child)
+    tree_item.setExpanded(model_item.expanded)
+
+
+def _capture_tree_expanded(
+    tree_item: QTreeWidgetItem,
+    model_item: SessionItem | CommandItem,
+) -> None:
+    if not model_item.is_folder():
+        return
+    model_item.expanded = tree_item.isExpanded()
+    for index, child in enumerate(model_item.children):
+        child_item = tree_item.child(index)
+        if child_item is not None:
+            _capture_tree_expanded(child_item, child)
 
 
 class SidePanel(QWidget):
@@ -120,6 +153,7 @@ class SidePanel(QWidget):
             DRAWER_COMMANDS: '',
             DRAWER_HISTORY: '',
         }
+        self._suspend_expansion_persist = False
         self._init_ui()
         self.reload()
         self.reload_commands()
@@ -144,6 +178,8 @@ class SidePanel(QWidget):
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.itemMoved.connect(self._on_tree_item_moved)
+        self.tree.itemExpanded.connect(lambda item: self._on_session_expansion_changed(item, True))
+        self.tree.itemCollapsed.connect(lambda item: self._on_session_expansion_changed(item, False))
         self.tree.renameRequested.connect(self._rename_item)
         self.tree.deleteRequested.connect(lambda item: self._delete_item(item, confirm=True))
         self.tree.setAnimated(True)
@@ -161,6 +197,12 @@ class SidePanel(QWidget):
         self.commands_tree.customContextMenuRequested.connect(self._show_command_context_menu)
         self.commands_tree.itemDoubleClicked.connect(self._on_command_item_double_clicked)
         self.commands_tree.itemMoved.connect(self._on_command_tree_item_moved)
+        self.commands_tree.itemExpanded.connect(
+            lambda item: self._on_command_expansion_changed(item, True)
+        )
+        self.commands_tree.itemCollapsed.connect(
+            lambda item: self._on_command_expansion_changed(item, False)
+        )
         self.commands_tree.renameRequested.connect(self._rename_command_item)
         self.commands_tree.deleteRequested.connect(lambda item: self._delete_command_item(item, confirm=True))
         self.commands_tree.setAnimated(True)
@@ -326,21 +368,54 @@ class SidePanel(QWidget):
         message_warning(self, tr('storage.save_failed_title'), tr('storage.save_credentials_failed'))
         return False
 
+    def _persist_session_credentials(self, session: SessionItem, dialog: SessionDialog) -> None:
+        if session.uses_ssh_config():
+            saved = self.keyring.set_hop_passwords(session.id, dialog.get_hop_passwords())
+            if saved and self.keyring.get_password(session.id):
+                saved = self.keyring.delete_password(session.id)
+            self._save_credential_result(saved)
+            return
+        saved = self.keyring.delete_hop_passwords(session.id)
+        password = dialog.get_password()
+        if session.auth_type != AUTH_PASSWORD:
+            saved = saved and self.keyring.delete_password(session.id)
+        elif password:
+            saved = saved and self.keyring.set_password(session.id, password)
+        else:
+            saved = saved and self.keyring.delete_password(session.id)
+        self._save_credential_result(saved)
+
     def _rebuild_tree(self) -> None:
-        self.tree.clear()
-        for item in self._items:
-            self.tree.addTopLevelItem(self._session_to_tree(item))
-        self.tree.expandAll()
-        self._filter_session_items(self._filter_texts.get(DRAWER_SESSIONS, '').strip().lower())
-        self.tree.viewport().update()
+        self._suspend_expansion_persist = True
+        animated = self.tree.isAnimated()
+        self.tree.setAnimated(False)
+        try:
+            self.tree.clear()
+            for item in self._items:
+                tree_item = self._session_to_tree(item)
+                self.tree.addTopLevelItem(tree_item)
+                _apply_tree_expanded(tree_item, item)
+            self._filter_session_items(self._filter_texts.get(DRAWER_SESSIONS, '').strip().lower())
+            self.tree.viewport().update()
+        finally:
+            self.tree.setAnimated(animated)
+            self._suspend_expansion_persist = False
 
     def _rebuild_command_tree(self) -> None:
-        self.commands_tree.clear()
-        for item in self._commands:
-            self.commands_tree.addTopLevelItem(self._command_to_tree(item))
-        self.commands_tree.expandAll()
-        self._filter_command_items(self._filter_texts.get(DRAWER_COMMANDS, '').strip().lower())
-        self.commands_tree.viewport().update()
+        self._suspend_expansion_persist = True
+        animated = self.commands_tree.isAnimated()
+        self.commands_tree.setAnimated(False)
+        try:
+            self.commands_tree.clear()
+            for item in self._commands:
+                tree_item = self._command_to_tree(item)
+                self.commands_tree.addTopLevelItem(tree_item)
+                _apply_tree_expanded(tree_item, item)
+            self._filter_command_items(self._filter_texts.get(DRAWER_COMMANDS, '').strip().lower())
+            self.commands_tree.viewport().update()
+        finally:
+            self.commands_tree.setAnimated(animated)
+            self._suspend_expansion_persist = False
 
     def _session_to_tree(self, session: SessionItem) -> QTreeWidgetItem:
         tree_item = QTreeWidgetItem([session.name])
@@ -405,8 +480,14 @@ class SidePanel(QWidget):
             if existing is not None and existing.is_folder():
                 existing.name = name
                 existing.children = children
+                existing.expanded = tree_item.isExpanded()
                 return existing
-            return SessionItem(id=item_id, name=name, children=children)
+            return SessionItem(
+                id=item_id,
+                name=name,
+                children=children,
+                expanded=tree_item.isExpanded(),
+            )
 
         if existing is not None and not existing.is_folder():
             existing.name = name
@@ -499,8 +580,14 @@ class SidePanel(QWidget):
             if existing is not None and existing.is_folder():
                 existing.name = name
                 existing.children = children
+                existing.expanded = tree_item.isExpanded()
                 return existing
-            return CommandItem(id=item_id, name=name, children=children)
+            return CommandItem(
+                id=item_id,
+                name=name,
+                children=children,
+                expanded=tree_item.isExpanded(),
+            )
 
         if existing is not None and not existing.is_folder():
             existing.name = name
@@ -595,7 +682,7 @@ class SidePanel(QWidget):
                 copy_host_action = menu.addAction(tr('sessions.copy_host'))
                 add_menu_key(menu, copy_host_action, Qt.Key_H)
             forget_host_key_action = None
-            if session is not None and self.host_keys.has(session.host, session.port):
+            if session is not None and self._session_trusted_endpoints(session):
                 forget_host_key_action = menu.addAction(tr('sessions.forget_host_key'))
             add_folder_action = None
             add_session_action = None
@@ -641,9 +728,11 @@ class SidePanel(QWidget):
             elif action == add_session_action:
                 self._add_session_to_parent(item)
             elif action == expand_action:
-                self._expand_recursive(item)
+                self._with_suspended_expansion(self.tree, lambda: self._expand_recursive(item))
+                self._persist_session_expansion_from_tree()
             elif action == collapse_action:
-                self._collapse_recursive(item)
+                self._with_suspended_expansion(self.tree, lambda: self._collapse_recursive(item))
+                self._persist_session_expansion_from_tree()
             elif action == rename_action:
                 self._rename_item(item)
             elif action == delete_action:
@@ -664,24 +753,52 @@ class SidePanel(QWidget):
             elif action == delete_action:
                 self._delete_item(item, confirm=True)
 
+    def _session_trusted_endpoints(self, session: SessionItem) -> list[tuple[str, int]]:
+        try:
+            endpoints = session_host_key_endpoints(session)
+        except SshConfigError:
+            endpoints = [(session.host, session.port)] if session.host else []
+        return [
+            (host, port) for host, port in endpoints
+            if self.host_keys.has(host, port)
+        ]
+
     def _forget_host_key(self, item: QTreeWidgetItem) -> None:
         session = self._find_session_by_tree(item)
         if session is None or session.is_folder():
             return
-        fingerprint = self.host_keys.fingerprint(session.host, session.port)
-        if not ask_yes_no(
-            self,
-            tr('sessions.forget_host_key'),
-            tr(
-                'sessions.forget_host_key_confirm',
-                host=session.host,
-                port=session.port,
-                fingerprint=fingerprint,
-            ),
-        ):
+        endpoints = self._session_trusted_endpoints(session)
+        if not endpoints:
             return
-        if not self.host_keys.forget(session.host, session.port):
-            message_warning(self, tr('storage.save_failed_title'), tr('storage.save_host_keys_failed'))
+        if len(endpoints) == 1:
+            host, port = endpoints[0]
+            fingerprint = self.host_keys.fingerprint(host, port)
+            confirmed = ask_yes_no(
+                self,
+                tr('sessions.forget_host_key'),
+                tr(
+                    'sessions.forget_host_key_confirm',
+                    host=host,
+                    port=port,
+                    fingerprint=fingerprint,
+                ),
+            )
+        else:
+            details = '\n'.join(
+                f'{host}:{port}  {self.host_keys.fingerprint(host, port)}'
+                for host, port in endpoints
+            )
+            confirmed = ask_yes_no(
+                self,
+                tr('sessions.forget_host_key'),
+                tr('sessions.forget_host_key_confirm_multi', details=details),
+            )
+        if not confirmed:
+            return
+        for host, port in endpoints:
+            if not self.host_keys.forget(host, port):
+                message_warning(self, tr('storage.save_failed_title'), tr('storage.save_host_keys_failed'))
+                return
 
     def _show_command_context_menu(self, pos) -> None:
         item = self.commands_tree.itemAt(pos)
@@ -777,9 +894,17 @@ class SidePanel(QWidget):
             elif action == add_command_action:
                 self._add_command_to_parent(item)
             elif action == expand_action:
-                self._expand_command_recursive(item)
+                self._with_suspended_expansion(
+                    self.commands_tree,
+                    lambda: self._expand_command_recursive(item),
+                )
+                self._persist_command_expansion_from_tree()
             elif action == collapse_action:
-                self._collapse_command_recursive(item)
+                self._with_suspended_expansion(
+                    self.commands_tree,
+                    lambda: self._collapse_command_recursive(item),
+                )
+                self._persist_command_expansion_from_tree()
             elif action == rename_action:
                 self._rename_command_item(item)
             elif action == delete_action:
@@ -831,13 +956,86 @@ class SidePanel(QWidget):
             if self._is_folder(child):
                 self._collapse_recursive(child)
 
+    def _on_session_expansion_changed(self, item: QTreeWidgetItem, expanded: bool) -> None:
+        if self._suspend_expansion_persist:
+            return
+        session = self._find_session_by_tree(item)
+        if session is None or not session.is_folder() or session.expanded == expanded:
+            return
+        session.expanded = expanded
+        self._save_sessions()
+
+    def _on_command_expansion_changed(self, item: QTreeWidgetItem, expanded: bool) -> None:
+        if self._suspend_expansion_persist:
+            return
+        command = self._find_command_by_tree(item)
+        if command is None or not command.is_folder() or command.expanded == expanded:
+            return
+        command.expanded = expanded
+        self._save_commands()
+
+    def _with_suspended_expansion(self, tree: FavoriteTreeWidget, apply: Callable[[], None]) -> None:
+        was = self._suspend_expansion_persist
+        self._suspend_expansion_persist = True
+        animated = tree.isAnimated()
+        tree.setAnimated(False)
+        try:
+            apply()
+        finally:
+            tree.setAnimated(animated)
+            self._suspend_expansion_persist = was
+
+    def _persist_session_expansion_from_tree(self) -> None:
+        for index, item in enumerate(self._items):
+            tree_item = self.tree.topLevelItem(index)
+            if tree_item is not None:
+                _capture_tree_expanded(tree_item, item)
+        self._save_sessions()
+
+    def _persist_command_expansion_from_tree(self) -> None:
+        for index, item in enumerate(self._commands):
+            tree_item = self.commands_tree.topLevelItem(index)
+            if tree_item is not None:
+                _capture_tree_expanded(tree_item, item)
+        self._save_commands()
+
+    def _restore_session_expanded_from_model(self) -> None:
+        def _apply() -> None:
+            for index, item in enumerate(self._items):
+                tree_item = self.tree.topLevelItem(index)
+                if tree_item is not None:
+                    _apply_tree_expanded(tree_item, item)
+
+        self._with_suspended_expansion(self.tree, _apply)
+
+    def _restore_command_expanded_from_model(self) -> None:
+        def _apply() -> None:
+            for index, item in enumerate(self._commands):
+                tree_item = self.commands_tree.topLevelItem(index)
+                if tree_item is not None:
+                    _apply_tree_expanded(tree_item, item)
+
+        self._with_suspended_expansion(self.commands_tree, _apply)
+
     def _expand_all(self) -> None:
-        for i in range(self.tree.topLevelItemCount()):
-            self._expand_recursive(self.tree.topLevelItem(i))
+        self._with_suspended_expansion(
+            self.tree,
+            lambda: [
+                self._expand_recursive(self.tree.topLevelItem(i))
+                for i in range(self.tree.topLevelItemCount())
+            ],
+        )
+        self._persist_session_expansion_from_tree()
 
     def _collapse_all(self) -> None:
-        for i in range(self.tree.topLevelItemCount()):
-            self._collapse_recursive(self.tree.topLevelItem(i))
+        self._with_suspended_expansion(
+            self.tree,
+            lambda: [
+                self._collapse_recursive(self.tree.topLevelItem(i))
+                for i in range(self.tree.topLevelItemCount())
+            ],
+        )
+        self._persist_session_expansion_from_tree()
 
     def _expand_command_recursive(self, item: QTreeWidgetItem) -> None:
         item.setExpanded(True)
@@ -854,12 +1052,24 @@ class SidePanel(QWidget):
                 self._collapse_command_recursive(child)
 
     def _expand_command_all(self) -> None:
-        for i in range(self.commands_tree.topLevelItemCount()):
-            self._expand_command_recursive(self.commands_tree.topLevelItem(i))
+        self._with_suspended_expansion(
+            self.commands_tree,
+            lambda: [
+                self._expand_command_recursive(self.commands_tree.topLevelItem(i))
+                for i in range(self.commands_tree.topLevelItemCount())
+            ],
+        )
+        self._persist_command_expansion_from_tree()
 
     def _collapse_command_all(self) -> None:
-        for i in range(self.commands_tree.topLevelItemCount()):
-            self._collapse_command_recursive(self.commands_tree.topLevelItem(i))
+        self._with_suspended_expansion(
+            self.commands_tree,
+            lambda: [
+                self._collapse_command_recursive(self.commands_tree.topLevelItem(i))
+                for i in range(self.commands_tree.topLevelItemCount())
+            ],
+        )
+        self._persist_command_expansion_from_tree()
 
     def _add_top_level_folder(self) -> None:
         name = prompt_text(self, tr('sessions.folder_prompt_title'), tr('sessions.prompt_name'))
@@ -918,9 +1128,7 @@ class SidePanel(QWidget):
         if dialog.exec_() != SessionDialog.Accepted:
             return
         session = dialog.get_session()
-        password = dialog.get_password()
-        if password:
-            self._save_credential_result(self.keyring.set_password(session.id, password))
+        self._persist_session_credentials(session, dialog)
         tree_item = self._session_to_tree(session)
         if parent_item is not None:
             parent_item.addChild(tree_item)
@@ -963,7 +1171,10 @@ class SidePanel(QWidget):
             self,
             session=session,
             title=tr('sessions.dialog_title_edit'),
-            initial_password=self.keyring.get_password(session.id) or '',
+            initial_password='' if session.uses_ssh_config() else (self.keyring.get_password(session.id) or ''),
+            initial_hop_passwords=(
+                self.keyring.get_hop_passwords(session.id) if session.uses_ssh_config() else {}
+            ),
         )
         if dialog.exec_() != SessionDialog.Accepted:
             return
@@ -974,16 +1185,11 @@ class SidePanel(QWidget):
         session.username = updated.username
         session.auth_type = updated.auth_type
         session.key_path = updated.key_path
+        session.ssh_config_path = updated.ssh_config_path
         session.local_path = updated.local_path
         session.remote_path = updated.remote_path
         session.info = updated.info
-        password = dialog.get_password()
-        if session.auth_type != AUTH_PASSWORD:
-            self._save_credential_result(self.keyring.delete_password(session.id))
-        elif password:
-            self._save_credential_result(self.keyring.set_password(session.id, password))
-        else:
-            self._save_credential_result(self.keyring.delete_password(session.id))
+        self._persist_session_credentials(session, dialog)
         item.setText(0, session.name)
         item.setToolTip(0, _session_tooltip(session))
         self._save_sessions()
@@ -1044,7 +1250,7 @@ class SidePanel(QWidget):
             for child in session.children:
                 saved = self._delete_credentials_recursive(child) and saved
             return saved
-        return self.keyring.delete_password(session.id)
+        return self.keyring.delete_session_credentials(session.id)
 
     def _delete_item(self, item: QTreeWidgetItem, confirm: bool = False) -> None:
         session = self._find_session_by_tree(item)
@@ -1187,11 +1393,19 @@ class SidePanel(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             self._filter_tree_item(item, keyword)
+        if keyword:
+            self._with_suspended_expansion(self.tree, self.tree.expandAll)
+        else:
+            self._restore_session_expanded_from_model()
 
     def _filter_command_items(self, keyword: str) -> None:
         for i in range(self.commands_tree.topLevelItemCount()):
             item = self.commands_tree.topLevelItem(i)
             self._filter_command_item(item, keyword)
+        if keyword:
+            self._with_suspended_expansion(self.commands_tree, self.commands_tree.expandAll)
+        else:
+            self._restore_command_expanded_from_model()
 
     @staticmethod
     def _filter_tree_item(item: QTreeWidgetItem, keyword: str) -> bool:

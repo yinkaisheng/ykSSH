@@ -84,6 +84,15 @@ def _visible_command_marker_rows(
     return tuple(int(row) - top for row in command_start_rows if top <= int(row) < bottom)
 
 
+def _paste_text_without_trailing_blank_lines(text: str) -> str:
+    """Drop consecutive trailing blank lines from clipboard text."""
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+    lines = normalized.split('\n')
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return '\n'.join(lines)
+
+
 class TerminalVTWidget(QWidget):
     """
     A VT/xterm-like terminal viewport backed by pyte.
@@ -195,6 +204,7 @@ class TerminalVTWidget(QWidget):
         self._pending_command_start_x: int | None = None
         self._pending_command_text = ''
         self._pending_command_history_forced = False
+        self._pending_command_from_shell_prompt = False
         self._command_start_commands: dict[int, str] = {}
         self._last_gutter_tooltip_row: int | None = None
         self._paint_timer = QTimer(self)
@@ -841,6 +851,23 @@ class TerminalVTWidget(QWidget):
     # -------------------------
     # Public API (compatible with legacy TerminalWidget)
     # -------------------------
+    def reset_session_input_modes(self) -> None:
+        """Clear DEC private modes that belong to the previous PTY.
+
+        Mouse reporting, alt-screen, application cursor keys and bracketed
+        paste are negotiated per PTY. Reusing the widget after disconnect
+        without resetting them makes clicks/wheel emit stale SGR sequences
+        (for example ``64;20;37M``) into the new shell.
+        """
+        self._app_cursor_keys = False
+        self._bracketed_paste_mode = False
+        self._mouse_track_1000 = False
+        self._mouse_track_1002 = False
+        self._mouse_track_1003 = False
+        self._mouse_sgr_1006 = False
+        self._pressed_mouse_buttons.clear()
+        self._exit_alt_screen()
+
     def set_reconnect_enabled(self, enabled: bool) -> None:
         """When enabled, Enter requests reconnect instead of sending CR to SSH."""
         enabled = bool(enabled)
@@ -849,6 +876,7 @@ class TerminalVTWidget(QWidget):
             self._working_directory_path = None
             self._working_directory_request_pending = False
             self._restore_input_after_working_directory_report = False
+            self.reset_session_input_modes()
         self._reconnect_enabled = enabled
 
     def is_reconnect_enabled(self) -> bool:
@@ -1313,13 +1341,7 @@ class TerminalVTWidget(QWidget):
         self._working_directory_path = None
         self._working_directory_request_pending = False
         self._restore_input_after_working_directory_report = False
-        self._app_cursor_keys = False
-        self._bracketed_paste_mode = False
-        self._mouse_track_1000 = False
-        self._mouse_track_1002 = False
-        self._mouse_track_1003 = False
-        self._mouse_sgr_1006 = False
-        self._pressed_mouse_buttons.clear()
+        self.reset_session_input_modes()
         self._scroll_lines = 0
         self._viewport_top_row = 0
         self._raw_buffer_has_tui_control = False
@@ -2553,15 +2575,20 @@ class TerminalVTWidget(QWidget):
             self._pending_command_start_x = 0
         visible_y = self._cursor_y()
         if visible_y is not None:
-            self._capture_working_directory_from_prompt(
-                self._line_text(visible_y)[:max(0, int(self._pending_command_start_x or 0))]
+            prefix = self._line_text(visible_y)[:max(0, int(self._pending_command_start_x or 0))]
+            self._pending_command_from_shell_prompt = bool(
+                _SHELL_PROMPT_READY_RE.search(prefix)
             )
+            self._capture_working_directory_from_prompt(prefix)
+        else:
+            self._pending_command_from_shell_prompt = False
 
     def _commit_command_start(self, *, check_continuation: bool = False) -> None:
         if self._in_alt_screen:
             self._pending_command_start_y = None
             self._pending_command_start_x = None
             self._pending_command_text = ''
+            self._pending_command_from_shell_prompt = False
             return
         if check_continuation and self._current_input_continues():
             self._record_pending_command_start()
@@ -2569,6 +2596,17 @@ class TerminalVTWidget(QWidget):
         start_y = self._pending_command_start_y
         if start_y is None:
             start_y = self._cursor_abs_y()
+        record_history = (
+            self._pending_command_history_forced
+            or self._pending_command_from_shell_prompt
+        )
+        if not record_history:
+            self._pending_command_start_y = None
+            self._pending_command_start_x = None
+            self._pending_command_text = ''
+            self._pending_command_history_forced = False
+            self._pending_command_from_shell_prompt = False
+            return
         self._pending_command_start_y = None
         if start_y is None:
             self._emit_pending_command_submitted('', None)
@@ -2603,6 +2641,7 @@ class TerminalVTWidget(QWidget):
         self._pending_command_start_x = None
         self._pending_command_text = ''
         self._pending_command_history_forced = False
+        self._pending_command_from_shell_prompt = False
         self._command_start_commands.clear()
         self._last_gutter_tooltip_row = None
 
@@ -2639,7 +2678,11 @@ class TerminalVTWidget(QWidget):
             command = visible_command
         self._pending_command_text = ''
         self._pending_command_history_forced = False
-        if command and sent_at and (force_history or self._pending_command_was_visible(command)):
+        self._pending_command_from_shell_prompt = False
+        if command and sent_at and (
+            force_history
+            or self._history_command_looks_echoed(command, start_y)
+        ):
             if start_y is not None:
                 self._command_start_commands[start_y] = command
             self.command_submitted.emit(command, sent_at, int(start_y))
@@ -2659,6 +2702,14 @@ class TerminalVTWidget(QWidget):
         if not candidate:
             return ''
         return candidate
+
+    def _history_command_looks_echoed(self, command: str, start_y: int | None) -> bool:
+        if self._pending_command_was_visible(command):
+            return True
+        if start_y is None:
+            return False
+        cursor_y = self._cursor_abs_y()
+        return cursor_y is not None and cursor_y != start_y
 
     def _pending_command_was_visible(self, command: str) -> bool:
         y = self._cursor_y()
@@ -2696,6 +2747,7 @@ class TerminalVTWidget(QWidget):
         self._pending_command_start_x = None
         self._pending_command_text = ''
         self._pending_command_history_forced = False
+        self._pending_command_from_shell_prompt = False
         self.input_received.emit(b'\x01\x0b')
         self.send_command_text(f'cd -- {shlex.quote(path)}', execute=True)
 
@@ -3323,6 +3375,7 @@ class TerminalVTWidget(QWidget):
                 if key in (Qt.Key_C, Qt.Key_U):
                     self._pending_command_text = ''
                     self._pending_command_history_forced = False
+                    self._pending_command_from_shell_prompt = False
                 ctrl_char = bytes([key - Qt.Key_A + 1])
                 self.input_received.emit(ctrl_char)
                 event.accept()
@@ -3439,8 +3492,9 @@ class TerminalVTWidget(QWidget):
     def _send_paste_text(self, text: str) -> None:
         confirm_multiline = bool(get_setting("terminal_paste_confirm_multiline", True))
         bracketed = bool(get_setting("terminal_bracketed_paste", True)) and self._bracketed_paste_mode
+        trimmed = _paste_text_without_trailing_blank_lines(text)
 
-        if confirm_multiline and ("\n" in text or "\r" in text):
+        if confirm_multiline and '\n' in trimmed:
             edited = prompt_multiline_confirm(
                 self,
                 t("dialog.paste_confirm.title"),
@@ -3450,6 +3504,10 @@ class TerminalVTWidget(QWidget):
             if edited is None:
                 return
             text = edited
+        elif confirm_multiline:
+            if not trimmed:
+                return
+            text = trimmed
 
         self._prepare_for_terminal_input()
         history_text = text.replace("\r\n", "\n").replace("\r", "\n")

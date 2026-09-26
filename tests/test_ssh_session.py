@@ -12,6 +12,7 @@ import asyncssh
 
 from models.session_item import SessionItem
 from core.connection_manager import ConnectionManager
+from core.ssh_config import SshConfigError
 from core.ssh_session import SSHConnection, SSHSession
 from storage.host_key_store import HostKeyStore
 
@@ -114,12 +115,15 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
         item: SessionItem,
         store: HostKeyStore,
         *,
+        password: str | None = None,
+        hop_passwords: dict[str, str] | None = None,
         on_connection_lost=None,
     ) -> SSHConnection:
         callback = on_connection_lost or AsyncMock()
         return SSHConnection(
             item,
-            password=None,
+            password=password,
+            hop_passwords=hop_passwords,
             host_key_store=store,
             host_key_confirm=None,
             on_connection_lost=callback,
@@ -429,6 +433,395 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
                 manager.get_session('tab-c').shared_connection,
             )
             await manager.close_all()
+
+    async def test_ssh_config_proxy_jump_probes_and_connects_each_hop(self) -> None:
+        config_text = """
+Host api-01
+    HostName 192.0.2.10
+    User root
+    IdentityFile ~/.ssh/id_ed25519
+Host vod-worker-01
+    HostName 192.0.2.20
+    User root
+    ProxyJump api-01
+    IdentityFile ~/.ssh/id_ed25519
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / 'vodconfig'
+            config_path.write_text(config_text, encoding='utf-8')
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='worker',
+                host='vod-worker-01',
+                ssh_config_path=str(config_path),
+            )
+            connection = self._connection(item, store)
+            jump_conn = _FakeAsyncSSHConnection()
+            dest_conn = _FakeAsyncSSHConnection()
+            connect = AsyncMock(side_effect=[jump_conn, dest_conn])
+            probe = AsyncMock(return_value=key)
+
+            with patch('core.ssh_session.asyncssh.get_server_host_key', probe), patch(
+                'core.ssh_session.asyncssh.connect',
+                connect,
+            ):
+                session = SSHSession('tab-a')
+                await session.connect(item, connection)
+
+            self.assertEqual(probe.await_count, 2)
+            self.assertEqual(probe.await_args_list[0].args, ('192.0.2.10', 22))
+            self.assertEqual(probe.await_args_list[1].args, ('192.0.2.20', 22))
+            self.assertIs(probe.await_args_list[1].kwargs.get('tunnel'), jump_conn)
+            self.assertEqual(connect.await_count, 2)
+            self.assertNotIn('tunnel', connect.await_args_list[0].kwargs)
+            self.assertIs(connect.await_args_list[1].kwargs.get('tunnel'), jump_conn)
+            self.assertEqual(connection.session_item.username, 'root')
+            self.assertIs(connection._conn, dest_conn)
+            self.assertEqual(connection._hop_conns, [jump_conn])
+
+            await session.disconnect()
+            self.assertTrue(dest_conn.closed)
+            self.assertTrue(jump_conn.closed)
+
+    async def test_ssh_config_second_hop_failure_closes_jump_connection(self) -> None:
+        config_text = """
+Host api-01
+    HostName 192.0.2.10
+    User root
+    IdentityFile ~/.ssh/id_ed25519
+Host vod-worker-01
+    HostName 192.0.2.20
+    User root
+    ProxyJump api-01
+    IdentityFile ~/.ssh/id_ed25519
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / 'vodconfig'
+            config_path.write_text(config_text, encoding='utf-8')
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='worker',
+                host='vod-worker-01',
+                ssh_config_path=str(config_path),
+            )
+            connection = self._connection(item, store)
+            jump_conn = _FakeAsyncSSHConnection()
+            connect = AsyncMock(side_effect=[jump_conn, RuntimeError('dest failed')])
+
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch('core.ssh_session.asyncssh.connect', connect):
+                with self.assertRaisesRegex(RuntimeError, 'dest failed'):
+                    await connection.acquire('tab-a')
+
+            self.assertTrue(jump_conn.closed)
+            self.assertEqual(connection._hop_conns, [])
+
+    async def test_ssh_config_cancel_during_destination_connect_closes_jump(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_jump_config(temp_dir)
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(host='vod-worker-01', ssh_config_path=str(config_path))
+            connection = self._connection(item, store)
+            jump_conn = _FakeAsyncSSHConnection()
+            destination_started = asyncio.Event()
+
+            async def _connect(**options):
+                if options.get('tunnel') is None:
+                    return jump_conn
+                destination_started.set()
+                await asyncio.Event().wait()
+
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch('core.ssh_session.asyncssh.connect', side_effect=_connect):
+                task = asyncio.create_task(connection.acquire('tab-a'))
+                try:
+                    await asyncio.wait_for(destination_started.wait(), timeout=1)
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await asyncio.wait_for(task, timeout=1)
+                    self.assertTrue(jump_conn.closed)
+                    self.assertTrue(connection.is_closed)
+                    self.assertEqual(connection.member_count, 0)
+                    self.assertEqual(connection._hop_conns, [])
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    await connection.close()
+                    jump_conn.close()
+
+    @staticmethod
+    def _write_jump_config(directory: str) -> Path:
+        path = Path(directory) / 'vodconfig'
+        path.write_text(
+            """
+Host api-01
+    HostName 192.0.2.10
+    User root
+    IdentityFile ~/.ssh/id_ed25519
+Host vod-worker-01
+    HostName 192.0.2.20
+    User root
+    ProxyJump api-01
+    IdentityFile ~/.ssh/id_ed25519
+""",
+            encoding='utf-8',
+        )
+        return path
+
+    async def test_ssh_config_destination_loss_closes_jump_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_jump_config(temp_dir)
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='worker',
+                host='vod-worker-01',
+                ssh_config_path=str(config_path),
+            )
+            lost = asyncio.Event()
+
+            async def _on_lost(_connection: SSHConnection) -> None:
+                lost.set()
+
+            connection = self._connection(item, store, on_connection_lost=_on_lost)
+            jump_conn = _FakeAsyncSSHConnection()
+            dest_conn = _FakeAsyncSSHConnection()
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch(
+                'core.ssh_session.asyncssh.connect',
+                AsyncMock(side_effect=[jump_conn, dest_conn]),
+            ):
+                await connection.acquire('tab-a')
+
+            dest_conn.close()
+            await asyncio.wait_for(lost.wait(), timeout=1)
+            self.assertTrue(jump_conn.closed)
+            self.assertTrue(connection.is_closed)
+
+    async def test_ssh_config_jump_host_loss_closes_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_jump_config(temp_dir)
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='worker',
+                host='vod-worker-01',
+                ssh_config_path=str(config_path),
+            )
+            lost = asyncio.Event()
+
+            async def _on_lost(_connection: SSHConnection) -> None:
+                lost.set()
+
+            connection = self._connection(item, store, on_connection_lost=_on_lost)
+            jump_conn = _FakeAsyncSSHConnection()
+            dest_conn = _FakeAsyncSSHConnection()
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch(
+                'core.ssh_session.asyncssh.connect',
+                AsyncMock(side_effect=[jump_conn, dest_conn]),
+            ):
+                await connection.acquire('tab-a')
+
+            jump_conn.close()
+            await asyncio.wait_for(lost.wait(), timeout=1)
+            self.assertTrue(dest_conn.closed)
+            self.assertTrue(connection.is_closed)
+
+    async def test_ssh_config_reconnect_rebuilds_jump_and_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_jump_config(temp_dir)
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='worker',
+                host='vod-worker-01',
+                ssh_config_path=str(config_path),
+            )
+            manager = ConnectionManager(credential_store=Mock(
+                get_password=Mock(return_value=None),
+                get_hop_passwords=Mock(return_value={}),
+            ))
+            manager.host_keys = store
+            first_jump = _FakeAsyncSSHConnection()
+            first_dest = _FakeAsyncSSHConnection()
+            second_jump = _FakeAsyncSSHConnection()
+            second_dest = _FakeAsyncSSHConnection()
+            connect = AsyncMock(side_effect=[first_jump, first_dest, second_jump, second_dest])
+
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch('core.ssh_session.asyncssh.connect', connect):
+                await manager.open_tab('tab-a', item, _FakeTerminal())
+                first_dest.close()
+                for _ in range(50):
+                    if (
+                        manager._connections.get(item.id) is None
+                        and manager.get_session('tab-a') is None
+                    ):
+                        break
+                    await asyncio.sleep(0)
+                else:
+                    self.fail('lost jump connection was not removed from the pool')
+                self.assertTrue(first_jump.closed)
+
+                await manager.open_tab('tab-a', item, _FakeTerminal())
+
+            self.assertEqual(connect.await_count, 4)
+            self.assertIs(connect.await_args_list[1].kwargs.get('tunnel'), first_jump)
+            self.assertIs(connect.await_args_list[3].kwargs.get('tunnel'), second_jump)
+            self.assertIs(manager.get_session('tab-a').shared_connection._conn, second_dest)
+            await manager.close_all()
+
+    async def test_ssh_config_password_hops_ignore_session_password(self) -> None:
+        config_text = """
+Host jump-01
+    HostName 192.0.2.10
+    User jumpuser
+Host inner-01
+    HostName 192.0.2.20
+    User inneruser
+    ProxyJump jump-01
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / 'jumpconfig'
+            config_path.write_text(config_text, encoding='utf-8')
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='inner',
+                host='inner-01',
+                ssh_config_path=str(config_path),
+            )
+            connection = self._connection(item, store, password='unused-session-password')
+            connect = AsyncMock(side_effect=RuntimeError('connect should not run'))
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch('core.ssh_session.asyncssh.connect', connect):
+                with self.assertRaises(SshConfigError) as raised:
+                    await connection.acquire('tab-a')
+
+            self.assertEqual(raised.exception.message_key, 'ssh_config.auth_missing')
+            self.assertEqual(raised.exception.params.get('alias'), 'jump-01')
+            connect.assert_not_awaited()
+
+    async def test_ssh_config_password_hops_use_per_alias_passwords(self) -> None:
+        config_text = """
+Host jump-01
+    HostName 192.0.2.10
+    User jumpuser
+Host inner-01
+    HostName 192.0.2.20
+    User inneruser
+    ProxyJump jump-01
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / 'jumpconfig'
+            config_path.write_text(config_text, encoding='utf-8')
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='inner',
+                host='inner-01',
+                ssh_config_path=str(config_path),
+            )
+            jump = _FakeAsyncSSHConnection()
+            connection = self._connection(
+                item,
+                store,
+                hop_passwords={'jump-01': 'jump-secret', 'inner-01': 'inner-secret'},
+            )
+            connect = AsyncMock(side_effect=[jump, RuntimeError('connect stopped')])
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch('core.ssh_session.asyncssh.connect', connect):
+                with self.assertRaisesRegex(RuntimeError, 'connect stopped'):
+                    await connection.acquire('tab-a')
+
+            self.assertEqual(connect.await_count, 2)
+            self.assertEqual(connect.await_args_list[0].kwargs.get('password'), 'jump-secret')
+            self.assertEqual(connect.await_args_list[0].kwargs.get('username'), 'jumpuser')
+            self.assertEqual(connect.await_args_list[1].kwargs.get('password'), 'inner-secret')
+            self.assertEqual(connect.await_args_list[1].kwargs.get('username'), 'inneruser')
+            self.assertIs(connect.await_args_list[1].kwargs.get('tunnel'), jump)
+
+    async def test_ssh_config_mixed_identity_and_password_hops(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            key_path = Path(temp_dir) / 'id_ed25519'
+            key_path.write_text('dummy-key\n', encoding='utf-8')
+            config_path = Path(temp_dir) / 'jumpconfig'
+            config_path.write_text(
+                f"""
+Host jump-01
+    HostName 192.0.2.10
+    User jumpuser
+    IdentityFile {key_path}
+Host inner-01
+    HostName 192.0.2.20
+    User inneruser
+    ProxyJump jump-01
+""",
+                encoding='utf-8',
+            )
+            key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+            store = HostKeyStore(Path(temp_dir) / 'host_keys.json')
+            store.trust('192.0.2.10', 22, key)
+            store.trust('192.0.2.20', 22, key)
+            item = SessionItem(
+                id='inner',
+                host='inner-01',
+                ssh_config_path=str(config_path),
+            )
+            jump = _FakeAsyncSSHConnection()
+            connection = self._connection(
+                item,
+                store,
+                hop_passwords={'inner-01': 'inner-secret'},
+            )
+            connect = AsyncMock(side_effect=[jump, RuntimeError('connect stopped')])
+            with patch(
+                'core.ssh_session.asyncssh.get_server_host_key',
+                AsyncMock(return_value=key),
+            ), patch('core.ssh_session.asyncssh.connect', connect):
+                with self.assertRaisesRegex(RuntimeError, 'connect stopped'):
+                    await connection.acquire('tab-a')
+
+            self.assertEqual(connect.await_count, 2)
+            self.assertIn(str(key_path), connect.await_args_list[0].kwargs.get('client_keys'))
+            self.assertNotIn('password', connect.await_args_list[0].kwargs)
+            self.assertEqual(connect.await_args_list[1].kwargs.get('password'), 'inner-secret')
+            self.assertNotIn('client_keys', connect.await_args_list[1].kwargs)
+            self.assertIs(connect.await_args_list[1].kwargs.get('tunnel'), jump)
 
 
 if __name__ == '__main__':

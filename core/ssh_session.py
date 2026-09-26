@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable
 import asyncssh
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from core.ssh_config import SshConfigError, SshConfigHost, resolve_session_hops
 from log_util import logger
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
 from storage.host_key_store import HostKeyStore
@@ -43,13 +44,17 @@ class SSHConnection:
         host_key_store: HostKeyStore,
         host_key_confirm: HostKeyConfirm | None,
         on_connection_lost: ConnectionLostCallback,
+        hop_passwords: dict[str, str] | None = None,
     ) -> None:
         self.session_item = replace(session_item)
         self._password = password
+        self._hop_passwords = dict(hop_passwords or {})
         self._host_key_store = host_key_store
         self._host_key_confirm = host_key_confirm
         self._on_connection_lost = on_connection_lost
         self._conn: asyncssh.SSHClientConnection | None = None
+        self._hop_conns: list[asyncssh.SSHClientConnection] = []
+        self._hop_monitor_tasks: list[asyncio.Task] = []
         self._connect_task: asyncio.Task[asyncssh.SSHClientConnection] | None = None
         self._monitor_task: asyncio.Task | None = None
         self._members: set[str] = set()
@@ -133,6 +138,8 @@ class SSHConnection:
                         f'SSH shared connection close error: session_id={self.session_id}, '
                         f'error={exc}'
                     )
+            await self._close_hop_connections()
+            await self._await_hop_monitors()
 
             monitor = self._monitor_task
             if monitor is not None and monitor is not asyncio.current_task():
@@ -142,68 +149,30 @@ class SSHConnection:
             logger.info(f'SSH shared connection closed: session_id={self.session_id}')
         finally:
             self._password = None
+            self._hop_passwords.clear()
             self._host_key_confirm = None
             self._closing = False
 
     async def _connect(self, tab_id: str) -> asyncssh.SSHClientConnection:
         session_item = self.session_item
-        options: dict[str, Any] = {
-            'host': session_item.host,
-            'port': session_item.port,
-            'username': session_item.username,
-            'connect_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
-            'login_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
-        }
-        if session_item.auth_type == AUTH_PUBLIC_KEY and session_item.key_path:
-            key_path = os.path.expanduser(session_item.key_path.strip())
-            if key_path:
-                options['client_keys'] = [key_path]
-        elif session_item.auth_type == AUTH_PASSWORD and self._password:
-            options['password'] = self._password
-
         logger.info(
             'SSH connecting: '
             f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
             f'host={session_item.host}, port={session_item.port}, '
-            f'username={session_item.username}, auth_type={session_item.auth_type}'
+            f'username={session_item.username}, auth_type={session_item.auth_type}, '
+            f'ssh_config={session_item.ssh_config_path or "-"}'
         )
         try:
-            server_key = await asyncio.wait_for(
-                asyncssh.get_server_host_key(session_item.host, session_item.port),
-                timeout=_SSH_CONNECT_TIMEOUT_SECONDS,
-            )
-            if server_key is None:
-                raise RuntimeError('SSH server did not present a host key')
-            status = self._host_key_store.check(session_item.host, session_item.port, server_key)
-            actual_fingerprint = server_key.get_fingerprint()
-            if status == 'changed':
-                raise HostKeyChangedError(
-                    session_item.host,
-                    session_item.port,
-                    self._host_key_store.fingerprint(session_item.host, session_item.port),
-                    actual_fingerprint,
-                )
-            if status == 'unknown':
-                accepted = False
-                if self._host_key_confirm is not None:
-                    accepted = await self._host_key_confirm(
-                        session_item.host,
-                        session_item.port,
-                        server_key.get_algorithm(),
-                        actual_fingerprint,
-                    )
-                if not accepted:
-                    raise HostKeyRejectedError(
-                        f'SSH host key was not trusted for {session_item.host}:{session_item.port}'
-                    )
-                self._host_key_store.trust(session_item.host, session_item.port, server_key)
-
-            # The key was checked above. Passing it directly also handles the
-            # default-port representation used by AsyncSSH known-host matching.
-            options['known_hosts'] = ([server_key], [], [])
-            conn = await asyncssh.connect(**options)
+            if session_item.uses_ssh_config():
+                conn = await self._connect_via_ssh_config(tab_id)
+            else:
+                conn = await self._connect_direct(tab_id)
             self._conn = conn
             self._monitor_task = asyncio.create_task(self._monitor_connection(conn))
+            self._hop_monitor_tasks = [
+                asyncio.create_task(self._monitor_hop_connection(hop))
+                for hop in self._hop_conns
+            ]
             logger.info(
                 'SSH shared connection established: '
                 f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
@@ -225,7 +194,202 @@ class SSHConnection:
             raise
         finally:
             self._password = None
+            self._hop_passwords.clear()
             self._host_key_confirm = None
+
+    async def _connect_direct(self, tab_id: str) -> asyncssh.SSHClientConnection:
+        session_item = self.session_item
+        options = self._base_connect_options(
+            session_item.host,
+            session_item.port,
+            session_item.username,
+        )
+        if session_item.auth_type == AUTH_PUBLIC_KEY and session_item.key_path:
+            key_path = os.path.expanduser(session_item.key_path.strip())
+            if key_path:
+                options['client_keys'] = [key_path]
+        elif session_item.auth_type == AUTH_PASSWORD and self._password:
+            options['password'] = self._password
+        server_key = await self._trusted_server_key(session_item.host, session_item.port)
+        options['known_hosts'] = ([server_key], [], [])
+        logger.info(
+            f'SSH direct connect: tab_id={tab_id}, session_id={session_item.id}, '
+            f'name={session_item.name}, host={session_item.host}, port={session_item.port}'
+        )
+        return await asyncssh.connect(**options)
+
+    async def _connect_via_ssh_config(self, tab_id: str) -> asyncssh.SSHClientConnection:
+        hops = resolve_session_hops(self.session_item)
+        if not hops:
+            raise SshConfigError(
+                'ssh_config.host_not_found',
+                alias=self.session_item.host,
+                path=self.session_item.ssh_config_path,
+            )
+        dest = hops[-1]
+        self.session_item = replace(
+            self.session_item,
+            username=dest.username or self.session_item.username,
+            port=dest.port,
+        )
+        opened: list[asyncssh.SSHClientConnection] = []
+        try:
+            tunnel: asyncssh.SSHClientConnection | None = None
+            for index, hop in enumerate(hops):
+                conn = await self._connect_hop(tab_id, hop, tunnel=tunnel)
+                opened.append(conn)
+                tunnel = conn
+                logger.info(
+                    f'SSH config hop connected: tab_id={tab_id}, '
+                    f'session_id={self.session_item.id}, name={self.session_item.name}, '
+                    f'hop={index + 1}/{len(hops)}, '
+                    f'alias={hop.alias}, host={hop.connect_host}, port={hop.port}'
+                )
+            self._hop_conns = opened[:-1]
+            return opened[-1]
+        except (Exception, asyncio.CancelledError):
+            await self._close_connections(list(reversed(opened)))
+            raise
+
+    async def _connect_hop(
+        self,
+        tab_id: str,
+        hop: SshConfigHost,
+        *,
+        tunnel: asyncssh.SSHClientConnection | None,
+    ) -> asyncssh.SSHClientConnection:
+        if not hop.username:
+            raise SshConfigError(
+                'ssh_config.user_missing',
+                alias=hop.alias,
+                path=self.session_item.ssh_config_path,
+            )
+        options = self._base_connect_options(hop.connect_host, hop.port, hop.username)
+        if hop.identity_files:
+            options['client_keys'] = list(hop.identity_files)
+        else:
+            password = self._hop_passwords.get(hop.alias)
+            if password:
+                options['password'] = password
+            else:
+                raise SshConfigError(
+                    'ssh_config.auth_missing',
+                    alias=hop.alias,
+                    path=self.session_item.ssh_config_path,
+                )
+        if tunnel is not None:
+            options['tunnel'] = tunnel
+        server_key = await self._trusted_server_key(
+            hop.connect_host,
+            hop.port,
+            tunnel=tunnel,
+        )
+        options['known_hosts'] = ([server_key], [], [])
+        logger.info(
+            f'SSH config hop connecting: tab_id={tab_id}, session_id={self.session_item.id}, '
+            f'name={self.session_item.name}, '
+            f'alias={hop.alias}, host={hop.connect_host}, port={hop.port}'
+        )
+        return await asyncssh.connect(**options)
+
+    @staticmethod
+    def _base_connect_options(host: str, port: int, username: str) -> dict[str, Any]:
+        return {
+            'host': host,
+            'port': port,
+            'username': username,
+            'connect_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
+            'login_timeout': _SSH_CONNECT_TIMEOUT_SECONDS,
+        }
+
+    async def _trusted_server_key(
+        self,
+        host: str,
+        port: int,
+        *,
+        tunnel: asyncssh.SSHClientConnection | None = None,
+    ) -> Any:
+        if tunnel is None:
+            server_key = await asyncio.wait_for(
+                asyncssh.get_server_host_key(host, port),
+                timeout=_SSH_CONNECT_TIMEOUT_SECONDS,
+            )
+        else:
+            server_key = await asyncio.wait_for(
+                asyncssh.get_server_host_key(host, port, tunnel=tunnel),
+                timeout=_SSH_CONNECT_TIMEOUT_SECONDS,
+            )
+        if server_key is None:
+            raise RuntimeError('SSH server did not present a host key')
+        status = self._host_key_store.check(host, port, server_key)
+        actual_fingerprint = server_key.get_fingerprint()
+        if status == 'changed':
+            raise HostKeyChangedError(
+                host,
+                port,
+                self._host_key_store.fingerprint(host, port),
+                actual_fingerprint,
+            )
+        if status == 'unknown':
+            accepted = False
+            if self._host_key_confirm is not None:
+                accepted = await self._host_key_confirm(
+                    host,
+                    port,
+                    server_key.get_algorithm(),
+                    actual_fingerprint,
+                )
+            if not accepted:
+                raise HostKeyRejectedError(
+                    f'SSH host key was not trusted for {host}:{port}'
+                )
+            self._host_key_store.trust(host, port, server_key)
+        return server_key
+
+    async def _close_hop_connections(self) -> None:
+        hops = self._hop_conns
+        self._hop_conns = []
+        await self._close_connections(list(reversed(hops)))
+
+    async def _await_hop_monitors(self) -> None:
+        tasks = self._hop_monitor_tasks
+        self._hop_monitor_tasks = []
+        current = asyncio.current_task()
+        pending = [task for task in tasks if task is not current and not task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _monitor_hop_connection(self, hop_conn: asyncssh.SSHClientConnection) -> None:
+        """If a jump host drops, close the destination so reconnect UI can start."""
+        try:
+            await hop_conn.wait_closed()
+            if self._closing or self._closed or self._connection_lost:
+                return
+            logger.warning(
+                f'SSH jump hop lost: session_id={self.session_id}, '
+                f'name={self.session_item.name}, members={self.member_count}'
+            )
+            dest = self._conn
+            if dest is not None and not dest.is_closed():
+                dest.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                f'SSH jump hop monitor failed: session_id={self.session_id}, '
+                f'name={self.session_item.name}, error={exc}'
+            )
+
+    async def _close_connections(self, conns: list[asyncssh.SSHClientConnection]) -> None:
+        for conn in conns:
+            try:
+                conn.close()
+                await conn.wait_closed()
+            except Exception as exc:
+                logger.warning(
+                    f'SSH hop connection close error: session_id={self.session_id}, '
+                    f'name={self.session_item.name}, error={exc}'
+                )
 
     async def _monitor_connection(self, conn: asyncssh.SSHClientConnection) -> None:
         try:
@@ -234,6 +398,7 @@ class SSHConnection:
                 return
             self._connection_lost = True
             self._closed = True
+            await self._close_hop_connections()
             logger.warning(
                 f'SSH shared connection lost: session_id={self.session_id}, '
                 f'members={self.member_count}'
@@ -319,6 +484,7 @@ class SSHSession(QObject):
 
         try:
             conn = await connection.acquire(self.tab_id)
+            self._session_item = replace(connection.session_item)
             self._attached = True
             if self._aborted:
                 await self.disconnect()

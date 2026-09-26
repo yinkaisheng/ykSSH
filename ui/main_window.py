@@ -6,7 +6,7 @@ import asyncio
 from typing import Sequence
 
 from PyQt5.QtCore import Qt, QTimer, QPoint, QEvent
-from PyQt5.QtGui import QCloseEvent, QKeyEvent, QMouseEvent, QResizeEvent, QKeySequence
+from PyQt5.QtGui import QCloseEvent, QKeyEvent, QMouseEvent, QResizeEvent, QKeySequence, QShowEvent
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -22,6 +22,7 @@ from core.connection_manager import ConnectionManager
 from core.path_resolver import resolve_local_path
 from ui.sftp_ui_handler import SftpUiHandler
 from core.ssh_session import HostKeyChangedError, HostKeyRejectedError
+from core.ssh_config import SshConfigError
 from i18n import register_retranslator, set_language, tr
 from log_util import logger
 from models.favorite_path import FavoritePath
@@ -49,6 +50,7 @@ from ui.side_panel import SidePanel
 from ui.terminal_tab_widget import TerminalTabWidget
 from ui.terminal_vt_widget import TerminalVTWidget
 from ui.window_title_bar import WindowTitleBar
+from ui.win32_frameless import apply_taskbar_minimize_style, handle_native_event
 from ui.theme import (
     apply_app_font,
     apply_app_theme,
@@ -83,7 +85,13 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.Window
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+        )
         self.profile_store = SessionProfileStore()
         self.credential_store = CredentialStore()
         self.connection_manager = ConnectionManager(self.credential_store, self)
@@ -778,6 +786,7 @@ class MainWindow(QMainWindow):
         session_item: SessionItem,
         terminal: TerminalVTWidget,
     ) -> None:
+        terminal.reset_session_input_modes()
         terminal.set_reconnect_enabled(False)
         terminal.write_text(tr('terminal.connecting') + '\r\n')
 
@@ -789,6 +798,9 @@ class MainWindow(QMainWindow):
             self._tabs_ever_connected.add(tab_id)
             if not self._terminal_is_alive(terminal):
                 return
+            # New PTY starts with default DEC modes; drop leftover mouse/alt-screen
+            # state from the previous connection on this reused widget.
+            terminal.reset_session_input_modes()
             terminal.set_reconnect_enabled(False)
             terminal.write_text(tr('terminal.connected') + '\r\n')
             self._track_background_task(
@@ -802,6 +814,9 @@ class MainWindow(QMainWindow):
             handler = self._sftp_handlers.get(tab_id)
             if handler is not None:
                 handler.cancel_transfers()
+            # Reset before writing UI text so Disconnected/hint land on the
+            # main screen instead of a leftover vim alt-screen.
+            terminal.reset_session_input_modes()
             terminal.write_text('\r\n' + tr('terminal.disconnected') + '\r\n')
             # Connect/reconnect failures emit disconnected before the exception
             # handler writes the error line; defer the hint until after that.
@@ -851,6 +866,16 @@ class MainWindow(QMainWindow):
         except HostKeyRejectedError:
             if self._terminal_is_alive(terminal):
                 terminal.write_text(tr('terminal.host_key_rejected') + '\r\n')
+                if tab_id in self._tabs_ever_connected:
+                    self._enable_reconnect_ui(terminal)
+        except SshConfigError as exc:
+            logger.warning(
+                'Connect session SSH config failed: '
+                f'tab_id={tab_id}, session_id={session_item.id}, name={session_item.name}, '
+                f'host={session_item.host}, error={exc.message_key}'
+            )
+            if self._terminal_is_alive(terminal):
+                terminal.write_text(tr(exc.message_key, **exc.params) + '\r\n')
                 if tab_id in self._tabs_ever_connected:
                     self._enable_reconnect_ui(terminal)
         except Exception as exc:
@@ -1235,6 +1260,16 @@ class MainWindow(QMainWindow):
                 handle.startSystemResize(edges)
                 return True
         return super().eventFilter(watched, event)
+
+    def showEvent(self, event: QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        apply_taskbar_minimize_style(self)
+
+    def nativeEvent(self, eventType, message):  # type: ignore[override]
+        handled = handle_native_event(self, eventType, message)
+        if handled is not None:
+            return handled
+        return super().nativeEvent(eventType, message)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

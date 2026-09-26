@@ -31,6 +31,17 @@ class MainWindowShortcutTests(unittest.TestCase):
         window.deleteLater()
         self.app.processEvents()
 
+    def test_window_flags_keep_minimize_hint_with_frameless_chrome(self) -> None:
+        with patch.object(MainWindow, '_restore_session'):
+            window = MainWindow()
+        flags = window.windowFlags()
+        self.assertTrue(bool(flags & Qt.FramelessWindowHint))
+        self.assertTrue(bool(flags & Qt.WindowMinimizeButtonHint))
+        self.assertTrue(bool(flags & Qt.WindowSystemMenuHint))
+        window.hide()
+        window.deleteLater()
+        self.app.processEvents()
+
     def test_ctrl_l_focuses_terminal_without_intercepting_terminal_clear(self) -> None:
         with patch.object(MainWindow, '_restore_session'):
             window = MainWindow()

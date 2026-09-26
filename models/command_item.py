@@ -16,6 +16,7 @@ class CommandItem:
     command: str = ''
     description: str = ''
     children: list['CommandItem'] = field(default_factory=list)
+    expanded: bool = True
 
     def is_folder(self) -> bool:
         return not self.command
@@ -31,6 +32,8 @@ class CommandItem:
                 data['description'] = self.description
         if self.children:
             data['children'] = [child.to_dict() for child in self.children]
+        if self.is_folder() and not self.expanded:
+            data['expanded'] = False
         return data
 
     @classmethod
@@ -41,4 +44,5 @@ class CommandItem:
             command=str(data.get('command', '') or ''),
             description=str(data.get('description', '') or ''),
             children=[cls.from_dict(c) for c in data.get('children', []) if isinstance(c, dict)],
+            expanded=data.get('expanded') is not False,
         )

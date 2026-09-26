@@ -156,10 +156,16 @@ class ConnectionManager(QObject):
 
         connection = self._connections.get(session_item.id)
         if connection is None or connection.is_closed:
-            password = self.keyring.get_password(session_item.id)
+            password = None
+            hop_passwords: dict[str, str] = {}
+            if session_item.uses_ssh_config():
+                hop_passwords = dict(self.keyring.get_hop_passwords(session_item.id))
+            else:
+                password = self.keyring.get_password(session_item.id)
             connection = SSHConnection(
                 session_item,
                 password=password,
+                hop_passwords=hop_passwords,
                 host_key_store=self.host_keys,
                 host_key_confirm=host_key_confirm,
                 on_connection_lost=self._on_shared_connection_lost,

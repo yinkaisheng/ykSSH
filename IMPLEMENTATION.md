@@ -91,6 +91,7 @@ ykSSH/
 │
 ├── core/
 │   ├── ssh_session.py           # 共享 SSHConnection + 每 Tab Shell/SFTP channel
+│   ├── ssh_config.py            # OpenSSH 配置文件解析与 ProxyJump 跳链
 │   ├── connection_manager.py    # Session ID 连接池、Tab 会话映射与远程列表缓存
 │   ├── terminal_port.py         # connection 层使用的终端能力协议
 │   ├── path_resolver.py         # 本地/远程初始路径解析
@@ -179,6 +180,7 @@ ykSSH/
 
 - **原因：** `startSystemMove()` 在 MouseButtonPress 时由系统接管鼠标后，Qt 收不到完整 press/release，导致最小化/最大化/关闭按钮的 `:hover` 高亮失效。
 - **代价：** 无 Windows 原生贴边吸附（Aero Snap）。
+- Windows 11 点击任务栏图标最小化：`FramelessWindowHint` 会去掉 `WS_MINIMIZEBOX`，资源管理器因此不会对已激活窗口发最小化。主窗口在 `showEvent` 里补回 `WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`，并在 `nativeEvent` 中处理 `WM_NCCALCSIZE`（返回 0）以继续隐藏系统标题栏，外观仍是自定义标题栏。
 - 详情与已验证无效方案见 `ui/window_title_bar.py` 类 docstring。
 
 ---
@@ -203,11 +205,14 @@ asyncio.set_event_loop(loop)
 
 | 类型 | 判定 | 字段 |
 |------|------|------|
-| 分组（folder） | `host` 为空 | `id`, `name`, `children[]` |
-| Session（leaf） | `host` 非空 | 上述 + `host`, `port`, `username`, `auth_type`, `key_path`, `local_path`, `remote_path`, `info`, `local_favorites[]`, `remote_favorites[]` |
+| 分组（folder） | `host` 与 `ssh_config_path` 皆空 | `id`, `name`, `children[]`，以及可选的 `expanded` |
+| 直连 Session | `host` 非空且无 `ssh_config_path` | 上述 + `host`, `port`, `username`, `auth_type`, `key_path`, `local_path`, `remote_path`, `info`, `local_favorites[]`, `remote_favorites[]` |
+| 配置文件 Session | `ssh_config_path` 非空 | `id`, `name`, `host`（OpenSSH Host 别名）, `ssh_config_path`, 以及可选的 `local_path` / `remote_path` / `info` / 收藏 |
 
-- 密码 **不** 写入 `sessions.json`，仅存 `config/credentials.json`（Fernet 加密，密钥在 `config/secret.key`）。
+- 密码 **不** 写入 `sessions.json`，仅存 `config/credentials.json`（Fernet 加密，密钥在 `config/secret.key`）。配置文件 Session 有 `IdentityFile` 时用私钥；没有私钥的跳按 Host 别名各自保存密码。
+- SSH 配置文件只在连接时读取；`sessions.json` 只保存路径和 Host 别名，不复制 HostName / 私钥内容。
 - 树 UI 使用 `FavoriteTreeWidget`；CRUD / 拖拽后 `_sync_data_model()` 同步回 `List[SessionItem]` 并由 `SessionProfileStore` 持久化。
+- 分组节点记住展开/折叠：`expanded` 缺省为展开；仅在折叠时写入 `expanded: false`，未写入该字段时视为展开。用户点击三角、右键展开/折叠，以及「全部展开/折叠」都会写回 `sessions.json` / `commands.json`。过滤时为露出匹配项会临时 `expandAll()`，清空过滤后按已保存状态恢复。
 - Session 树和快捷命令树共用同级拖放逻辑，按目标节点上方/下方指示位置插入；根节点向上移动（含首位）不额外递减目标索引，并保留子节点、展开状态和当前选中项。
 
 ### 6.3 文件面板架构（每 Tab 独立）
@@ -314,7 +319,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 连接时创建 `xterm-256color` PTY，尺寸经 `TerminalPort.terminal_size()` 获取
 - 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 该 Tab 读任务并关闭其 Shell/SFTP channel；同 Session 的最后一个 Tab 关闭时才关闭底层 SSH connection
-- 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。
+- 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。断线、再次 `open_tab` 以及重连成功时都会调用 `TerminalVTWidget.reset_session_input_modes()`，清掉上一份 PTY 协商出的鼠标上报（1000/1002/1003/1006）、备用屏幕、应用光标键和 bracketed paste；否则新 shell 已是默认模式，本地仍会把点击/滚轮发成 SGR 序列（shell 回显成 `64;20;37M` 这类文本）。
 - 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。终端获得焦点时会优先接受 `ShortcutOverride`，因此未由 `MainWindow.eventFilter` 显式处理的应用级 QAction 快捷键（包括退出快捷键）不会触发，而会交给终端处理。终端内的文件面板焦点快捷键由 `MainWindow.eventFilter` 本地拦截且不发送给远端 shell：`Ctrl+Alt+B` 优先切到当前 Tab 的远端文件 Table，断连等远端 Table 隐藏或禁用时回退到本地文件 Table；`Ctrl+;` 固定切到本地文件 Table；`Ctrl+'` 固定切到可用的远端文件 Table。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
 
@@ -343,7 +348,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。已提交历史命令的起始行会在 gutter 绘制一行高的 `terminal.terminal_gutter_command_background_color` 背景标志；多行输入只标记第一行，未提交输入与 alt-screen 不标记，wheel 滚动时按命令绝对行和当前 viewport 重新换算位置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
 - 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
-- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，按 Enter 提交为命令标记并记录本地命令发送时间；普通键盘输入仅在当前终端行可见回显出命令时，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令右键「发送并执行」由客户端主动执行，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
+- 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，并检查该行光标前缀是否像 shell prompt（`user@host:path$` / `#`，与 `shell_prompt_ready()` 同一规则）。登录后常见末两行是 `Last login: …` 加 `ubuntu@xjp:~$`，此时前缀可识别。按 Enter 提交时，只有前缀匹配、或以 `\` 续行（续行沿用第一行的 prompt 判断）的输入才写入 History / gutter 标记；Python `>>>`、无 `user@host` 的残缺 prompt 等无法判断的环境不记录。普通键盘输入仍须在终端上回显，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令右键「发送并执行」由客户端主动执行，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
 - 左侧 History 抽屉按 `tab_id` 记住各自列表 scrollbar 位置，切换 Tab 时会恢复当前 Tab 历史列表上次滚动位置。历史项保存对应终端命令块的 `command_start_row` 绝对行号；单击某条历史时，会在当前活动终端中直接按该绝对行号滚动到对应命令块；如果对应命令已被 `clear` 清掉或已经不在 scrollback 中，则忽略跳转。快捷命令或历史命令双击只把命令填入当前活动终端（不发送 CR），终端获得焦点，需用户按 Enter 才执行。命令树与历史列表右键提供「发送」（填入不执行）和「发送并执行」；调用后终端获得焦点。命令树叶子与历史项另有「复制命令」，History 项还提供「复制命令和发送时间」，按 `time\ncommand` 写入剪贴板。
 - 终端右键菜单「全部复制」会按 `history.top → 当前 buffer → history.bottom` 拼接全部可用 scrollback 和屏幕内容，因此复制结果不受当前 wheel 滚动位置影响；alt-screen 中只复制当前屏幕内容。
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
@@ -351,7 +356,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - `terminal.terminal_debug_history_jump` 打开时，历史命令单击定位会把请求参数、命令标记、时间/命令校验结果、跳转前后 viewport/scrollback 状态写入 `logs/terminal_history_jump.log`，用于排查 History 定位异常。
 - 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`C` 复制命令（快捷命令树叶子 / 历史项）、`H` 复制 Host（Session 树叶子 / 终端 Tab）、`T` 上传/下载传输或发送并执行（快捷命令 / 历史）、`F2` 重命名、`F3`/`F4` 使用系统关联程序/配置编辑器打开、`E` 编辑 Session/快捷命令、`D` 删除、`X` 剪切/清屏、`S` 发送（快捷命令 / 历史）或保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
 - 粘贴时仅在配置允许且远端显式开启 `DECSET ?2004` bracketed paste 模式后才发送 `ESC[200~...ESC[201~` 包装；普通 shell 密码提示（如 `sudo`）不发送该包装，避免控制序列被当作密码字符。
-- 多行粘贴且 `terminal_paste_confirm_multiline` 开启时，弹出可编辑确认框（完整文本、`QPlainTextEdit`）；用户可修改后点「是」或按 `Alt+Y` 粘贴编辑结果，按 `Alt+N` 取消；快捷键在编辑框聚焦时仍有效；对话框可拖动改大小，初始尺寸按内容在屏占比上限内自动扩展。
+- 多行粘贴且 `terminal_paste_confirm_multiline` 开启时，弹出可编辑确认框（完整文本、`QPlainTextEdit`）；用户可修改后点「是」或按 `Alt+Y` 粘贴编辑结果，按 `Alt+N` 取消；快捷键在编辑框聚焦时仍有效；对话框可拖动改大小，初始尺寸按内容在屏占比上限内自动扩展。判断是否多行前会去掉末尾连续空白行；去掉后只剩一行时直接粘贴该行（不再弹出确认框，也不把尾部空行当成额外回车发出）。
 
 ### 6.5 连接生命周期
 
@@ -403,11 +408,13 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 
 `SSHConnection`（`core/ssh_session.py`）：
 
-- 认证前使用 `asyncssh.get_server_host_key()` 获取服务器主机密钥，并由 `HostKeyStore` 执行 TOFU 校验；首次连接展示算法和 SHA256 指纹供用户确认，确认后写入 `config/host_keys.json`，后续指纹变化会阻止连接。实际 `asyncssh.connect()` 使用本次已确认密钥构造的 `known_hosts` 再次校验，避免探测与认证之间密钥被替换；`connect_timeout` / `login_timeout` 当前为 15 秒
-- 认证：`AUTH_PASSWORD`（密码来自 CredentialStore）或 `AUTH_PUBLIC_KEY`（`key_path`）
-- `ConnectionManager` 按稳定 `SessionItem.id` 复用；不同 ID 即使连接参数相同也不共享
+- 认证前使用 `asyncssh.get_server_host_key()` 获取服务器主机密钥，并由 `HostKeyStore` 执行 TOFU 校验；首次连接展示算法和 SHA256 指纹供用户确认，确认后写入 `config/host_keys.json`，后续指纹变化会阻止连接。实际 `asyncssh.connect()` 使用本次已确认密钥构造的 `known_hosts` 再次校验，避免探测与认证之间密钥被替换；`connect_timeout` / `login_timeout` 当前为 15 秒（按每一跳单独计时）
+- 认证：直连为 `AUTH_PASSWORD`（密码来自 CredentialStore `passwords[session_id]`）或 `AUTH_PUBLIC_KEY`（`key_path`）；配置文件 Session 每一跳独立判断：有 `IdentityFile` 用私钥，没有则用 `hop_passwords[session_id][alias]`。同一条跳链可以混用密钥 hop 和密码 hop。OpenSSH 配置文件不写密码
+- 配置文件 Session：`core/ssh_config.py` 解析所选文件（`Host` / `HostName` / `User` / `Port` / `IdentityFile` / `ProxyJump`），按跳展开。每一跳先 TOFU 再 `asyncssh.connect()`；非首跳把上一跳连接作为 `tunnel`。共享对象持有目标连接，并额外监控跳板连接：目标或跳板任一断开都会关闭整条链路，关闭时再关闭跳板连接。跳板与目标的主机密钥分别按解析后的 HostName:port 存入 `host_keys.json`
+- 长时间空闲后的断线重连与直连相同：曾成功连接的 Tab 显示「按 Enter 重新连接」，`MainWindow` 用 `_tab_sessions` 里原来的 `ssh_config_path` + Host 别名再次 `open_tab`。连接池里的旧 `SSHConnection` 已在断开时移除，因此会重新解析配置并新建跳板 + 目标；已信任的主机密钥不再弹确认框。未启用 SSH keepalive，空闲断开的发现时间仍取决于服务器/NAT 超时；一旦底层连接关闭，重连会重建整条跳链
+- `ConnectionManager` 按稳定 `SessionItem.id` 复用；不同 ID 即使连接参数相同也不共享，也不跨 Session 复用跳板连接
 - 共享对象创建时复制 `SessionItem` 连接字段快照；运行中编辑同 ID Session 不迁移既有/正在建立的 connection，连接组完全关闭后的下一次连接才使用新配置
-- 同一 Session 的并发打开共享一个 shield 后的建连 task，单个 Tab 取消不会中断其他等待者；最后一个成员释放时关闭 connection
+- 同一 Session 的并发打开共享一个 shield 后的建连 task，单个 Tab 取消不会中断其他等待者；最后一个成员释放时关闭 connection。配置文件 Session 在建连中途失败或取消时，按逆序关闭已建成的跳板连接
 - 监控底层 `wait_closed()`；意外断开时由 `ConnectionManager` 清理该组全部 Tab 的会话、远端缓存和刷新任务
 
 `SSHSession`（`core/ssh_session.py`）：
@@ -428,9 +435,9 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 | 文件 | 内容 | 是否含敏感信息 |
 |------|------|----------------|
 | `config/config.json` | 主题色、外观、语言、窗口尺寸、Session 树宽度、splitter 比例、文件面板布局 | 否 |
-| `config/sessions.json` | Session 树 JSON（无密码） | 否 |
-| `config/commands.json` | 快捷命令树（分组、显示名、命令详情、命令解释） | 否 |
-| `config/credentials.json` | Fernet 加密密码 `passwords[session_id]` | **是** |
+| `config/sessions.json` | Session 树 JSON（无密码；分组可含 `expanded`） | 否 |
+| `config/commands.json` | 快捷命令树（分组、显示名、命令详情、命令解释；分组可含 `expanded`） | 否 |
+| `config/credentials.json` | Fernet 加密密码 `passwords[session_id]`，以及配置文件 Session 的 `hop_passwords[session_id][alias]` | **是** |
 | `config/secret.key` | 解密 credentials 的密钥 | **是** |
 | `config/host_keys.json` | 用户已信任的 SSH 服务器公钥（TOFU） | 否 |
 
@@ -558,7 +565,7 @@ Session 配置远端默认路径时，连接后的交互 shell 会优先等待�
 
 ### 8.3 密码存储
 
-- `CredentialStore`：Fernet 加密，当前只接受 version 1；解密失败会打 warning 并丢弃无法解密的条目；version 不匹配会拒绝加载整份凭据并阻止后续保存覆盖原文件
+- `CredentialStore`：Fernet 加密，当前只接受 version 1；解密失败会打 warning 并丢弃无法解密的条目；version 不匹配会拒绝加载整份凭据并阻止后续保存覆盖原文件。直连 Session 使用 `passwords[session_id]`；配置文件 Session 的无私钥 hop 使用 `hop_passwords[session_id][alias]`。删除 Session 会同时清理两类条目
 - `secret.key` 与 `credentials.json` **必须配对迁移**
 - `host_keys.json` 保存已确认的服务器身份；不迁移时目标机器会在首次连接时重新询问指纹
 - 若已有 `secret.key` 但内容无效：**不会**静默覆盖生成新钥，启动失败并提示修复（`InvalidSecretKeyError`）
@@ -574,9 +581,9 @@ Session 配置远端默认路径时，连接后的交互 shell 会优先等待�
 | 文件 | 说明 |
 |------|------|
 | `config.json` | 主题、语言、终端/UI 字体、窗口尺寸、Session 树宽度与垂直 splitter 比例 |
-| `sessions.json` | Session 树（主机、端口、用户名、本地/远程路径、备注等，无密码） |
-| `commands.json` | 快捷命令树 |
-| `credentials.json` | Fernet 加密后的 Session 密码 |
+| `sessions.json` | Session 树（主机、端口、用户名、本地/远程路径、备注、分组展开状态等，无密码） |
+| `commands.json` | 快捷命令树（含分组展开状态） |
+| `credentials.json` | Fernet 加密后的 Session 密码（含配置文件 hop 密码） |
 | `secret.key` | 解密密码所需的本地密钥 |
 | `host_keys.json` | 已确认的 SSH 服务器主机密钥；可选迁移，不迁移时需重新确认指纹 |
 
@@ -752,9 +759,10 @@ sequenceDiagram
 | 本地文件 IO | 上传读文件、本地删除/重命名/新建目录仍有同步 IO；上传前的本地大小统计已通过 `asyncio.to_thread` 执行，其余待后续迁移或分片让出事件循环 |
 | 本地链接上传 | 为避免递归环和越出用户选择目录，符号链接与 Windows 目录联接默认跳过；直接选择链接上传会提示不支持 |
 | Tab 重命名 | 右键 Tab 重命名仅修改当前运行时显示标题，不持久化到 `sessions.json` |
-| Tab / Session 复制 Host | 右键「复制 Host」将 Session 的 `host` 原样写入剪贴板（不含端口）；Tab 侧在创建时缓存 host，断连后仍可复制 |
+| Tab / Session 复制 Host | 右键「复制 Host」将 Session 的 `host` 原样写入剪贴板（不含端口）；配置文件 Session 复制的是 Host 别名；Tab 侧在创建时缓存 host，断连后仍可复制 |
 | 密码为空 | 密码认证 Session 若未保存密码，不会弹窗补录；连接时按无密码参数尝试并由 SSH 认证失败返回错误 |
 | 加密私钥口令 | 公钥认证目前只保存私钥路径，尚未提供加密私钥的口令输入与安全存储 |
+| SSH 配置子集 | 配置文件 Session 只解析 `Host` / `HostName` / `User` / `Port` / `IdentityFile` / `ProxyJump`；`ProxyJump none` 禁用跳板。`Match` 块整体跳过，直到下一个 `Host`，不将条件字段合并到前一个 Host；不处理 `Include`、`ProxyCommand`、`Host *` 默认段。配置文件按 UTF-8 读取，编码错误通过本地化提示展示，修正文件后可重新加载 |
 
 ---
 

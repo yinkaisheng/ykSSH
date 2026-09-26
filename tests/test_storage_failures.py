@@ -66,6 +66,39 @@ class StorageFailureTests(unittest.TestCase):
                 self.assertFalse(store.set_password('session-id', 'secret'))
             self.assertIsNone(store.get_password('session-id'))
 
+    def test_hop_passwords_roundtrip_and_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / 'credentials.json'
+            fernet = Fernet(Fernet.generate_key())
+            store = CredentialStore(path, fernet=fernet)
+            self.assertTrue(store.set_password('session-id', 'direct-secret'))
+            self.assertTrue(store.set_hop_passwords(
+                'session-id',
+                {'jump-01': 'jump-secret', 'inner-01': 'inner-secret', '': 'ignored'},
+            ))
+            loaded = CredentialStore(path, fernet=fernet)
+            self.assertEqual(loaded.get_password('session-id'), 'direct-secret')
+            self.assertEqual(
+                loaded.get_hop_passwords('session-id'),
+                {'jump-01': 'jump-secret', 'inner-01': 'inner-secret'},
+            )
+            self.assertTrue(loaded.delete_session_credentials('session-id'))
+            self.assertIsNone(loaded.get_password('session-id'))
+            self.assertEqual(loaded.get_hop_passwords('session-id'), {})
+            reloaded = CredentialStore(path, fernet=fernet)
+            self.assertIsNone(reloaded.get_password('session-id'))
+            self.assertEqual(reloaded.get_hop_passwords('session-id'), {})
+
+    def test_hop_password_save_failure_rolls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = CredentialStore(
+                Path(temp_dir) / 'credentials.json',
+                fernet=Fernet(Fernet.generate_key()),
+            )
+            with patch('storage.credential_store.atomic_write_json', side_effect=OSError('full')):
+                self.assertFalse(store.set_hop_passwords('session-id', {'jump-01': 'secret'}))
+            self.assertEqual(store.get_hop_passwords('session-id'), {})
+
 
 if __name__ == '__main__':
     unittest.main()
