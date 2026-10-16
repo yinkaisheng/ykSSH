@@ -484,6 +484,29 @@ QWidget#filePanelStatusBar QToolButton#filePanelStatusButton {{
     font-size: {file_panel_statusbar_font_size}px;
 }}
 
+QWidget#filePanelStatusBar QToolButton#filePanelTransferButton {{
+    background-color: {p.background_secondary};
+    border: 1px solid {p.border};
+    border-radius: 4px;
+    padding: 0px 6px;
+    margin: 0px;
+    color: {p.text_primary};
+    font-size: {file_panel_statusbar_font_size}px;
+}}
+
+QWidget#filePanelStatusBar QToolButton#filePanelTransferButton:hover {{
+    background-color: {p.background_hover};
+    border-color: {p.highlight};
+}}
+
+QWidget#filePanelStatusBar QToolButton#filePanelTransferButton:pressed {{
+    background-color: {p.border};
+}}
+
+QWidget#filePanelStatusBar QToolButton#filePanelTransferButton:focus {{
+    border-color: {p.highlight};
+}}
+
 QComboBox, QSpinBox {{
     background-color: {p.background_primary};
     color: {p.text_primary};

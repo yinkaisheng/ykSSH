@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (
 )
 
 from core.file_permissions import PermissionChange, format_local_permission
-from i18n import tr
+from i18n import register_retranslator, tr, unregister_retranslator
 from log_util import logger
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
@@ -97,6 +97,7 @@ from ui.file_panel.local_table import (
     _windows_drive_root,
 )
 from ui.file_panel.helpers import _format_size
+from ui.file_panel.transfer_icon import transfer_queue_icon
 
 
 _TRANSFER_CALCULATION_KEYS = {
@@ -269,10 +270,15 @@ class _FilePanelStatusBar(QWidget):
         self._transfer_active = False
         self._transfer_progress = 0.0
         self._transfer_calculating = False
+        self._sftp_handler = None
+        self._transfer_dialog = None
+        self._transfer_count = 0
+        self._queued_count = 0
+        self._active_transfer_job_id = None
         self.setObjectName('filePanelStatusBar')
         self._progress_bar = _FileTransferProgressBar(self, transfer_kind=transfer_kind)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 4)
         layout.setSpacing(4)
 
         self.file_filter_edit = QLineEdit()
@@ -292,11 +298,14 @@ class _FilePanelStatusBar(QWidget):
         layout.addWidget(self._speed_label)
 
         self._transfer_button = QToolButton()
-        self._transfer_button.setObjectName('filePanelStatusButton')
-        self._transfer_button.setAutoRaise(True)
+        self._transfer_button.setObjectName('filePanelTransferButton')
+        self._transfer_button.setAutoRaise(False)
+        self._transfer_button.setCursor(Qt.PointingHandCursor)
+        self._transfer_button.setFocusPolicy(Qt.StrongFocus)
         self._transfer_button.setEnabled(False)
-        self._transfer_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self._transfer_button.setText('↑' if transfer_kind == 'upload' else '↓')
+        self._transfer_button.clicked.connect(self._show_transfer_list)
+        self._transfer_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._transfer_button.setIconSize(QSize(20, 16))
         self._transfer_button.hide()
         layout.addWidget(self._transfer_button)
 
@@ -318,6 +327,80 @@ class _FilePanelStatusBar(QWidget):
         self.file_filter_edit.installEventFilter(self)
         table.status_counts_changed.emit(0, 0, 0, 0)
         self.apply_layout()
+        register_retranslator(self.retranslate_ui)
+        self.destroyed.connect(
+            lambda _obj=None, callback=self.retranslate_ui: unregister_retranslator(callback)
+        )
+        self.retranslate_ui()
+
+    def set_sftp_handler(self, handler) -> None:
+        if handler is self._sftp_handler:
+            return
+        if self._transfer_dialog is not None:
+            self._transfer_dialog.close()
+        if self._sftp_handler is not None:
+            self._sftp_handler.transfer_jobs_changed.disconnect(self._sync_transfer_jobs)
+        self._sftp_handler = handler
+        self._transfer_button.setEnabled(handler is not None)
+        if handler is not None:
+            handler.transfer_jobs_changed.connect(self._sync_transfer_jobs)
+        self._sync_transfer_jobs()
+
+    def _sync_transfer_jobs(self) -> None:
+        jobs = self._sftp_handler.transfer_jobs(self._transfer_kind) if self._sftp_handler is not None else []
+        self._transfer_count = len(jobs)
+        self._queued_count = sum(job.state == 'queued' for job in jobs)
+        current = next((job for job in jobs if job.state != 'queued'), None)
+        self._active_transfer_job_id = current.id if current is not None else None
+        if current is None:
+            self.set_transfer_status(self._transfer_kind, '', False, 0.0, 0, 0, False)
+        else:
+            progress = min(1.0, current.transferred / current.total) if current.total > 0 else 0.0
+            self.set_transfer_status(
+                current.kind, current.speed, True, progress,
+                current.transferred, current.total, current.calculating,
+            )
+            if current.state == 'cancelling':
+                self._speed_label.setText(tr('file.transfers.cancelling'))
+        self._update_transfer_button()
+        self._transfer_button.setVisible(bool(jobs))
+
+    def _update_transfer_button(self) -> None:
+        self._transfer_button.setText(tr(
+            'file.transfers.count', count=self._transfer_count,
+        ))
+        tooltip = tr(
+            f'file.transfers.{self._transfer_kind}_tooltip',
+            count=self._transfer_count, queued=self._queued_count,
+        )
+        self._transfer_button.setToolTip(tooltip)
+        self._transfer_button.setAccessibleName(tr(f'file.transfers.{self._transfer_kind}_title'))
+        self._transfer_button.setAccessibleDescription(tooltip)
+
+    def _update_transfer_icon(self) -> None:
+        palette = active_theme_palette()
+        color = QColor(palette.highlight if self._transfer_kind == 'upload' else palette.status_success)
+        self._transfer_button.setIcon(transfer_queue_icon(self._transfer_kind, color, self.devicePixelRatioF()))
+
+    def changeEvent(self, event) -> None:  # type: ignore[override]
+        super().changeEvent(event)
+        if event.type() in (QEvent.PaletteChange, QEvent.StyleChange) and hasattr(self, '_transfer_button'):
+            self._update_transfer_icon()
+
+    def _show_transfer_list(self) -> None:
+        if self._sftp_handler is None:
+            return
+        if self._transfer_dialog is None:
+            from ui.transfer_dialog import TransferDialog
+
+            self._transfer_dialog = TransferDialog(self._sftp_handler, self._transfer_kind, self)
+            self._transfer_dialog.finished.connect(self._transfer_list_closed)
+        self._transfer_dialog.show()
+        self._transfer_dialog.raise_()
+        self._transfer_dialog.activateWindow()
+
+    def _transfer_list_closed(self) -> None:
+        self._transfer_dialog = None
 
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
         if obj is self.file_filter_edit and event.type() == QEvent.KeyPress:
@@ -399,10 +482,15 @@ class _FilePanelStatusBar(QWidget):
         self._speed_label.setVisible(active)
         self._transfer_button.setVisible(active)
         self._update_progress_bar_geometry()
-        self._progress_bar.set_progress(self._transfer_progress if active else 0.0, active)
+        self._progress_bar.set_progress(
+            self._transfer_progress if active else 0.0, active, self._transfer_calculating,
+        )
 
     def retranslate_ui(self) -> None:
-        if self._transfer_calculating:
+        self._update_transfer_button()
+        if self._sftp_handler is not None:
+            self._sync_transfer_jobs()
+        elif self._transfer_calculating:
             self._speed_label.setText(tr(_TRANSFER_CALCULATION_KEYS[self._transfer_kind]))
 
     def set_property_status(self, active: bool, done: int, total: int, failed: int) -> None:
@@ -432,11 +520,13 @@ class _FilePanelStatusBar(QWidget):
         ):
             widget.setFont(font)
         height = max(20, cfg.file_panel_statusbar_font_size + 8)
-        self.setFixedHeight(height)
+        self.setFixedHeight(height + 4)
         self.file_filter_edit.setFixedHeight(height)
         square = QSize(height, height)
-        self._transfer_button.setFixedSize(square)
+        self._transfer_button.setFixedHeight(height)
+        self._transfer_button.setMinimumWidth(height)
         self._property_button.setFixedSize(square)
+        self._update_transfer_icon()
         self._update_progress_bar_geometry()
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
@@ -461,16 +551,44 @@ class _FileTransferProgressBar(QWidget):
         self._transfer_kind = transfer_kind
         self._active = False
         self._progress = 0.0
+        self._indeterminate = False
+        self._busy_phase = 0.2
+        self._busy_timer = QTimer(self)
+        self._busy_timer.setInterval(40)
+        self._busy_timer.timeout.connect(self._advance_busy_progress)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.hide()
 
-    def set_progress(self, progress: float, active: bool) -> None:
+    def set_progress(self, progress: float, active: bool, calculating: bool = False) -> None:
+        if calculating and not self._indeterminate:
+            self._busy_phase = 0.2
+        self._indeterminate = active and calculating
         self._active = active
         self._progress = max(0.0, min(1.0, float(progress)))
         self.setVisible(active)
         if active:
             self.raise_()
+        self._sync_busy_timer()
         self.update()
+
+    def _advance_busy_progress(self) -> None:
+        self._busy_phase = (self._busy_phase + 0.04) % 1.2
+        self.update()
+
+    def _sync_busy_timer(self) -> None:
+        if self._indeterminate and self.isVisible():
+            if not self._busy_timer.isActive():
+                self._busy_timer.start()
+        else:
+            self._busy_timer.stop()
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._sync_busy_timer()
+
+    def hideEvent(self, event) -> None:  # type: ignore[override]
+        self._busy_timer.stop()
+        super().hideEvent(event)
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         super().paintEvent(event)
@@ -482,9 +600,13 @@ class _FileTransferProgressBar(QWidget):
             track = QColor(palette.background_secondary)
             fill = QColor(palette.highlight if self._transfer_kind == 'upload' else palette.status_success)
             painter.fillRect(QRect(0, 0, self.width(), self.height()), track)
-            progress_width = int(self.width() * self._progress)
-            if progress_width > 0:
-                painter.fillRect(QRect(0, 0, progress_width, self.height()), fill)
+            if self._indeterminate:
+                x = int(self.width() * (self._busy_phase - 0.2))
+                painter.fillRect(QRect(x, 0, max(12, self.width() // 5), self.height()), fill)
+            else:
+                progress_width = int(self.width() * self._progress)
+                if progress_width > 0:
+                    painter.fillRect(QRect(0, 0, progress_width, self.height()), fill)
         finally:
             painter.end()
 

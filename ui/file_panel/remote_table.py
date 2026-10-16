@@ -148,6 +148,10 @@ class RemoteFileTable(_BaseFileTable):
         self._current_path = '/'
         self._list_callback: Callable[[str], Any] | None = None
         self._download_directory_provider: Callable[[], str] | None = None
+        self._loading = False
+        self._stream_selection_names: tuple[str, ...] | None = None
+        self._rendered_entries: list[dict] | None = None
+        self._rendered_path = ''
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -423,15 +427,29 @@ class RemoteFileTable(_BaseFileTable):
             return ''
         return self._download_directory_provider() or ''
 
-    def refresh(self) -> None:
+    def refresh(self, *, loading: bool = False, reuse_cached: bool = False) -> None:
         if self._list_callback is None:
             self.setSortingEnabled(False)
             self.setRowCount(0)
             self.setSortingEnabled(True)
             return
 
+        entries = self._list_callback(self._current_path)
+        if entries is None:
+            entries = []
+        if reuse_cached and entries is self._rendered_entries and self._current_path == self._rendered_path:
+            # Tab 切回且缓存快照未变时，保留行对象、选择和滚动位置。
+            self._loading = loading
+            return
+        self._rendered_entries = entries
+        self._rendered_path = self._current_path
+        first_progress = loading and not self._loading
+        self._loading = loading
         sort_column, sort_order = self._begin_refresh()
-        entries = self._list_callback(self._current_path) or []
+        if first_progress:
+            self._stream_selection_names = self._refresh_selection_names
+        if self._stream_selection_names is not None:
+            self._refresh_selection_names = self._stream_selection_names
         if not _is_remote_root(self._current_path):
             self._append_entry_row('..', 'dir', 0, 0.0, is_parent=True)
 
@@ -463,7 +481,21 @@ class RemoteFileTable(_BaseFileTable):
                 mode=int(entry.get('mode', 0) or 0),
             )
         self._end_refresh(sort_column, sort_order)
+        if loading and self._pending_select_name:
+            # 目标文件可能在后续批次出现，未完成时不能消耗待选状态。
+            if not self._select_entry_by_name(self._pending_select_name):
+                return
+        if loading and self._stream_selection_names and not self._pending_select_name:
+            self._restore_selection_names(self._stream_selection_names)
+            return
         self._select_pending_entry()
+        if not loading:
+            self._stream_selection_names = None
+
+    def _prepare_path_change_selection(self) -> None:
+        self._loading = False
+        self._stream_selection_names = None
+        super()._prepare_path_change_selection()
 
     def _enter_directory(self, name: str) -> None:
         if name == '..':
@@ -479,21 +511,23 @@ class RemoteFileTable(_BaseFileTable):
 
     def set_path(self, path: str, *, select_name: str = '') -> None:
         path = path or '/'
-        if select_name:
-            self._current_path = path
-            self._pending_select_name = select_name
-        else:
+        if not select_name:
             parent, name = _remote_parent_and_name(path)
             if name and self._remote_entry_is_file(parent, name):
-                self._current_path = parent
-                self._pending_select_name = name
-            else:
-                self._current_path = path
-                self._pending_select_name = ''
+                path, select_name = parent, name
+        self.set_directory(path, select_name=select_name)
+
+    def set_directory(
+        self, path: str, *, select_name: str = '', refresh: bool = True,
+    ) -> None:
+        """进入已解析的目录，避免再次加载父目录判断文件类型。"""
+        self._current_path = path or '/'
+        self._pending_select_name = select_name
         self._prepare_path_change_selection()
         self.clear_filter()
         self.path_changed.emit(self._current_path)
-        self.refresh_requested.emit()
+        if refresh:
+            self.refresh_requested.emit()
 
     def _remote_entry_is_file(self, parent: str, name: str) -> bool:
         if self._list_callback is None:
@@ -507,6 +541,10 @@ class RemoteFileTable(_BaseFileTable):
         return False
 
     def clear_remote(self) -> None:
+        self._loading = False
+        self._stream_selection_names = None
+        self._rendered_entries = None
+        self._rendered_path = ''
         self._list_callback = None
         self._pending_select_name = ''
         self._select_first_after_path_change = False

@@ -127,6 +127,7 @@ class SidePanel(QWidget):
 
     session_connect_requested = pyqtSignal(SessionItem)
     command_send_requested = pyqtSignal(str, bool)
+    command_replace_requested = pyqtSignal(str)
     history_jump_requested = pyqtSignal(str, str, int)
     sessions_changed = pyqtSignal()
 
@@ -214,6 +215,7 @@ class SidePanel(QWidget):
 
         self.history_list = CommandHistoryPanel(self.history_store, self)
         self.history_list.command_send_requested.connect(self.command_send_requested)
+        self.history_list.command_replace_requested.connect(self.command_replace_requested)
         self.history_list.history_jump_requested.connect(self.history_jump_requested)
         layout.addWidget(self.history_list, 1)
 
@@ -619,7 +621,7 @@ class SidePanel(QWidget):
             return
         command = self._find_command_by_tree(item)
         if command is not None and not command.is_folder():
-            self.command_send_requested.emit(command.command, False)
+            self.command_replace_requested.emit(command.command)
 
     @staticmethod
     def _is_folder(item: QTreeWidgetItem) -> bool:

@@ -7,7 +7,8 @@ import inspect
 import os
 import shutil
 import stat
-from contextlib import contextmanager
+import time
+from contextlib import aclosing, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterator, Literal
@@ -15,6 +16,7 @@ from typing import Any, Awaitable, Callable, Iterator, Literal
 import asyncssh
 
 from core.file_permissions import format_unix_mode
+from core.sftp_diagnostics import SftpTiming
 from log_util import logger
 
 
@@ -29,6 +31,7 @@ class LocalSymlinkUnsupported(Exception):
 TransferDecision = Literal['overwrite', 'resume', 'cancel']
 ConflictHandler = Callable[[str, str, bool], TransferDecision | Awaitable[TransferDecision]]
 ProgressHandler = Callable[[str, str, int, int], None]
+DirectoryProgressHandler = Callable[[list[dict[str, Any]]], None]
 
 _COPY_CHUNK_SIZE = 256 * 1024
 _SFTP_TAB_ID: ContextVar[str] = ContextVar('sftp_tab_id', default='unbound')
@@ -61,37 +64,71 @@ async def listdir(
     path: str,
     *,
     tab_id: str,
+    on_progress: DirectoryProgressHandler | None = None,
 ) -> list[dict[str, Any]]:
     with _sftp_log_context(tab_id):
-        return await _listdir(sftp, path)
+        return await _listdir(sftp, path, on_progress)
 
 
-async def _listdir(sftp: asyncssh.SFTPClient, path: str) -> list[dict[str, Any]]:
+async def _listdir(
+    sftp: asyncssh.SFTPClient,
+    path: str,
+    on_progress: DirectoryProgressHandler | None,
+) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    try:
-        names = await sftp.listdir(path)
-    except asyncssh.SFTPError as exc:
-        logger.warning(f'SFTP listdir failed: {_log_id()}, path={path}, error={exc}')
-        return entries
+    with SftpTiming('listdir', _SFTP_TAB_ID.get(), path) as timing:
+        timing.metrics.update(entries=0, names=0, lstat_count=0)
+        next_publish = 128
 
-    for name in sorted(names):
-        if name in ('.', '..'):
-            continue
-        full = f'{path.rstrip("/")}/{name}' if path not in ('', '/') else f'/{name}'
+        def publish() -> None:
+            if on_progress is not None:
+                with timing.measure('ui_progress'):
+                    on_progress(entries)
+
+        publish()
         try:
-            attrs = await sftp.lstat(full)
-        except asyncssh.SFTPError:
-            continue
-        mode = attrs.permissions or 0
-        is_dir = await _remote_entry_is_dir(sftp, full, attrs)
-        entries.append({
-            'name': name,
-            'is_dir': is_dir,
-            'size': attrs.size or 0,
-            'mtime': float(attrs.mtime or 0),
-            'perm': format_unix_mode(mode),
-            'mode': mode,
-        })
+            # scandir 逐批返回 READDIR 已携带的属性，无需等完整目录或再发 LSTAT。
+            async with aclosing(sftp.scandir(path)) as iterator:
+                while True:
+                    try:
+                        with timing.measure('read_next'):
+                            remote_entry = await anext(iterator)
+                    except StopAsyncIteration:
+                        break
+                    timing.metrics['names'] = int(timing.metrics['names']) + 1
+                    name = remote_entry.filename
+                    if name in ('.', '..'):
+                        continue
+                    if not entries:
+                        timing.metrics['first_entry_ms'] = (time.perf_counter() - timing.started) * 1000
+                    full = f'{path.rstrip("/")}/{name}' if path not in ('', '/') else f'/{name}'
+                    attrs = remote_entry.attrs
+                    mode = attrs.permissions or 0
+                    if stat.S_ISLNK(mode):
+                        with timing.measure('symlink_stat', full):
+                            is_dir = await _remote_entry_is_dir(sftp, full, attrs)
+                    else:
+                        is_dir = stat.S_ISDIR(mode)
+                    entries.append({
+                        'name': name,
+                        'is_dir': is_dir,
+                        'size': attrs.size or 0,
+                        'mtime': float(attrs.mtime or 0),
+                        'perm': format_unix_mode(mode),
+                        'mode': mode,
+                    })
+                    timing.metrics['entries'] = len(entries)
+                    # 首项立即显示；后续按倍增条目数更新，限制大目录的重绘总量。
+                    if len(entries) == 1 or len(entries) >= next_publish:
+                        publish()
+                        if len(entries) >= next_publish:
+                            next_publish *= 2
+        except asyncssh.SFTPError as exc:
+            timing.metrics['list_error'] = type(exc).__name__
+            logger.warning(f'SFTP listdir failed: {_log_id()}, path={path}, error={exc}')
+            return []
+
+        entries.sort(key=lambda entry: entry['name'])
     return entries
 
 

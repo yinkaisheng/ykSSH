@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import re
@@ -7,6 +8,7 @@ import time
 import string
 import unicodedata
 from dataclasses import dataclass
+from itertools import chain, islice
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -104,6 +106,7 @@ class TerminalVTWidget(QWidget):
     command_submitted = pyqtSignal(str, str, int)
     reconnect_requested = pyqtSignal()
     working_directory_reported = pyqtSignal(str)
+    size_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -205,6 +208,7 @@ class TerminalVTWidget(QWidget):
         self._pending_command_text = ''
         self._pending_command_history_forced = False
         self._pending_command_from_shell_prompt = False
+        self._output_revision = 0
         self._command_start_commands: dict[int, str] = {}
         self._last_gutter_tooltip_row: int | None = None
         self._paint_timer = QTimer(self)
@@ -552,6 +556,8 @@ class TerminalVTWidget(QWidget):
                 except Exception:
                     pass
             self._mark_dirty()
+
+        self.size_changed.emit()
 
     def _resize_main_screen_keep_bottom(self, cols: int, rows: int) -> None:
         """
@@ -902,6 +908,80 @@ class TerminalVTWidget(QWidget):
         if not self._is_alive():
             return
         self._process_input(text, record=True)
+        self._output_revision += 1
+
+    @property
+    def output_revision(self) -> int:
+        return self._output_revision
+
+    def command_input_ready(self) -> bool:
+        """判断是否位于空的主提示符，兼顾常见的裸提示符。"""
+        if self._in_alt_screen or self._reconnect_enabled or self._pending_command_text:
+            return False
+        y = self._cursor_y()
+        if y is None:
+            return False
+        x = int(self.screen.cursor.x)
+        line = self._line_text(y)
+        prefix = line[:x]
+        return not line[x:].strip() and bool(
+            _SHELL_PROMPT_READY_RE.search(prefix)
+            or re.fullmatch(r'[$#%❯] *', prefix)
+        )
+
+    def _command_input_is_whitespace(self) -> bool:
+        """检查主提示符后的整段输入，避免只看光标前或当前续行。"""
+        text = self._pending_command_text
+        # 本地记录未模拟光标编辑，Delete 等操作后可能仍含已删除文字。
+        # 仅用它识别多行状态，是否有内容则检查实际回显。
+        if '\n' in text or '\r' in text:
+            return False
+        start_y = self._pending_command_start_y
+        start_x = self._pending_command_start_x
+        cursor_y = self._cursor_abs_y()
+        cols = int(self.screen.columns)
+        if start_y is not None and start_x is not None and cursor_y is not None and start_y <= cursor_y:
+            line = self._line_from_absolute_buffer(start_y)
+            if line is None:
+                return False
+            prefix = self._safe_display_line_from_cells(line, cols)[:start_x]
+            if not (_SHELL_PROMPT_READY_RE.search(prefix) or re.fullmatch(r'[$#%❯] *', prefix)):
+                return False
+            # 光标可能已移回前面的折行，后面的输入仍须一起检查。
+            end_y = max(cursor_y, self._visible_y_to_abs_y(int(self.screen.lines) - 1))
+            for row in range(start_y, end_y + 1):
+                line = self._line_from_absolute_buffer(row)
+                if line is None or any(
+                    self._cell_data(line, column).strip()
+                    for column in range(start_x if row == start_y else 0, cols)
+                ):
+                    return False
+            return bool(text) or cursor_y != start_y or int(self.screen.cursor.x) > start_x
+        y = self._cursor_y()
+        if y is None:
+            return False
+        line = self._line_text(y)
+        prompt = re.match(r'^(?:[^\s@]+@[^\s:]+:[^\r\n]*?[#$]|[$#%❯])(?=\s|$)', line)
+        return bool(prompt) and not line[prompt.end():].strip() and (
+            bool(text) or int(self.screen.cursor.x) > prompt.end() + 1
+        )
+
+    def prepare_command_replacement(self) -> bool:
+        """空白输入直接删除，其余输入取消后保留回显。"""
+        self._prepare_for_terminal_input()
+        ready = self.command_input_ready()
+        whitespace = self._command_input_is_whitespace()
+        self._pending_command_start_y = None
+        self._pending_command_start_x = None
+        self._pending_command_text = ''
+        self._pending_command_history_forced = False
+        self._pending_command_from_shell_prompt = False
+        self._restore_input_after_working_directory_report = False
+        if whitespace:
+            self.input_received.emit(b'\x01\x0b')
+        elif not ready:
+            self.input_received.emit(b'\x03')
+        return whitespace or not ready
 
     def _process_input(self, text: str, record: bool) -> None:
         text = self._extract_working_directory_reports(text)
@@ -2195,6 +2275,22 @@ class TerminalVTWidget(QWidget):
     def _line_from_buffer(self, y: int) -> Any:
         return self._line_from_screen_buffer(self.screen, y)
 
+    def _line_from_absolute_buffer(self, y: int) -> Any:
+        """按绝对行号读取选区内容，包含视图前后的历史行。"""
+        visible_y = self._abs_y_to_visible_y(y)
+        rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+        if 0 <= visible_y < rows:
+            return self._line_from_buffer(visible_y)
+        if self._in_alt_screen:
+            return None
+        history = getattr(self.screen, "history", None)
+        try:
+            if visible_y < 0:
+                return history.top[visible_y]
+            return history.bottom[visible_y - rows]
+        except (AttributeError, IndexError, TypeError):
+            return None
+
     def _safe_display_line_for_screen(self, screen: Any, y: int, cols: int) -> str:
         """Build one display line from pyte buffer; avoids Screen.display on empty cells."""
         if cols <= 0:
@@ -2984,9 +3080,9 @@ class TerminalVTWidget(QWidget):
         # Selection is still stored as terminal cell coordinates, but a CJK
         # glyph occupies two cells. Normalize endpoints so drag/copy never
         # captures only the continuation half of a wide glyph.
-        cols, _ = self._calc_cols_rows()
+        cols = int(getattr(self.screen, "columns", self._calc_cols_rows()[0]) or 0)
         visible_y = self._abs_y_to_visible_y(y)
-        line = self._line_from_buffer(visible_y)
+        line = self._line_from_absolute_buffer(y)
         if self._is_wide_continuation_cell(line, x):
             return max(0, x - 1), y
         if is_end and self._is_wide_leading_cell(line, x, cols):
@@ -3079,12 +3175,22 @@ class TerminalVTWidget(QWidget):
         if not sel:
             return ""
         (sx, sy), (ex, ey) = sel
-        cols, _ = self._calc_cols_rows()
+        cols = int(getattr(self.screen, "columns", self._calc_cols_rows()[0]) or 0)
+        rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
+        history = None if self._in_alt_screen else getattr(self.screen, "history", None)
+        top = getattr(history, "top", ())
+        bottom = getattr(history, "bottom", ())
+        buffer_start = self._viewport_top_row - len(top)
+        start_y = max(sy, buffer_start)
+        end_y = min(ey, self._viewport_top_row + rows + len(bottom) - 1)
+        if end_y < start_y:
+            return ""
+        # 顺序遍历历史队列，避免长选区逐行索引 deque 带来的二次方开销。
+        lines = chain(top, (self._line_from_buffer(y) for y in range(rows)), bottom)
+        selected_lines = islice(lines, start_y - buffer_start, end_y - buffer_start + 1)
 
         out: list[str] = []
-        for abs_y in range(sy, ey + 1):
-            visible_y = self._abs_y_to_visible_y(abs_y)
-            line = self._line_from_buffer(visible_y)
+        for abs_y, line in enumerate(selected_lines, start=start_y):
             start = sx if abs_y == sy else 0
             end = ex if abs_y == ey else cols - 1
             chars: list[str] = []
@@ -3376,6 +3482,9 @@ class TerminalVTWidget(QWidget):
                     self._pending_command_text = ''
                     self._pending_command_history_forced = False
                     self._pending_command_from_shell_prompt = False
+                    if key == Qt.Key_C:
+                        self._pending_command_start_y = None
+                        self._pending_command_start_x = None
                 ctrl_char = bytes([key - Qt.Key_A + 1])
                 self.input_received.emit(ctrl_char)
                 event.accept()

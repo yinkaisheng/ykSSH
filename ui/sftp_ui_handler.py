@@ -24,6 +24,8 @@ from core.sftp_service import (
 )
 from core.connection_manager import ConnectionManager
 from core.file_permissions import PermissionChange
+from core.sftp_diagnostics import SftpTiming, remote_navigation_context
+from core.transfer_queue import TransferJob, TransferKind, TransferQueue
 from i18n import tr
 from log_util import logger
 from ui.dialog_i18n import ask_transfer_conflict_async, message_warning_async
@@ -41,6 +43,7 @@ def _remote_parent_and_name(path: str) -> tuple[str, str]:
 
 
 class SftpUiHandler(QObject):
+    transfer_jobs_changed = pyqtSignal()
     transfer_status_changed = pyqtSignal(
         str, str, bool, float, object, object, bool,
     )
@@ -69,6 +72,10 @@ class SftpUiHandler(QObject):
         }
         self._transfer_tasks: set[asyncio.Task] = set()
         self._background_tasks: set[asyncio.Task] = set()
+        self._transfer_queue = TransferQueue(
+            self._run_transfer_job, self._track_transfer_task, self.transfer_jobs_changed.emit,
+        )
+        self.transfer_status_changed.connect(self._sync_transfer_progress)
 
     @property
     def local_dir(self) -> str:
@@ -92,26 +99,36 @@ class SftpUiHandler(QObject):
         if sftp is None:
             return text, '', None
 
-        probe = text
-        while True:
-            try:
-                attrs = await sftp.lstat(probe)
-            except Exception:
-                if probe == '/':
-                    return '/', '', None
-                probe, _name = _remote_parent_and_name(probe)
-                continue
-            mode = attrs.permissions or 0
-            if stat.S_ISLNK(mode):
+        with SftpTiming('resolve_navigation', self.tab_id, text) as timing:
+            timing.metrics['parent_fallbacks'] = 0
+            probe = text
+            while True:
                 try:
-                    attrs = await sftp.stat(probe)
-                    mode = attrs.permissions or 0
-                except Exception:
-                    pass
-            if stat.S_ISDIR(mode):
-                return probe, '', False if probe == text else None
-            parent, name = _remote_parent_and_name(probe)
-            return parent, name, True if probe == text else None
+                    with timing.measure('lstat', probe):
+                        attrs = await sftp.lstat(probe)
+                except Exception as exc:
+                    timing.metrics['last_probe_error'] = type(exc).__name__
+                    timing.metrics['failed_probe_path'] = probe
+                    if probe == '/':
+                        timing.metrics['resolved_path'] = '/'
+                        return '/', '', None
+                    timing.metrics['parent_fallbacks'] = int(timing.metrics['parent_fallbacks']) + 1
+                    probe, _name = _remote_parent_and_name(probe)
+                    continue
+                mode = attrs.permissions or 0
+                if stat.S_ISLNK(mode):
+                    try:
+                        with timing.measure('symlink_stat', probe):
+                            attrs = await sftp.stat(probe)
+                        mode = attrs.permissions or 0
+                    except Exception as exc:
+                        timing.metrics['symlink_error'] = type(exc).__name__
+                if stat.S_ISDIR(mode):
+                    timing.metrics['resolved_path'] = probe
+                    return probe, '', False if probe == text else None
+                parent, name = _remote_parent_and_name(probe)
+                timing.metrics.update(resolved_path=parent, select_name=name)
+                return parent, name, True if probe == text else None
 
     def try_init_session_paths(
         self,
@@ -137,9 +154,10 @@ class SftpUiHandler(QObject):
 
     def refresh_remote(self, path: str) -> None:
         self.set_remote_dir(path)
-        self._track_background_task(
-            asyncio.create_task(self._cm.refresh_remote_list(self.tab_id, self._remote_dir))
-        )
+        with remote_navigation_context(self.tab_id, self._remote_dir, 'directory'):
+            self._track_background_task(
+                asyncio.create_task(self._cm.refresh_remote_list(self.tab_id, self._remote_dir))
+            )
 
     def upload_local_paths(self, local_paths: list[str]) -> None:
         logger.info(
@@ -147,7 +165,30 @@ class SftpUiHandler(QObject):
             f'tab_id={self.tab_id}, count={len(local_paths)}, remote_dir={self._remote_dir}, '
             f'paths={local_paths}'
         )
-        self._track_transfer_task(asyncio.create_task(self._upload_async(local_paths)))
+        self._transfer_queue.enqueue('upload', local_paths, self._remote_dir)
+
+    def transfer_jobs(self, kind: TransferKind) -> list[TransferJob]:
+        return self._transfer_queue.jobs(kind)
+
+    def cancel_transfer(self, job_id: str) -> None:
+        logger.info(f'Cancel transfer requested: tab_id={self.tab_id}, job_id={job_id}')
+        self._transfer_queue.cancel(job_id)
+
+    async def _run_transfer_job(self, job: TransferJob) -> None:
+        logger.info(
+            f'Transfer queue start: tab_id={self.tab_id}, job_id={job.id}, kind={job.kind}'
+        )
+        if job.kind == 'upload':
+            await self._upload_async(list(job.paths), job.destination)
+        else:
+            await self._download_async(list(job.paths), job.destination)
+
+    def _sync_transfer_progress(
+        self, kind: TransferKind, speed: str, active: bool, _progress: float,
+        transferred: int, total: int, calculating: bool,
+    ) -> None:
+        if active:
+            self._transfer_queue.update_progress(kind, speed, transferred, total, calculating)
 
     def _track_transfer_task(self, task: asyncio.Task) -> None:
         self._transfer_tasks.add(task)
@@ -169,25 +210,29 @@ class SftpUiHandler(QObject):
             logger.error(f'SFTP UI task failed: tab_id={self.tab_id}, error={error}')
 
     def has_running_transfers(self) -> bool:
-        return any(not task.done() for task in self._transfer_tasks)
+        return (
+            bool(self.transfer_jobs('upload') or self.transfer_jobs('download'))
+            or any(not task.done() for task in self._transfer_tasks)
+        )
 
     def cancel_transfers(self) -> None:
         logger.info(f'Cancel transfer tasks requested: tab_id={self.tab_id}, count={len(self._transfer_tasks)}')
+        queue_tasks = self._transfer_queue.cancel_all()
         for task in list(self._transfer_tasks):
-            if not task.done():
+            if task not in queue_tasks and not task.done():
                 task.cancel()
         for task in list(self._background_tasks):
             if not task.done():
                 task.cancel()
 
     async def wait_transfers_closed(self) -> None:
-        tasks = [
-            task for task in (*self._transfer_tasks, *self._background_tasks)
-            if not task.done()
-        ]
-        if not tasks:
-            return
-        await asyncio.gather(*tasks, return_exceptions=True)
+        while True:
+            tasks = list(self._transfer_tasks | self._background_tasks)
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+            # 已完成的 gather 可能立即返回；让 done 回调清理队列并启动下一项。
+            await asyncio.sleep(0)
 
     @staticmethod
     def _format_speed(bytes_per_second: float) -> str:
@@ -316,11 +361,12 @@ class SftpUiHandler(QObject):
                 return
             elapsed = max(0.001, now - float(stats['last_time']))
             delta = max(0, current_total - int(stats['last_bytes']))
-            if elapsed < 0.2 and delta > 0:
+            total_bytes = int(stats['total_bytes'])
+            complete = total_bytes > 0 and current_total >= total_bytes
+            if elapsed < 0.2 and delta > 0 and not complete:
                 return
             stats['last_time'] = now
             stats['last_bytes'] = current_total
-            total_bytes = int(stats['total_bytes'])
             progress = min(1.0, current_total / total_bytes) if total_bytes > 0 else 0.0
             self.transfer_status_changed.emit(
                 kind,
@@ -380,14 +426,14 @@ class SftpUiHandler(QObject):
     async def _warn(self, message: str) -> None:
         await message_warning_async(self._dialog_parent(), tr('file.operation_failed'), message)
 
-    async def _upload_async(self, local_paths: list[str]) -> None:
+    async def _upload_async(self, local_paths: list[str], remote_dir: str) -> None:
         ssh = self._cm.get_session(self.tab_id)
         if ssh is None:
             return
         sftp = ssh.get_sftp()
         if sftp is None:
             return
-        remote_dir = self._remote_dir.rstrip('/') or '/'
+        remote_dir = remote_dir.rstrip('/') or '/'
         self._set_transfer_calculating('upload')
         try:
             total_bytes = await asyncio.to_thread(
@@ -457,7 +503,7 @@ class SftpUiHandler(QObject):
             f'tab_id={self.tab_id}, count={len(remote_paths)}, local_dir={local_dir}, '
             f'paths={remote_paths}'
         )
-        self._track_transfer_task(asyncio.create_task(self._download_async(remote_paths, local_dir)))
+        self._transfer_queue.enqueue('download', remote_paths, local_dir)
 
     async def _download_async(self, remote_paths: list[str], local_dir: str) -> None:
         ssh = self._cm.get_session(self.tab_id)

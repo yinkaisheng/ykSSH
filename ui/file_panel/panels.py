@@ -10,6 +10,8 @@ import sys
 from datetime import datetime
 from typing import Any, Callable, Iterable, Sequence
 
+from core.sftp_diagnostics import SftpTiming, remote_navigation_context
+
 from PyQt5.QtCore import QEvent, Qt, QTimer, QSize, QRect, QFile, QItemSelectionModel, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QMouseEvent, QPainter, QShowEvent
 from PyQt5.QtWidgets import (
@@ -36,7 +38,7 @@ from PyQt5.QtWidgets import (
 )
 
 from core.file_permissions import PermissionChange, format_local_permission
-from i18n import tr
+from i18n import register_retranslator, tr, unregister_retranslator
 from log_util import logger
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
@@ -207,15 +209,12 @@ class LocalFilePanel(QWidget):
         if self._sftp_handler is not None:
             try:
                 self.table.upload_requested.disconnect()
-                self._sftp_handler.transfer_status_changed.disconnect(
-                    self.statusbar.set_transfer_status,
-                )
             except TypeError:
                 pass
         self._sftp_handler = handler
+        self.statusbar.set_sftp_handler(handler)
         if handler is not None:
             self.table.upload_requested.connect(handler.upload_local_paths)
-            handler.transfer_status_changed.connect(self.statusbar.set_transfer_status)
 
     def _show_favorites_menu(self) -> None:
         global_entries: Sequence[FavoritePath] = ()
@@ -325,7 +324,12 @@ class RemoteFilePanel(QWidget):
         self._manage_favorites_handler: Callable[[], None] | None = None
         self._favorites_changed_handler: Callable[[], None] | None = None
         self._background_tasks: set[asyncio.Task] = set()
+        self._loading = False
         self._build_ui()
+        register_retranslator(self.retranslate_ui)
+        self.destroyed.connect(
+            lambda _obj=None, callback=self.retranslate_ui: unregister_retranslator(callback)
+        )
         tasks = self._background_tasks
         self.destroyed.connect(
             lambda _obj=None: [task.cancel() for task in list(tasks) if not task.done()]
@@ -428,23 +432,31 @@ class RemoteFilePanel(QWidget):
         if self._sftp_handler is None:
             self.table.set_path(entry.path)
             return
-        self._track_background_task(asyncio.create_task(self._navigate_favorite_async(entry)))
+        with remote_navigation_context(self._sftp_handler.tab_id, entry.path, 'favorite'):
+            self._track_background_task(asyncio.create_task(self._navigate_favorite_async(entry)))
 
     async def _navigate_favorite_async(self, entry: FavoritePath) -> None:
-        try:
-            directory, select_name, is_file = await self._sftp_handler.resolve_remote_navigation_target(entry.path)
-        except Exception as exc:
-            logger.warning(
-                f'Remote favorite path resolve failed: tab_id={self._sftp_handler.tab_id}, '
-                f'path={entry.path}, error={exc}'
-            )
-            self.table.set_path(entry.path)
-            return
-        if is_file is not None and entry.is_file != is_file:
-            entry.is_file = is_file
-            if self._favorites_changed_handler is not None:
-                self._favorites_changed_handler()
-        self.table.set_path(directory, select_name=select_name)
+        with SftpTiming('favorite_navigation', self._sftp_handler.tab_id, entry.path) as timing:
+            try:
+                with timing.measure('resolve'):
+                    directory, select_name, is_file = await self._sftp_handler.resolve_remote_navigation_target(entry.path)
+            except Exception as exc:
+                timing.metrics['resolve_error'] = type(exc).__name__
+                logger.warning(
+                    f'Remote favorite path resolve failed: tab_id={self._sftp_handler.tab_id}, '
+                    f'path={entry.path}, error={exc}'
+                )
+                with timing.measure('set_path'):
+                    self.table.set_path(entry.path)
+                return
+            if is_file is not None and entry.is_file != is_file:
+                entry.is_file = is_file
+                if self._favorites_changed_handler is not None:
+                    with timing.measure('persist_favorite'):
+                        self._favorites_changed_handler()
+            timing.metrics.update(resolved_path=directory, select_name=select_name)
+            with timing.measure('set_path', directory):
+                self.table.set_directory(directory, select_name=select_name)
 
     def _remote_home_path(self) -> str:
         if self._sftp_handler is not None:
@@ -489,11 +501,16 @@ class RemoteFilePanel(QWidget):
     def current_path(self) -> str:
         return self.table.current_path()
 
+    def set_directory(self, path: str, *, refresh: bool = True) -> None:
+        """设置已解析的目录；初始化时由调用方统一读取列表。"""
+        self.table.set_directory(path, refresh=refresh)
+
     def set_path(self, path: str) -> None:
         if self._sftp_handler is None:
             self.table.set_path(path)
             return
-        self._track_background_task(asyncio.create_task(self._set_path_resolved_async(path)))
+        with remote_navigation_context(self._sftp_handler.tab_id, path, 'path'):
+            self._track_background_task(asyncio.create_task(self._set_path_resolved_async(path)))
 
     async def _set_path_resolved_async(self, path: str) -> None:
         try:
@@ -505,10 +522,20 @@ class RemoteFilePanel(QWidget):
             )
             self.table.set_path(path)
             return
-        self.table.set_path(directory, select_name=select_name)
+        self.table.set_directory(directory, select_name=select_name)
 
-    def refresh(self) -> None:
-        self.table.refresh()
+    def refresh(self, *, loading: bool = False, reuse_cached: bool = False) -> None:
+        self._loading = loading
+        self._update_table_headers()
+        self.table.refresh(loading=loading, reuse_cached=reuse_cached)
+
+    def _update_table_headers(self) -> None:
+        """将加载状态放在名称列标题，保持路径栏布局稳定。"""
+        labels = _file_table_header_labels()
+        if self._loading:
+            name_column = FILE_TABLE_COLUMNS.index('Name')
+            labels[name_column] = tr('file.name_loading', name=labels[name_column])
+        self.table.setHorizontalHeaderLabels(labels)
 
     def apply_toolbar_layout(self) -> None:
         _apply_file_panel_toolbar_layout(
@@ -527,13 +554,22 @@ class RemoteFilePanel(QWidget):
             defaults=DEFAULT_REMOTE_COLUMN_WIDTHS,
         )
 
-    def set_list_callback(self, callback: Callable[[str], list[dict]]) -> None:
+    def set_list_callback(
+        self,
+        callback: Callable[[str], list[dict]],
+        *,
+        loading: bool = False,
+    ) -> None:
         self.table.set_list_callback(callback)
         self.placeholder.hide()
         self.table.show()
-        self._remote_refresh()
+        # 绑定/切回 Tab 只显示缓存；缓存缺失由列表回调按需启动读取。
+        self.refresh(loading=loading, reuse_cached=True)
 
     def clear_remote(self) -> None:
+        self._loading = False
+        self._label.setText(tr('file.remote'))
+        self._update_table_headers()
         self.table.clear_remote()
         self.table.hide()
         self.placeholder.show()
@@ -550,9 +586,6 @@ class RemoteFilePanel(QWidget):
                 self.table.properties_requested.disconnect()
                 self.table.mkdir_requested.disconnect()
                 self.table.refresh_requested.disconnect()
-                self._sftp_handler.transfer_status_changed.disconnect(
-                    self.statusbar.set_transfer_status,
-                )
                 self._sftp_handler.property_status_changed.disconnect(
                     self.statusbar.set_property_status,
                 )
@@ -562,6 +595,7 @@ class RemoteFilePanel(QWidget):
             except TypeError:
                 pass
         self._sftp_handler = handler
+        self.statusbar.set_sftp_handler(handler)
         if handler is None:
             self.table.set_download_directory_provider(None)
             return
@@ -573,7 +607,6 @@ class RemoteFilePanel(QWidget):
         self.table.properties_requested.connect(handler.apply_remote_properties)
         self.table.mkdir_requested.connect(handler.mkdir_remote)
         self.table.set_download_directory_provider(lambda: handler.local_dir)
-        handler.transfer_status_changed.connect(self.statusbar.set_transfer_status)
         handler.property_status_changed.connect(self.statusbar.set_property_status)
         handler.rename_failed.connect(self.table.cancel_pending_selection)
         self.table.refresh_requested.connect(
@@ -586,7 +619,7 @@ class RemoteFilePanel(QWidget):
         self.statusbar.retranslate_ui()
         self.placeholder.setText(tr('file.not_connected'))
         self.path_edit.setPlaceholderText(tr('file.path_placeholder'))
-        self.table.setHorizontalHeaderLabels(_file_table_header_labels())
+        self._update_table_headers()
         self.table._emit_status_counts()
 
 

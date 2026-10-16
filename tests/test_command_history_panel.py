@@ -36,10 +36,12 @@ class CommandHistoryPanelTests(unittest.TestCase):
 
     def test_filter_and_dispatch_signals(self) -> None:
         sent = []
+        replaced = []
         jumped = []
         self.panel.command_send_requested.connect(
             lambda command, execute: sent.append((command, execute)),
         )
+        self.panel.command_replace_requested.connect(replaced.append)
         self.panel.history_jump_requested.connect(
             lambda command, sent_at, row: jumped.append((command, sent_at, row)),
         )
@@ -59,7 +61,8 @@ class CommandHistoryPanelTests(unittest.TestCase):
         self.panel.itemClicked.emit(git_item)
         self.panel.itemDoubleClicked.emit(git_item)
         self.assertEqual(jumped, [('git status', '10:00', 5)])
-        self.assertEqual(sent, [('git status', False)])
+        self.assertEqual(sent, [])
+        self.assertEqual(replaced, ['git status'])
 
     def test_context_menu_copies_sent_time_and_command(self) -> None:
         self.panel.set_active_tab('tab-a')

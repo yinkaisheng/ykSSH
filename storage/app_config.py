@@ -32,6 +32,8 @@ from models.favorite_path import FavoritePath, favorite_paths_from_raw, favorite
 from storage.file_panel_defaults import (
     DEFAULT_LOCAL_COLUMN_WIDTHS,
     DEFAULT_REMOTE_COLUMN_WIDTHS,
+    DEFAULT_TRANSFER_COLUMN_WIDTHS,
+    TRANSFER_TABLE_COLUMNS,
     FILE_TABLE_COLUMNS,
     _FILE_PANEL_BOOL_DEFAULTS,
     _FILE_PANEL_INT_BOUNDS,
@@ -291,6 +293,10 @@ def _normalize_file_panel(raw: Any) -> dict[str, Any]:
             default=DEFAULT_REMOTE_COLUMN_WIDTHS,
         ),
         'local_favorites': _normalize_favorite_entries(raw.get('local_favorites')),
+        'transfer_column_widths': _normalize_column_widths(
+            raw.get('transfer_column_widths'),
+            default=DEFAULT_TRANSFER_COLUMN_WIDTHS, columns=TRANSFER_TABLE_COLUMNS,
+        ),
     }
     for key, default in _FILE_PANEL_INT_DEFAULTS.items():
         minimum, maximum = _FILE_PANEL_INT_BOUNDS[key]
@@ -316,6 +322,9 @@ def _file_panel_to_config(file_panel: dict[str, Any]) -> FilePanelConfig:
         local_favorites_dialog_height=file_panel['local_favorites_dialog_height'],
         remote_favorites_dialog_width=file_panel['remote_favorites_dialog_width'],
         remote_favorites_dialog_height=file_panel['remote_favorites_dialog_height'],
+        transfer_dialog_width=file_panel['transfer_dialog_width'],
+        transfer_dialog_height=file_panel['transfer_dialog_height'],
+        transfer_column_widths=dict(file_panel['transfer_column_widths']),
     )
 
 
@@ -689,6 +698,26 @@ def save_favorites_dialog_size(
     file_panel = _normalize_file_panel(file_panel)
     data = dict(_raw_config_cache)
     data['file_panel'] = file_panel
+    _save_config(path, data)
+    _raw_config_cache = data
+    _config_cache = _to_app_config(data)
+    return _config_cache
+
+
+def save_transfer_dialog_layout(
+    *, width: int, height: int, column_widths: dict[str, int], path: Path = CONFIG_FILE,
+) -> AppConfig:
+    """保存上传/下载任务窗口共用的尺寸和列宽。"""
+    global _config_cache, _raw_config_cache
+    if _raw_config_cache is None:
+        _config_cache = _load_config(path)
+    file_panel = dict(_raw_config_cache['file_panel'])
+    file_panel.update(
+        transfer_dialog_width=width, transfer_dialog_height=height,
+        transfer_column_widths=column_widths,
+    )
+    data = dict(_raw_config_cache)
+    data['file_panel'] = _normalize_file_panel(file_panel)
     _save_config(path, data)
     _raw_config_cache = data
     _config_cache = _to_app_config(data)

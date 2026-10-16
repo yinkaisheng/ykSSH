@@ -9,6 +9,7 @@ from typing import Callable
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from core.path_resolver import resolve_remote_path
+from core.sftp_diagnostics import SftpTiming, remote_navigation_context
 from core.sftp_service import listdir
 from core.ssh_session import HostKeyConfirm, SSHConnection, SSHSession
 from core.terminal_port import TerminalPort
@@ -27,6 +28,7 @@ class ConnectionManager(QObject):
     """Maps terminal tab IDs to live SSH sessions."""
 
     remote_list_updated = pyqtSignal(str, str)
+    remote_list_progress = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -42,12 +44,17 @@ class ConnectionManager(QObject):
         self._tab_titles: dict[str, str] = {}
         self._remote_cache: dict[str, dict[str, list[dict]]] = {}
         self._refresh_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._remote_list_requests: dict[tuple[str, str], object] = {}
 
     def get_session(self, tab_id: str) -> SSHSession | None:
         return self._sessions.get(tab_id)
 
     def get_tab_title(self, tab_id: str) -> str:
         return self._tab_titles.get(tab_id, '')
+
+    def is_remote_list_loading(self, tab_id: str, path: str) -> bool:
+        """返回该 Tab 目录是否仍有未完成的列表读取。"""
+        return (tab_id, path) in self._remote_list_requests
 
     def get_remote_list_callback(self, tab_id: str) -> Callable[[str], list[dict]] | None:
         if tab_id not in self._sessions:
@@ -60,7 +67,8 @@ class ConnectionManager(QObject):
             key = (tab_id, path)
             existing = self._refresh_tasks.get(key)
             if existing is None or existing.done():
-                task = asyncio.create_task(self.refresh_remote_list(tab_id, path))
+                with remote_navigation_context(tab_id, path, 'cache_miss'):
+                    task = asyncio.create_task(self.refresh_remote_list(tab_id, path))
                 self._refresh_tasks[key] = task
                 task.add_done_callback(lambda done, k=key: self._refresh_tasks.pop(k, None))
             return cache.get(path, [])
@@ -84,14 +92,52 @@ class ConnectionManager(QObject):
         if sftp is None:
             return []
         cache = self._remote_cache.setdefault(tab_id, {})
-        try:
-            entries = await listdir(sftp, path, tab_id=tab_id)
-        except Exception as exc:
-            logger.warning(f'Remote list failed: tab_id={tab_id}, path={path}, error={exc}')
-            return cache.get(path, [])
-        cache[path] = entries
-        self.remote_list_updated.emit(tab_id, path)
-        return entries
+        key = (tab_id, path)
+        request = object()
+        self._remote_list_requests[key] = request
+        partial: list[dict] | None = None
+
+        def is_current() -> bool:
+            return self._sessions.get(tab_id) is ssh and self._remote_list_requests.get(key) is request
+
+        with remote_navigation_context(tab_id, path, 'refresh'):
+            with SftpTiming('refresh_remote_list', tab_id, path) as timing:
+                def publish(entries: list[dict]) -> None:
+                    nonlocal partial
+                    if not is_current():
+                        raise asyncio.CancelledError
+                    partial = list(entries)
+                    cache[path] = partial
+                    timing.metrics['entries'] = len(entries)
+                    with timing.measure('ui_progress'):
+                        self.remote_list_progress.emit(tab_id, path)
+
+                try:
+                    with timing.measure('sftp_list'):
+                        entries = await listdir(sftp, path, tab_id=tab_id, on_progress=publish)
+                    if not is_current():
+                        return entries
+                    cache[path] = entries
+                    timing.metrics['entries'] = len(entries)
+                    # 同一 Qt 线程内信号同步执行，包含列表填充、排序及选中恢复。
+                    with timing.measure('ui_update'):
+                        self.remote_list_updated.emit(tab_id, path)
+                    return entries
+                except asyncio.CancelledError:
+                    if is_current() and cache.get(path) is partial:
+                        cache.pop(path, None)
+                    raise
+                except Exception as exc:
+                    if is_current() and cache.get(path) is partial:
+                        # 保留空缓存再通知 UI，避免刷新回调自动重试失败请求。
+                        cache[path] = []
+                        self.remote_list_updated.emit(tab_id, path)
+                    timing.metrics['list_error'] = type(exc).__name__
+                    logger.warning(f'Remote list failed: tab_id={tab_id}, path={path}, error={exc}')
+                    return cache.get(path, [])
+                finally:
+                    if self._remote_list_requests.get(key) is request:
+                        self._remote_list_requests.pop(key, None)
 
     async def resolve_remote_path(self, tab_id: str, configured: str) -> str:
         ssh = self._sessions.get(tab_id)

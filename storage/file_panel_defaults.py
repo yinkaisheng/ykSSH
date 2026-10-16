@@ -37,6 +37,16 @@ DEFAULT_LOCAL_FAVORITES_DIALOG_WIDTH = 820
 DEFAULT_LOCAL_FAVORITES_DIALOG_HEIGHT = 420
 DEFAULT_REMOTE_FAVORITES_DIALOG_WIDTH = 560
 DEFAULT_REMOTE_FAVORITES_DIALOG_HEIGHT = 380
+DEFAULT_TRANSFER_DIALOG_WIDTH = 960
+DEFAULT_TRANSFER_DIALOG_HEIGHT = 360
+DEFAULT_TRANSFER_COLUMN_WIDTHS: dict[str, int] = {
+    'source': 240,
+    'destination': 180,
+    'status': 100,
+    'progress': 300,
+    'action': 90,
+}
+TRANSFER_TABLE_COLUMNS = tuple(DEFAULT_TRANSFER_COLUMN_WIDTHS)
 
 _FILE_PANEL_INT_BOUNDS: dict[str, tuple[int, int]] = {
     'file_table_header_height': (18, 48),
@@ -49,6 +59,8 @@ _FILE_PANEL_INT_BOUNDS: dict[str, tuple[int, int]] = {
     'local_favorites_dialog_height': (280, 3000),
     'remote_favorites_dialog_width': (360, 4000),
     'remote_favorites_dialog_height': (240, 3000),
+    'transfer_dialog_width': (640, 4000),
+    'transfer_dialog_height': (240, 3000),
 }
 
 _FILE_PANEL_INT_DEFAULTS: dict[str, int] = {
@@ -62,6 +74,8 @@ _FILE_PANEL_INT_DEFAULTS: dict[str, int] = {
     'local_favorites_dialog_height': DEFAULT_LOCAL_FAVORITES_DIALOG_HEIGHT,
     'remote_favorites_dialog_width': DEFAULT_REMOTE_FAVORITES_DIALOG_WIDTH,
     'remote_favorites_dialog_height': DEFAULT_REMOTE_FAVORITES_DIALOG_HEIGHT,
+    'transfer_dialog_width': DEFAULT_TRANSFER_DIALOG_WIDTH,
+    'transfer_dialog_height': DEFAULT_TRANSFER_DIALOG_HEIGHT,
 }
 
 _FILE_PANEL_BOOL_DEFAULTS: dict[str, bool] = {
@@ -114,6 +128,7 @@ def default_file_panel() -> dict[str, object]:
     return {
         'local_column_widths': dict(DEFAULT_LOCAL_COLUMN_WIDTHS),
         'remote_column_widths': dict(DEFAULT_REMOTE_COLUMN_WIDTHS),
+        'transfer_column_widths': dict(DEFAULT_TRANSFER_COLUMN_WIDTHS),
         **_FILE_PANEL_INT_DEFAULTS,
         **_FILE_PANEL_BOOL_DEFAULTS,
         'local_favorites': list(DEFAULT_LOCAL_FAVORITES),

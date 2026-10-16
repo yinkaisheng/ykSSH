@@ -15,6 +15,7 @@ from core.sftp_service import (
     _ensure_local_dir,
     _ensure_remote_dir,
     _sftp_log_context,
+    listdir,
     upload,
 )
 
@@ -63,6 +64,54 @@ class SftpMergeTests(unittest.IsolatedAsyncioTestCase):
         with patch('core.sftp_service._is_local_link', return_value=True):
             with self.assertRaises(LocalSymlinkUnsupported):
                 await upload(None, 'local-link', '/target', tab_id='test-tab')
+
+
+class SftpDirectoryListingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_listing_uses_batched_attributes_without_per_entry_lstat(self) -> None:
+        class Directory:
+            def __init__(self) -> None:
+                self.scandir_calls = 0
+                self.lstat_calls = 0
+                self.stat_paths: list[str] = []
+                self.attrs = {
+                    '.': asyncssh.SFTPAttrs(permissions=stat.S_IFDIR | 0o755),
+                    '..': asyncssh.SFTPAttrs(permissions=stat.S_IFDIR | 0o755),
+                    'z-file': asyncssh.SFTPAttrs(permissions=stat.S_IFREG | 0o644, size=123, mtime=42),
+                    'a-dir': asyncssh.SFTPAttrs(permissions=stat.S_IFDIR | 0o755),
+                    'b-link': asyncssh.SFTPAttrs(permissions=stat.S_IFLNK | 0o777),
+                    'c-broken': asyncssh.SFTPAttrs(permissions=stat.S_IFLNK | 0o777),
+                }
+
+            async def listdir(self, _path: str) -> list[str]:
+                return list(self.attrs)
+
+            async def scandir(self, _path: str):
+                self.scandir_calls += 1
+                for name, attrs in self.attrs.items():
+                    yield asyncssh.SFTPName(filename=name, attrs=attrs)
+
+            async def lstat(self, path: str) -> asyncssh.SFTPAttrs:
+                self.lstat_calls += 1
+                return self.attrs[path.rsplit('/', 1)[-1]]
+
+            async def stat(self, path: str) -> asyncssh.SFTPAttrs:
+                self.stat_paths.append(path)
+                if path.endswith('/c-broken'):
+                    raise asyncssh.SFTPNoSuchFile('broken link')
+                return asyncssh.SFTPAttrs(permissions=stat.S_IFDIR | 0o755)
+
+        sftp = Directory()
+        entries = await listdir(sftp, '/target/', tab_id='test-tab')
+
+        self.assertEqual(sftp.lstat_calls, 0, '目录读取已返回属性，不能再次逐项查询')
+        self.assertEqual(sftp.scandir_calls, 1)
+        self.assertEqual([entry['name'] for entry in entries], ['a-dir', 'b-link', 'c-broken', 'z-file'])
+        self.assertEqual([entry['is_dir'] for entry in entries], [True, True, False, False])
+        self.assertEqual(sftp.stat_paths, ['/target/b-link', '/target/c-broken'])
+        self.assertEqual(entries[-1], {
+            'name': 'z-file', 'is_dir': False, 'size': 123, 'mtime': 42.0,
+            'perm': '-rw-r--r--', 'mode': stat.S_IFREG | 0o644,
+        })
 
 
 if __name__ == '__main__':

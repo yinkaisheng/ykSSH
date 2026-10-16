@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 from core.connection_manager import ConnectionManager
 from core.path_resolver import resolve_local_path
 from ui.sftp_ui_handler import SftpUiHandler
-from core.ssh_session import HostKeyChangedError, HostKeyRejectedError
+from core.ssh_session import HostKeyChangedError, HostKeyRejectedError, SSHSession
 from core.ssh_config import SshConfigError
 from i18n import register_retranslator, set_language, tr
 from log_util import logger
@@ -61,7 +61,7 @@ from ui.theme import (
     normalize_terminal_font_size,
     normalize_theme_name,
 )
-from ui.dialog_i18n import ask_yes_no, ask_yes_no_async, message_warning
+from ui.dialog_i18n import ask_yes_no, ask_yes_no_async, message_warning, message_warning_async
 
 
 def splitter_ratio_to_sizes(total: int, ratio: float) -> list[int]:
@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         self._tab_sessions: dict[str, SessionItem] = {}
         self._tabs_ever_connected: set[str] = set()
         self._background_tasks: set[asyncio.Task] = set()
+        self._command_fill_tasks: dict[str, asyncio.Task] = {}
         self._session_save_timer = QTimer(self)
         self._session_save_timer.setSingleShot(True)
         self._session_save_timer.setInterval(500)
@@ -198,13 +199,16 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.side_panel.session_connect_requested.connect(self._connect_session)
         self.side_panel.command_send_requested.connect(self._send_command_to_active_terminal)
+        self.side_panel.command_replace_requested.connect(self._replace_command_in_active_terminal)
         self.side_panel.history_jump_requested.connect(self._jump_to_active_terminal_command)
         self.side_panel.sessions_changed.connect(self._schedule_session_save)
         self.terminal_tabs.tab_close_requested.connect(self._on_tab_close_requested)
         self.terminal_tabs.tab_closed.connect(self._on_tab_closed)
         self.terminal_tabs.terminal_added.connect(self._install_terminal_shortcut_filter)
         self.terminal_tabs.currentChanged.connect(self._on_current_tab_changed)
+        self.terminal_tabs.currentChanged.connect(lambda _index: self._terminal_resize_timer.start())
         self.connection_manager.remote_list_updated.connect(self._on_remote_list_updated)
+        self.connection_manager.remote_list_progress.connect(self._on_remote_list_progress)
         if self._main_splitter is not None:
             self._main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
         if self._vertical_splitter is not None:
@@ -216,6 +220,8 @@ class MainWindow(QMainWindow):
         terminal: TerminalVTWidget,
     ) -> None:
         terminal.installEventFilter(self)
+        # 分隔条和字体变化只会调整终端 Widget，不一定触发主窗口 resizeEvent。
+        terminal.size_changed.connect(self._terminal_resize_timer.start)
 
     def _schedule_session_save(self, *_args) -> None:
         self._session_save_timer.start()
@@ -539,6 +545,13 @@ class MainWindow(QMainWindow):
         if panel is not None and panel.remote_file_panel.current_path() == path:
             panel.remote_file_panel.refresh()
 
+    def _on_remote_list_progress(self, tab_id: str, path: str) -> None:
+        if self._active_tab_id != tab_id:
+            return
+        panel = self.file_panels.get_panel(tab_id)
+        if panel is not None and panel.remote_file_panel.current_path() == path:
+            panel.remote_file_panel.refresh(loading=True)
+
     def _on_local_path_changed_for_tab(self, tab_id: str, path: str) -> None:
         handler = self._sftp_handlers.get(tab_id)
         if handler is not None:
@@ -656,7 +669,12 @@ class MainWindow(QMainWindow):
         panel.remote_file_panel.set_sftp_handler(handler)
         callback = self.connection_manager.get_remote_list_callback(tab_id)
         if callback is not None:
-            panel.remote_file_panel.set_list_callback(callback)
+            panel.remote_file_panel.set_list_callback(
+                callback,
+                loading=self.connection_manager.is_remote_list_loading(
+                    tab_id, panel.remote_file_panel.current_path(),
+                ),
+            )
         else:
             panel.remote_file_panel.clear_remote()
 
@@ -671,6 +689,70 @@ class MainWindow(QMainWindow):
             return
         terminal.send_command_text(command, execute=execute)
         terminal.setFocus(Qt.OtherFocusReason)
+
+    def _cancel_command_fill(self, tab_id: str) -> None:
+        task = self._command_fill_tasks.pop(tab_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _replace_command_in_active_terminal(self, command: str) -> None:
+        tab_id = self._active_tab_id
+        terminal = self.terminal_tabs.get_current_terminal()
+        ssh = self.connection_manager.get_session(tab_id) if tab_id is not None else None
+        if (
+            not command.strip() or tab_id is None or ssh is None
+            or terminal is None or not self._terminal_is_alive(terminal)
+            or terminal.is_reconnect_enabled() or terminal._in_alt_screen
+        ):
+            return
+        self._cancel_command_fill(tab_id)
+        terminal.setFocus(Qt.OtherFocusReason)
+        task = asyncio.create_task(self._fill_command_async(tab_id, terminal, ssh, command))
+        self._command_fill_tasks[tab_id] = task
+        self._track_background_task(task, log_id=f'tab_id={tab_id}')
+
+    async def _fill_command_async(
+        self, tab_id: str, terminal: TerminalVTWidget, ssh: SSHSession, command: str,
+    ) -> None:
+        task = asyncio.current_task()
+
+        def cancel_on_input(_data: bytes) -> None:
+            # 等提示符期间用户继续输入时，放弃自动填入，保留用户的新输入。
+            if task is not None:
+                task.cancel()
+
+        try:
+            revision = terminal.output_revision
+            needs_output = terminal.prepare_command_replacement()
+            terminal.input_received.connect(cancel_on_input)
+            try:
+                ready = await ssh.wait_for_shell_ready(
+                    lambda: self._terminal_is_alive(terminal)
+                    and (not needs_output or terminal.output_revision > revision)
+                    and terminal.command_input_ready(),
+                    timeout_seconds=3.0,
+                )
+            finally:
+                try:
+                    terminal.input_received.disconnect(cancel_on_input)
+                except (RuntimeError, TypeError):
+                    pass
+            if (
+                self.connection_manager.get_session(tab_id) is not ssh
+                or self.terminal_tabs.get_terminal(tab_id) is not terminal
+                or not self._terminal_is_alive(terminal) or terminal.is_reconnect_enabled()
+            ):
+                return
+            if not ready:
+                logger.warning(f'Command replacement prompt timed out: tab_id={tab_id}')
+                await message_warning_async(
+                    self, tr('terminal.command_fill_title'), tr('terminal.command_fill_timeout'),
+                )
+                return
+            terminal.send_command_text(command, execute=False)
+        finally:
+            if self._command_fill_tasks.get(tab_id) is task:
+                self._command_fill_tasks.pop(tab_id, None)
 
     def _send_text_to_terminal_for_tab(self, tab_id: str, text: str) -> None:
         terminal = self.terminal_tabs.get_terminal(tab_id)
@@ -803,12 +885,15 @@ class MainWindow(QMainWindow):
             terminal.reset_session_input_modes()
             terminal.set_reconnect_enabled(False)
             terminal.write_text(tr('terminal.connected') + '\r\n')
+            if self._active_tab_id == tab_id:
+                self._terminal_resize_timer.start()
             self._track_background_task(
                 asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item)),
                 log_id=f'tab_id={tab_id}',
             )
 
         def _on_disconnected() -> None:
+            self._cancel_command_fill(tab_id)
             if not self._terminal_is_alive(terminal):
                 return
             handler = self._sftp_handlers.get(tab_id)
@@ -946,14 +1031,13 @@ class MainWindow(QMainWindow):
             return
         if handler.try_init_session_paths(local_path, remote_path, remote_home):
             panel.local_file_panel.set_path(local_path)
-            panel.remote_file_panel.set_path(remote_path)
-            await self.connection_manager.refresh_remote_list(tab_id, remote_path)
         else:
-            # Reconnect: clear_remote() emptied the path bar; restore last remote dir.
-            remote_dir = (handler.remote_dir or remote_path or '/').strip() or '/'
-            handler.set_remote_dir(remote_dir)
-            panel.remote_file_panel.set_path(remote_dir)
-            await self.connection_manager.refresh_remote_list(tab_id, remote_dir)
+            # 重连时恢复断线前浏览的目录和被 clear_remote 清空的路径栏。
+            remote_path = (handler.remote_dir or remote_path or '/').strip() or '/'
+            handler.set_remote_dir(remote_path)
+        # 目录已解析，只更新路径；避免导航重复读取并取消本初始化任务。
+        panel.remote_file_panel.set_directory(remote_path, refresh=False)
+        await self.connection_manager.refresh_remote_list(tab_id, remote_path)
         if (
             self._active_tab_id != tab_id
             or self.file_panels.get_panel(tab_id) is not panel
@@ -964,6 +1048,7 @@ class MainWindow(QMainWindow):
         panel.remote_file_panel.refresh()
 
     def _on_tab_closed(self, tab_id: str) -> None:
+        self._cancel_command_fill(tab_id)
         was_active = self._active_tab_id == tab_id
         self._tab_sessions.pop(tab_id, None)
         self._tabs_ever_connected.discard(tab_id)

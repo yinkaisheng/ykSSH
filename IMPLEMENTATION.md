@@ -260,7 +260,9 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 本地文件 table：**Delete** → 回收站（无确认）；**Shift+Delete** → 永久删除（无确认）。右键菜单默认「移到回收站」；按住 **Shift** 再右键则显示「永久删除」并弹确认（对齐资源管理器习惯）。远端 Delete 弹确认后删除，Shift+Delete 直接删除。
 - 本地/远端文件可通过右键菜单或文件表格获得焦点时按 **F2** 重命名，名称列显示行内 `QLineEdit`：文件按常见单/复合后缀智能选中名称部分（如 `abc.test.tar.gz` 选中 `abc.test`），未知后缀或目录选中全名；**Esc** 取消，**Enter** 或编辑框失焦提交。
 - 本地/远端右键「属性」可编辑权限：对话框显示选择项目数；存在直接选中的文件时额外显示文件数、文件总大小和精确字节数，只有文件夹时不显示大小（不递归统计文件夹内容）。Unix/远端显示 owner/group/others 的 rwx；Windows 本地因 `os.chmod` 只能可靠控制只读标志，按资源管理器习惯仅显示单一“只读”选项（取消即恢复可写）。多选时权限位以三态显示：半选表示各项目值不一致并保持原值，用户点击后只在勾选/取消间切换；选中目录时可递归应用。本地递归通过 `asyncio.to_thread` 后台执行；远端先通过 SFTP 枚举且不跟随 symlink，再以每批 16 项并发 `chmod(..., follow_symlinks=False)`。执行期间文件面板 statusbar 显示齿轮图标，tooltip 显示已处理/总数及失败数，完成后刷新列表。
-- **上传/下载仅通过右键菜单发起**（不支持文件面板拖拽互传）。默认上传到右侧远端面板当前路径、下载到左侧本地面板当前路径；远端右键菜单另提供“下载到其它位置...”用于选择一次性本地目标目录，不改变左侧面板当前路径。上传/下载开始前，statusbar 先显示正在计算对应批次总大小；本地上传统计通过 `asyncio.to_thread()` 执行，避免目录遍历阻塞界面。统计完成后，上传和下载统一显示速度、批次已传/总大小、截断到一位小数的批次总百分比、方向图标及底部约 4px 进度条，空闲时隐藏。上传与下载独立统计，可双向同时显示，传输文本不显示 tooltip。
+- **上传/下载仅通过右键菜单发起**（不支持文件面板拖拽互传）。默认上传到提交时右侧远端面板的路径、下载到提交时左侧本地面板的路径；远端右键菜单另提供“下载到其它位置...”用于选择一次性本地目标目录，不改变左侧面板当前路径。上传/下载开始前，statusbar 显示正在计算当前任务总大小，并用动态进度条表示扫描中，此时不显示百分比；本地上传统计通过 `asyncio.to_thread()` 执行，避免目录遍历阻塞界面。统计完成后，上传和下载统一显示当前任务的速度、已传/总大小、截断到一位小数的百分比及底部约 4px 进度条，空闲时隐藏。状态栏通过 `transfer_jobs_changed` 直接读取当前 running/cancelling 任务快照，与队列窗口共用状态；重新绑定面板会恢复现有进度，排队任务的新增/删除只改变计数，不会替换活动任务的进度，也不会重置扫描动画。动态条在面板隐藏时停止计时，重新显示时恢复。中间进度按约 200ms 限流，但累计字节达到任务总大小时立即发出完成进度，避免快速传输的小文件/目录停留在旧进度。上传与下载独立统计，可双向同时显示，传输文本不显示 tooltip。
+- **传输任务队列**：每个 Tab 的上传与下载分别按 FIFO 串行执行，双向仍可同时传输，不同 Tab 的队列互不影响。一次菜单操作提交的一组文件/目录为一项任务，文件列表与目标目录在入队时固定，等待期间切换目录不会改变目标。`core/transfer_queue.py` 保存不可变任务快照与稳定 ID；任务开始前即关联 asyncio Task，取消等待项时同步移除，若该 ID 已转为运行则取消对应 Task。下一项必须等前一项的 finally 和完成回调结束后才能启动，重复取消或过期 ID 不影响后续任务。关闭 Tab/退出/断连时先清空等待项，再取消并等待活动任务结束，防止意外启动下一项。
+- 底部上传/下载入口为有边框、悬停/按下/键盘焦点反馈和手型光标的按钮，仅显示方向图标与任务总数，方向通过 tooltip 和无障碍名称说明，tooltip 同时显示排队数量；`ui/file_panel/transfer_icon.py` 用矢量路径绘制托盘箭头与列表图标，适配主题与高 DPI。按钮点击后按 Tab、方向打开唯一的 `TransferDialog` 非模态窗口；列表显示源文件、目标目录、排队/计算大小/传输/取消中状态及实时进度。所有列宽固定、不随速度等文本或窗口大小自动变化，允许手动拖动表头调整；过长的进度文本可悬停查看完整内容。窗口尺寸与列宽共用 `file_panel.transfer_dialog_width/height`、`transfer_column_widths`，调整后延迟 500ms 保存到本地配置，关闭窗口（含 Esc）或销毁父 Tab 时立即保存待写快照，下次打开恢复。未调整布局的窗口不会覆盖其它窗口刚保存的布局。排队项可删除，活动项可取消；完成或取消清理结束后自动移出列表，不保存历史。关闭列表窗口不影响任务执行；取消保留已经写入的文件内容，可在后续冲突处理中选择续传。
 - SFTP 上传/下载由 `core/sftp_service.py` 递归直接写入目标路径，不使用完成后搬移的临时文件。冲突对话框经非阻塞 `ask_transfer_conflict_async` 弹出（不卡住 qasync）；传输/远端操作失败 warning 同样为非阻塞 async dialog，关闭/取消任务时会自动收起。选项：覆盖、续传、全部覆盖、全部续传、取消；续传按目标已有大小继续写，目标大于源文件时自动从头覆盖。同名但类型不同（文件 ↔ 文件夹）时，覆盖会先删除目标再写入源对象，续传不会做类型转换并会中止当前冲突项。每个文件/文件夹完成后同步目标 mtime。冲突取消中止剩余项目，不回滚已写入内容。远端列表与下载会 follow 指向目录的 symlink，使其可进入/递归下载；目录下载与下载前体积统计使用 `realpath` 记录已访问目录，遇到环路会跳过递归分支；远端删除对 symlink 使用 `lstat`，只删链接本身不跟随目标。关闭 Tab 或退出程序时若仍有传输/远端改名/删除/新建等后台任务，会提示是否中断；确认后 cancel 并 **await 任务结束** 再 disconnect，保留已写入内容。
 
 **收藏（★）：**
@@ -277,6 +279,7 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 远端管理对话框：仅 Session 列表；路径仅粘贴或手动输入（无浏览）。
 - 管理对话框支持添加、删除、上移、下移收藏；浏览选择本地路径添加后保持普通选中状态，不自动进入单元格编辑。
 - 点击收藏路径时若路径指向文件，会进入该文件所在目录并选中文件；远端路径通过 SFTP `lstat/stat` 判断文件/目录，类型变化会更新 `is_file`；路径不存在时逐级尝试父目录，直到可进入的父目录或 `/`。
+- 远端收藏/路径经过上述解析后，使用 `RemoteFileTable.set_directory()` 直接进入已知目录并保留待选文件，避免 `set_path()` 再为类型判断加载整个父目录。
 - 关闭管理对话框时写入窗口尺寸（`file_panel.local/remote_favorites_dialog_width/height`），下次打开恢复。
 - Session / 快捷命令 **编辑** 对话框关闭时写入 `side_panel.session_edit_dialog_*` / `side_panel.command_edit_dialog_*`，再次编辑时恢复。
 - 不自动去重；收藏内容经 `save_file_panel_local_favorites` / `SidePanel.persist_sessions()` 保存。
@@ -297,7 +300,19 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 2. 回调先读 `_remote_cache`；未命中则 `asyncio.create_task(refresh_remote_list)` 并返回空列表
 3. 异步完成后 emit `remote_list_updated(tab_id, path)` → 仅当活动 Tab 的远端面板仍显示该路径时刷新 `RemoteFileTable`
 
-**SFTP 操作桥接：** `SftpUiHandler` 接收 Table 的 signal（upload/download/delete/rename/mkdir），内部 `asyncio.create_task` 调用 `sftp_service`，完成后 `on_refresh_ui` 刷新文件列表。
+首次连接与重连初始化时，远端目录已经解析，使用 `RemoteFilePanel.set_directory(path, refresh=False)` 同步恢复 Table 路径与路径栏，再由初始化流程统一等待一次 `refresh_remote_list`，完成后绑定列表回调并显示面板。重连使用 handler 保存的上次浏览目录。此处不能再通过异步 `set_path()` 导航触发第二次读取，否则同一路径的新请求会使初始化读取抛出 `CancelledError`，跳过后续面板恢复，表现为 SFTP 已读取成功但面板仍显示未连接。普通目录导航默认继续发出刷新请求。
+
+绑定远端列表回调与发起远端刷新分开处理：`set_list_callback()` 只展示缓存，缓存缺失时由同步回调按需启动首次读取。Tab 切换不清空缓存、不重新请求目录；加载中的 Tab 切回后恢复当前部分缓存与 Loading 表头，原读取任务继续执行；后台完成的 Tab 切回后展示完整缓存并清除 Loading。加载状态由 `ConnectionManager.is_remote_list_loading(tab_id, path)` 提供。切回时若目录与缓存快照均未变，保留原有表格行、选中项和滚动位置；后台发布过新快照时才重新填充。工具栏/右键/快捷键手动刷新、目录导航和远端文件变更后的刷新仍会请求远端最新数据；断连/关闭 Tab 清理缓存。
+
+远端列表通过 `scandir()` 流式读取批量属性：请求开始先显示空列表，并在名称列表头显示 `Name(Loading...)` / `名称（加载中…）`；路径栏前的 Remote 文本保持固定，加载状态不改变路径输入框位置或列宽，完成或断连后恢复普通表头，加载期间切换语言也保留状态。首个有效条目立即显示，随后在累计 128、256、512… 条时发布部分缓存并 emit `remote_list_progress(tab_id, path)`，完成后再发布完整缓存与 `remote_list_updated`。倍增更新限制大目录重绘总量；UI 仅更新活动 Tab 当前路径。待选文件和普通刷新前的选择在加载过程中保留，等待后续批次或最终列表再判断目标是否存在。目录读取取消时关闭迭代器并丢弃部分缓存；同一路径多个请求只有最新请求能发布，防止旧响应覆盖新列表。
+
+**远端目录耗时诊断：** `core/sftp_diagnostics.py` 使用单调时钟，目录请求或单个阶段操作超过 500ms 时，以 WARNING 级别写入 `logs/ykssh.log`，标记为 `[SFTP-SLOW]`。收藏/路径提交和普通目录刷新通过 ContextVar 向后续异步任务传递 `request_id`、`source`、`requested_path` 与请求起始时间，使用 `path` 区分实际加载目录。
+
+- `status=waiting` 在超过阈值后记录当前 `phase`、`phase_path` 与阶段等待时间；嵌套子阶段结束后恢复仍在执行的外层阶段，避免将 `sftp_list` 的网络等待误标为已结束的 `ui_progress`。Qt 定时器提前唤醒时以单调时钟复核阈值。未完成时每 5 秒再记录一次，结束/取消时停止定时器。
+- `status=done/failed/cancelled` 输出操作耗时 `elapsed_ms`、从请求提交至当前的累计耗时 `request_elapsed_ms`；`first_entry_ms` 表示首个有效条目返回时间，`read_next_ms/max_ms/count` 表示迭代器读取累计等待、最长等待和推进次数（包含 EOF，非协议请求数）；`entries` 在等待日志中持续增加。另记录路径探测 `lstat`、符号链接目标 `stat`、收藏保存、部分列表填充 `ui_progress` 和最终填充 `ui_update` 的计时。阶段计时允许重叠，不应将不同操作的耗时相加。
+- 路径解析记录父目录回退次数、失败路径和异常类型；目录加载记录返回名称数和有效条目数，`lstat_count=0` 表示直接使用批量属性。日志包含 `tab_id`，不记录密码、密钥内容或文件内容；快速请求不输出诊断日志。
+
+**SFTP 操作桥接：** `SftpUiHandler` 接收 Table 的 signal（upload/download/delete/rename/mkdir），上传/下载经 `TransferQueue` 按方向调度，其它操作通过 `asyncio.create_task` 调用 `sftp_service`，完成后 `on_refresh_ui` 刷新文件列表。
 
 本地或远端文件 Table 获得焦点时，`Ctrl+N` 复用各自右键菜单的「新建文件夹」操作，`Ctrl+R` 触发刷新。点击文件面板右上角导航工具栏中的任意按钮后，焦点自动回到对应文件 Table。
 
@@ -306,6 +321,8 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 同一路径执行工具栏或右键「刷新」时，刷新前的单选/多选项目按名称恢复；部分项目仍存在时只恢复存在项，全部消失时选择当前视野第一条可见行。路径变化与重命名的待选目标优先于刷新选择恢复。
 
 **列表数据：** `sftp_service.listdir` 与本地 `listdir` 均跳过 `.` / `..`，由 Table 在非根目录时自行插入一行 `..`（`is_parent=True`），避免与服务器返回的条目重复。
+
+远端列表使用 `SFTPClient.scandir()` 返回的 `SFTPName.attrs` 获取权限、大小、修改时间和条目类型，不再对普通条目逐个执行 `lstat`。AsyncSSH 内部通过多批 SFTP READDIR 获取目录内容，因此批量属性读取仍受网络往返与服务器目录读取速度影响，并非一次网络请求。只有符号链接需要额外 `stat` 判断目标是否为目录；断链保留为非目录条目。按上述机制逐步更新缓存和 UI；此机制缩短首次显示等待，不保证缩短完整枚举时间。
 
 ### 6.4 终端 I/O 数据流
 
@@ -317,9 +334,9 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 ```
 
 - 连接时创建 `xterm-256color` PTY，尺寸经 `TerminalPort.terminal_size()` 获取
-- 窗口 resize 时对当前 Tab 调用 `ConnectionManager.resize_terminal()`
+- 终端网格尺寸改变时，`TerminalVTWidget.size_changed` 通知 `MainWindow`，防抖后对当前 Tab 调用 `ConnectionManager.resize_terminal()`，将实际行列数同步给远端 PTY；覆盖主窗口、上下/左右分隔条和字体变化。连接成功以及 Tab 激活时也重新同步，避免隐藏 Tab 或建连期间发生布局变化后远端仍使用旧尺寸。不能只监听主窗口 `resizeEvent`：分隔条调整不会触发它，会使本地和远端网格尺寸不一致，影响远端按行列数重绘；独立的远端 Readline 超屏粘贴限制见 §13。回归覆盖见 `tests/test_terminal_resize_sync.py`。
 - Tab 关闭：`ConnectionManager.close_tab()` cancel 该 Tab 读任务并关闭其 Shell/SFTP channel；同 Session 的最后一个 Tab 关闭时才关闭底层 SSH connection
-- 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_path`）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。断线、再次 `open_tab` 以及重连成功时都会调用 `TerminalVTWidget.reset_session_input_modes()`，清掉上一份 PTY 协商出的鼠标上报（1000/1002/1003/1006）、备用屏幕、应用光标键和 bracketed paste；否则新 shell 已是默认模式，本地仍会把点击/滚轮发成 SGR 序列（shell 回显成 `64;20;37M` 这类文本）。
+- 远程会话曾成功连接后异常断开时，终端显示 `Disconnected` 与「按 Enter 重新连接」提示，并进入可重连模式：`Enter`/`Return` 触发 `TerminalVTWidget.reconnect_requested`，由 `MainWindow` 复用同一 `tab_id`/终端/文件面板再次 `open_tab`；首次连接失败不启用该模式。重连失败时先输出错误行，再输出重连提示。重连成功后恢复远端路径栏并刷新文件列表（`clear_remote` 会清空路径栏，需按 handler 上次目录 `set_directory(path, refresh=False)`，仅由初始化统一读取一次列表）。`MainWindow` 用 `_tab_sessions` 在断线后仍保留 Session 配置，用 `_tabs_ever_connected` 区分「曾连上」与「从未连上」。断线、再次 `open_tab` 以及重连成功时都会调用 `TerminalVTWidget.reset_session_input_modes()`，清掉上一份 PTY 协商出的鼠标上报（1000/1002/1003/1006）、备用屏幕、应用光标键和 bracketed paste；否则新 shell 已是默认模式，本地仍会把点击/滚轮发成 SGR 序列（shell 回显成 `64;20;37M` 这类文本）。
 - 终端复制/粘贴快捷键：`Ctrl+Shift+C/V` 与 `Shift+Delete` / `Shift+Insert`；`Alt+Backspace` 发送标准 `ESC DEL` 向前按词删除，`Alt+Delete` 发送 `ESC d` 向后按词删除，`Alt+Left/Right` 发送 `ESC b/f` 按词移动；`Ctrl+A/E` 原样发送给远端 shell/readline/zsh/fish，用于移动到当前输入行首/行尾。焦点不在终端时，`Ctrl+L` 将焦点切回当前终端；焦点已在终端时不拦截，仍向远端发送标准 `Ctrl+L` 清屏。终端获得焦点时会优先接受 `ShortcutOverride`，因此未由 `MainWindow.eventFilter` 显式处理的应用级 QAction 快捷键（包括退出快捷键）不会触发，而会交给终端处理。终端内的文件面板焦点快捷键由 `MainWindow.eventFilter` 本地拦截且不发送给远端 shell：`Ctrl+Alt+B` 优先切到当前 Tab 的远端文件 Table，断连等远端 Table 隐藏或禁用时回退到本地文件 Table；`Ctrl+;` 固定切到本地文件 Table；`Ctrl+'` 固定切到可用的远端文件 Table。主屏幕的 `Ctrl+Shift+Home/End` 跳到本地 scrollback 最前/最新位置，备用屏幕不拦截以避免破坏 TUI；在历史位置按 Enter 会先恢复到最新输出再发送回车。右键菜单显示 `C/V/A/X/F` 快捷键，分别触发复制、粘贴、全选、清屏、跟随输出。
 - 终端滚轮默认按现有行数滚动；按住 **Ctrl** 滚轮时每个滚轮刻度快速滚动“可见一屏减 1 行”，使相邻两屏保留一行重叠内容。主屏幕直接滚动本地 scrollback；备用屏幕（如 vim）发送一次 PageUp/PageDown，并优先于远端鼠标上报。
 
@@ -347,10 +364,10 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 终端获得焦点时绘制 1px 高亮边框，颜色由当前主题 `themes.<name>.terminal_focus_border` 配置（solarized `#cb4b16` / light `#e67e22` / dark `#f0a030`）。
 - 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。已提交历史命令的起始行会在 gutter 绘制一行高的 `terminal.terminal_gutter_command_background_color` 背景标志；多行输入只标记第一行，未提交输入与 alt-screen 不标记，wheel 滚动时按命令绝对行和当前 viewport 重新换算位置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
-- 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、复制可见内容、gutter 命令块选择等输出侧逻辑，再把绝对行换算回当前可见屏幕行。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
+- 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、gutter 命令块选择等需要屏幕位置的逻辑，再把绝对行换算回当前可见屏幕行；复制选区按绝对行读取完整缓冲区。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
 - 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，并检查该行光标前缀是否像 shell prompt（`user@host:path$` / `#`，与 `shell_prompt_ready()` 同一规则）。登录后常见末两行是 `Last login: …` 加 `ubuntu@xjp:~$`，此时前缀可识别。按 Enter 提交时，只有前缀匹配、或以 `\` 续行（续行沿用第一行的 prompt 判断）的输入才写入 History / gutter 标记；Python `>>>`、无 `user@host` 的残缺 prompt 等无法判断的环境不记录。普通键盘输入仍须在终端上回显，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令右键「发送并执行」由客户端主动执行，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
-- 左侧 History 抽屉按 `tab_id` 记住各自列表 scrollbar 位置，切换 Tab 时会恢复当前 Tab 历史列表上次滚动位置。历史项保存对应终端命令块的 `command_start_row` 绝对行号；单击某条历史时，会在当前活动终端中直接按该绝对行号滚动到对应命令块；如果对应命令已被 `clear` 清掉或已经不在 scrollback 中，则忽略跳转。快捷命令或历史命令双击只把命令填入当前活动终端（不发送 CR），终端获得焦点，需用户按 Enter 才执行。命令树与历史列表右键提供「发送」（填入不执行）和「发送并执行」；调用后终端获得焦点。命令树叶子与历史项另有「复制命令」，History 项还提供「复制命令和发送时间」，按 `time\ncommand` 写入剪贴板。
-- 终端右键菜单「全部复制」会按 `history.top → 当前 buffer → history.bottom` 拼接全部可用 scrollback 和屏幕内容，因此复制结果不受当前 wheel 滚动位置影响；alt-screen 中只复制当前屏幕内容。
+- 左侧 History 抽屉按 `tab_id` 记住各自列表 scrollbar 位置，切换 Tab 时会恢复当前 Tab 历史列表上次滚动位置。历史项保存对应终端命令块的 `command_start_row` 绝对行号；单击某条历史时，会在当前活动终端中直接按该绝对行号滚动到对应命令块；如果对应命令已被 `clear` 清掉或已经不在 scrollback 中，则忽略跳转。快捷命令或历史命令双击通过 `command_replace_requested` 替换当前活动终端的未执行输入，终端获得焦点，需用户按 Enter 才执行。未执行输入包含实际内容，或仍处于多行/续行状态时，先发送 `Ctrl+C` 取消当前输入，保留终端上的原输入和 shell 的取消回显，便于回看或复制。主提示符后的输入若只有空白字符（空格、Tab、全角空格等），则先发送 readline `Ctrl+A`、`Ctrl+K` 删除整段空白，再等空提示符回显后填入；判断以终端实际回显为准，覆盖光标前后及其后的折行，不依赖可能在光标编辑/Delete 后失真的本地键入记录；手动 `Ctrl+C` 同时重置输入起点，避免下一条输入沿用旧命令的位置。不能把带实际内容的输入或空白续行误判成纯空白输入。空主提示符下直接填入，不额外发送中断。`MainWindow` 在 qasync 中等待新输出及空主提示符后再填入，不把新命令与中断字符一起发送；空提示符可以直接填入。提示符识别支持现有 `user@host:path$` / `#` 规则及裸 `$` / `#` / `%` / `❯`；3 秒内未返回可识别的主提示符时提示重试，不发送新命令。替换同时重置未提交命令的 History/gutter 起点，防止旧内容混入新历史。等待期间用户继续输入会取消自动填入，连续双击只保留最后一次选择；目标固定为点击时的 Tab，关闭 Tab、断线或退出会取消等待，备用屏和未连接终端不接收替换。命令树与历史列表右键提供「发送」（填入不执行）和「发送并执行」；调用后终端获得焦点。命令树叶子与历史项另有「复制命令」，History 项还提供「复制命令和发送时间」，按 `time\ncommand` 写入剪贴板。
+- 终端快捷键和右键菜单「复制」按选区绝对行号读取 `history.top → 当前 buffer → history.bottom`，保留首尾列边界并完整复制跨屏或滚动后部分/全部离开视图的选区；中文宽字符端点也从对应历史行读取，避免截断半个字符。读取历史行时顺序遍历队列，避免长选区逐行随机索引的开销。右键菜单「全部复制」按相同顺序拼接全部可用 scrollback 和屏幕内容，因此复制结果不受当前 wheel 滚动位置影响；alt-screen 中只复制当前屏幕内容。
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
 - `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `logs/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - `terminal.terminal_debug_history_jump` 打开时，历史命令单击定位会把请求参数、命令标记、时间/命令校验结果、跳转前后 viewport/scrollback 状态写入 `logs/terminal_history_jump.log`，用于排查 History 定位异常。
@@ -379,7 +396,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 Tab 切换
   → _save_active_tab_paths（handler 记录路径）
   → file_panels.show_panel(new_tab_id)
-  → _attach_file_panel（重新绑定 handler / callback）
+  → _attach_file_panel（绑定 handler / callback，恢复缓存列表与当前加载状态，不触发远端刷新）
 
 Tab 关闭（双击 Tab 栏；无关闭按钮）
   → 若有后台 SFTP 任务：确认 → cancel → await wait_transfers_closed
@@ -540,7 +557,9 @@ Session 配置远端默认路径时，连接后的交互 shell 会优先等待�
 
 | `file_panel` 字段 | 说明 |
 |-------------------|------|
-| `*_column_widths` | 本地/远端列宽 dict（键为列名如 `Name`/`Size`/`Modified`/`Permissions`；表头右键「保存列宽」写入） |
+| `local_column_widths` / `remote_column_widths` | 本地/远端列宽 dict（键为列名如 `Name`/`Size`/`Modified`/`Permissions`；表头右键「保存列宽」写入） |
+| `transfer_dialog_width` / `transfer_dialog_height` | 上传/下载任务窗口共用尺寸，自动保存并恢复 |
+| `transfer_column_widths` | 上传/下载任务列表共用列宽 dict（`source` / `destination` / `status` / `progress` / `action`），手动调整后自动保存 |
 | `file_table_header_height` / `file_table_row_height` | 表头 / 行高 |
 | `file_panel_toolbar_height` / `file_panel_toolbar_font_size` | 路径栏高度、标签、路径输入框与导航按钮字号 |
 | `file_panel_statusbar_font_size` | 文件面板底部 statusbar 字号 |
@@ -751,10 +770,11 @@ sequenceDiagram
 | 远程目录首次加载 | 可能需二次刷新（async 缓存时序） |
 | terminal_vt_widget.py | 从 nebula-shell 移植，可能有 PyQt5 兼容边角 |
 | 无换行输出后的输入行重绘 | 复现示例：远端执行 `echo -n "helloworld"`，Shell 提示符会紧接在 `helloworld` 后；随后粘贴 `Content-Type: application/json`，再按任意方向键，readline 可能按“提示符位于第 0 列”重绘并覆盖该行旧输出。WindTerm、MobaXterm 同样可复现，属于远端 readline 的通用行为，暂不在客户端做非标准修正；建议让命令输出以换行结束（如 `curl -w '\n'`） |
+| 远端 Readline 的超屏多行粘贴回显 | 诊断证据与处理方式见[问题记录](docs/issues/2026-10-15-readline-multiline-paste.md)。 |
 | 凭据与密钥同目录 | 能读 `config/` 即等价可读全部 Session 密码 |
 | secret.key / credentials.json 权限 | 目前仅文档警告，尚未做跨平台 ACL / chmod 硬化 |
 | 收藏按钮图标 | 当前使用 Unicode 星标，后续可改为 QStyle/icon font 以提升跨平台一致性 |
-| 远端列表性能 | 大目录仍是 `listdir` + 逐项 `lstat`，待改为 attrs readdir 或有界并发 |
+| 远端列表性能 | 已使用 `scandir` 批量属性并逐步显示，普通条目不再逐项 `lstat`；完整枚举大目录仍需多批网络往返，符号链接目标仍依次 `stat` |
 | 下载前体积扫描 | 下载目录前会递归统计大小，大目录开始前可能等待较久 |
 | 本地文件 IO | 上传读文件、本地删除/重命名/新建目录仍有同步 IO；上传前的本地大小统计已通过 `asyncio.to_thread` 执行，其余待后续迁移或分片让出事件循环 |
 | 本地链接上传 | 为避免递归环和越出用户选择目录，符号链接与 Windows 目录联接默认跳过；直接选择链接上传会提示不支持 |

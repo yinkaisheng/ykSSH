@@ -55,6 +55,9 @@ class FilePanelConfig:
     local_favorites_dialog_height: int
     remote_favorites_dialog_width: int
     remote_favorites_dialog_height: int
+    transfer_dialog_width: int
+    transfer_dialog_height: int
+    transfer_column_widths: dict[str, int]
 
 
 @dataclass(frozen=True)

@@ -26,6 +26,7 @@ class CommandHistoryPanel(QListWidget):
     """Own history storage, tab isolation, filtering, and dispatch actions."""
 
     command_send_requested = pyqtSignal(str, bool)
+    command_replace_requested = pyqtSignal(str)
     history_jump_requested = pyqtSignal(str, str, int)
 
     def __init__(self, store: CommandHistoryStore, parent=None) -> None:
@@ -117,7 +118,7 @@ class CommandHistoryPanel(QListWidget):
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
         history = self._find_by_id(item.data(ROLE_ITEM_ID))
         if history is not None:
-            self.command_send_requested.emit(history.command, False)
+            self.command_replace_requested.emit(history.command)
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         history = self._find_by_id(item.data(ROLE_ITEM_ID))

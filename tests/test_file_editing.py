@@ -536,6 +536,26 @@ class FileTableEditShortcutTests(unittest.TestCase):
 
         self.assertEqual(statusbar._speed_label.text(), 'Calculating total download size...')
 
+    def test_calculating_progress_animates_only_while_visible(self) -> None:
+        table = RemoteFileTable()
+        statusbar = _FilePanelStatusBar(table, transfer_kind='download')
+        try:
+            statusbar.set_transfer_status('download', '', True, 0.0, 0, 0, True)
+            statusbar.show()
+            self.app.processEvents()
+            self.assertTrue(statusbar._progress_bar._busy_timer.isActive())
+            statusbar.hide()
+            self.assertFalse(statusbar._progress_bar._busy_timer.isActive())
+            statusbar.show()
+            self.assertTrue(statusbar._progress_bar._busy_timer.isActive())
+            statusbar.set_transfer_status('download', '', True, 0.25, 25, 100, False)
+            self.assertFalse(statusbar._progress_bar._busy_timer.isActive())
+            self.assertFalse(statusbar._progress_bar._indeterminate)
+        finally:
+            statusbar.hide()
+            statusbar.deleteLater()
+            table.deleteLater()
+
     def test_filter_edit_escape_keeps_single_selection_visible(self) -> None:
         table = RemoteFileTable()
         table.set_list_callback(lambda _path: [
@@ -818,7 +838,7 @@ class SftpUiHandlerTests(unittest.IsolatedAsyncioTestCase):
             ) as to_thread,
             patch('ui.sftp_ui_handler.upload', new=AsyncMock()),
         ):
-            await handler._upload_async(['/local/folder'])
+            await handler._upload_async(['/local/folder'], handler.remote_dir)
 
         to_thread.assert_awaited_once()
         self.assertEqual(emitted[0][0:7], ('upload', '', True, 0.0, 0, 0, True))
@@ -868,6 +888,21 @@ class SftpUiHandlerTests(unittest.IsolatedAsyncioTestCase):
         progress('/remote/b.bin', '/local/b.bin', 10, 200)
 
         self.assertEqual(emitted[-1][4:7], (60, 300, False))
+
+    async def test_fast_transfer_completion_reaches_total_despite_throttling(self) -> None:
+        handler = SftpUiHandler('tab-a', object(), lambda: None)
+        emitted = []
+        handler.transfer_status_changed.connect(lambda *args: emitted.append(args))
+        for kind in ('upload', 'download'):
+            with self.subTest(kind=kind), patch('ui.sftp_ui_handler.time.monotonic', return_value=10.0):
+                handler._begin_transfer_status(kind, 100)
+                progress = handler._make_progress_handler(kind)
+                progress('a', 'target/a', 0, 40)
+                progress('a', 'target/a', 40, 40)
+                self.assertEqual(emitted[-1][4], 0)
+                progress('b', 'target/b', 0, 60)
+                progress('b', 'target/b', 60, 60)
+                self.assertEqual(emitted[-1][3:7], (1.0, 100, 100, False))
 
     async def test_remote_rename_failure_emits_pending_target_name(self) -> None:
         handler = SftpUiHandler(
