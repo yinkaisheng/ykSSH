@@ -14,6 +14,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtGui import QKeyEvent
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QSpinBox, QWidget
 
 from ui.file_edit_manager import FileEditManager, _RemoteEditSession
@@ -432,6 +433,52 @@ class FileTableEditShortcutTests(unittest.TestCase):
 
         self.assertEqual(captured[Qt.Key_A].text().split('\t')[0], 'Copy Path')
         self.assertEqual(captured[Qt.Key_P].text().split('\t')[0], 'Copy Parent Path')
+
+    def test_filter_edit_typing_in_middle_preserves_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for table in (LocalFileTable(initial_path=directory), RemoteFileTable()):
+                with self.subTest(table=type(table).__name__):
+                    statusbar = _FilePanelStatusBar(table, transfer_kind='download')
+                    try:
+                        statusbar.show()
+                        statusbar.activateWindow()
+                        self.app.processEvents()
+                        edit = statusbar.file_filter_edit
+                        self.assertTrue(edit.isHidden())
+
+                        QTest.keyClicks(table, 'a')
+                        self.app.processEvents()
+                        self.assertFalse(edit.isHidden())
+                        self.assertTrue(edit.hasFocus())
+                        QTest.keyClicks(edit, 'bc')
+                        QTest.keyClick(edit, Qt.Key_Left)
+                        QTest.keyClick(edit, Qt.Key_Left)
+                        self.assertEqual(edit.cursorPosition(), 1)
+
+                        QTest.keyClicks(edit, 'x')
+                        self.assertEqual(edit.text(), 'axbc')
+                        self.assertEqual(table.filter_text(), 'axbc')
+                        self.assertEqual(edit.cursorPosition(), 2)
+                        QTest.keyClicks(edit, 'z')
+                        self.assertEqual(edit.text(), 'axzbc')
+                        self.assertEqual(edit.cursorPosition(), 3)
+
+                        QTest.keyClick(edit, Qt.Key_Backspace)
+                        self.assertEqual(edit.text(), 'axbc')
+                        self.assertEqual(edit.cursorPosition(), 2)
+                        QTest.keyClick(edit, Qt.Key_Delete)
+                        self.assertEqual(edit.text(), 'axc')
+                        self.assertEqual(edit.cursorPosition(), 2)
+                        edit.setSelection(1, 1)
+                        QTest.keyClicks(edit, 'yz')
+                        self.assertEqual(edit.text(), 'ayzc')
+                        self.assertEqual(table.filter_text(), 'ayzc')
+                        self.assertEqual(edit.cursorPosition(), 3)
+                    finally:
+                        statusbar.close()
+                        statusbar.deleteLater()
+                        table.deleteLater()
+                        self.app.processEvents()
 
     def test_filter_edit_arrows_navigate_only_visible_rows(self) -> None:
         table = RemoteFileTable()

@@ -421,7 +421,8 @@ class _FilePanelStatusBar(QWidget):
             self.file_filter_edit.blockSignals(True)
             self.file_filter_edit.setText(text)
             self.file_filter_edit.blockSignals(False)
-        if text:
+        # 编辑框自身触发的文本同步不应重置光标或选区。
+        if text and not self.file_filter_edit.hasFocus():
             self.focus_filter()
 
     def focus_filter(self) -> None:
