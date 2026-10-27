@@ -176,7 +176,9 @@ class ConnectionManager(QObject):
         ):
             return
         # write() no-ops when the shell process is already gone
-        ssh.write(f'cd {shlex.quote(path)}\r'.encode('utf-8'))
+        # 登录脚本可能已进入目标目录；由新 Shell 判断实际 PWD，避免重复 cd。
+        quoted_path = shlex.quote(path)
+        ssh.write(f'test "$PWD" = {quoted_path} || cd {quoted_path}\r'.encode('utf-8'))
 
     async def open_tab(
         self,

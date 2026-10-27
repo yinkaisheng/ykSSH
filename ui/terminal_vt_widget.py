@@ -62,6 +62,20 @@ _SHELL_PROMPT_READY_RE = re.compile(
 )
 
 
+class _HistoryScreen(pyte.HistoryScreen):
+    """记录输出滚屏淘汰的历史行，供绝对坐标计算使用。"""
+
+    def __init__(self, columns: int, lines: int, history: int) -> None:
+        self.dropped_history_rows = 0
+        super().__init__(columns, lines, history=history)
+
+    def index(self) -> None:
+        bottom = self.margins.bottom if self.margins else self.lines - 1
+        if self.cursor.y == bottom and len(self.history.top) == self.history.top.maxlen:
+            self.dropped_history_rows += 1
+        super().index()
+
+
 @dataclass(frozen=True)
 class _Cell:
     ch: str
@@ -142,7 +156,7 @@ class TerminalVTWidget(QWidget):
         # We manage alternate screen explicitly for reliable vim behavior:
         # - Main screen: HistoryScreen (scrollback)
         # - Alt screen: Screen (no scrollback)
-        self._main_screen = pyte.HistoryScreen(cols, rows, history=history)  # type: ignore[attr-defined]
+        self._main_screen = _HistoryScreen(cols, rows, history=history)
         self._main_stream = pyte.Stream(self._main_screen)  # type: ignore[attr-defined]
         self._alt_screen = None
         self._alt_stream = None
@@ -989,6 +1003,8 @@ class TerminalVTWidget(QWidget):
             return
         t0 = time.perf_counter()
         history_top_before = self._history_top_len()
+        main_buffer_start = self._viewport_top_row - len(self._main_screen.history.top)
+        dropped_before = getattr(self._main_screen, 'dropped_history_rows', 0)
         was_scrolled_up = bool(self._scroll_lines > 0 and not self._in_alt_screen)
         desired_viewport_top = self._viewport_top_row
         self._debug_input_count += 1
@@ -1113,17 +1129,23 @@ class TerminalVTWidget(QWidget):
             self._reset_coordinate_state_after_remote_clear(clear_scrollback=remote_scrollback_clear)
 
         history_top_after = self._history_top_len()
-        if was_scrolled_up:
-            self._restore_viewport_top_after_output(desired_viewport_top)
-        elif history_top_after > history_top_before and self._scroll_lines == 0:
+        dropped_rows = getattr(self._main_screen, 'dropped_history_rows', 0) - dropped_before
+        buffer_start = main_buffer_start + dropped_rows
+        bottom_top = buffer_start + history_top_after
+        # 清屏已重置坐标；正常输出则将淘汰行数计入缓冲区绝对基准。
+        if not remote_full_clear and was_scrolled_up and not self._in_alt_screen:
+            self._restore_viewport_top_after_output(desired_viewport_top, buffer_start)
+        elif (
+            not remote_full_clear and not self._in_alt_screen
+            and self._scroll_lines == 0 and bottom_top != self._viewport_top_row
+        ):
             rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
             old_viewport_top = self._viewport_top_row
-            self._viewport_top_row += history_top_after - history_top_before
-            self._shift_selection_rows(-(history_top_after - history_top_before), rows)
+            self._viewport_top_row = bottom_top
             self._debug_gutter_log(
                 "output-scroll "
                 f"history_top_before={history_top_before}, history_top_after={history_top_after}, "
-                f"delta={history_top_after - history_top_before}, "
+                f"dropped_rows={dropped_rows}, delta={bottom_top - old_viewport_top}, "
                 f"viewport_top={old_viewport_top}->{self._viewport_top_row}, rows={rows}, "
                 f"{self._debug_selection_state()}"
             )
@@ -1408,7 +1430,7 @@ class TerminalVTWidget(QWidget):
     def _reset_emulator_state(self, cols: int, rows: int) -> None:
         """Reset emulator to a clean main-screen state with given geometry."""
         history = self._history_lines
-        self._main_screen = pyte.HistoryScreen(cols, rows, history=history)  # type: ignore[attr-defined]
+        self._main_screen = _HistoryScreen(cols, rows, history=history)
         self._main_stream = pyte.Stream(self._main_screen)  # type: ignore[attr-defined]
         self._alt_screen = None
         self._alt_stream = None
@@ -1456,7 +1478,7 @@ class TerminalVTWidget(QWidget):
         try:
             cols = getattr(self.screen, "columns", None) or self._calc_cols_rows()[0]
             rows = getattr(self.screen, "lines", None) or self._calc_cols_rows()[1]
-            self._main_screen = pyte.HistoryScreen(cols, rows, history=lines)  # type: ignore[attr-defined]
+            self._main_screen = _HistoryScreen(cols, rows, history=lines)
             self._main_stream = pyte.Stream(self._main_screen)  # type: ignore[attr-defined]
             if not self._in_alt_screen:
                 self.screen = self._main_screen
@@ -1603,7 +1625,7 @@ class TerminalVTWidget(QWidget):
         except Exception:
             return False
 
-    def _restore_viewport_top_after_output(self, desired_top: int) -> None:
+    def _restore_viewport_top_after_output(self, desired_top: int, buffer_start: int) -> None:
         """
         Keep the user's scrolled-back viewport stable after new output arrives.
 
@@ -1614,8 +1636,8 @@ class TerminalVTWidget(QWidget):
         looking at before the output arrived.
         """
         rows = int(getattr(self.screen, "lines", self._calc_cols_rows()[1]) or 0)
-        bottom_top = max(0, self._history_top_len())
-        target_top = max(0, min(int(desired_top), bottom_top))
+        bottom_top = buffer_start + self._history_top_len()
+        target_top = max(buffer_start, min(int(desired_top), bottom_top))
 
         old_viewport_top = self._viewport_top_row
         old_scroll_lines = self._scroll_lines

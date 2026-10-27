@@ -1012,17 +1012,22 @@ class MainWindow(QMainWindow):
             return
         handler = self._ensure_sftp_handler(tab_id)
         local_path = resolve_local_path(session_item.local_path)
+        restore_paths = handler.paths_initialized
         remote_home = await self.connection_manager.resolve_remote_path(tab_id, '')
-        remote_path = await self.connection_manager.resolve_remote_path(
-            tab_id,
-            session_item.remote_path,
-        )
+        if restore_paths:
+            # 重连沿用该 Tab 断线前的目录，Session 配置只用于首次初始化。
+            remote_path = handler.remote_dir
+        else:
+            remote_path = await self.connection_manager.resolve_remote_path(
+                tab_id,
+                session_item.remote_path,
+            )
         if (
             self.file_panels.get_panel(tab_id) is not panel
             or self.connection_manager.get_session(tab_id) is None
         ):
             return
-        if (session_item.remote_path or '').strip():
+        if restore_paths or (session_item.remote_path or '').strip():
             await self.connection_manager.cd_shell(tab_id, remote_path)
         if (
             self.file_panels.get_panel(tab_id) is not panel

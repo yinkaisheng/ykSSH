@@ -366,6 +366,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 终端正文背景由 `terminal.terminal_background_color` 配置，拖选背景由 `terminal.terminal_selection_background_color` 配置；左侧有 `terminal.terminal_left_gutter_width_px` 控制的整行选择空白区（默认 16px，0 表示关闭），背景由 `terminal.terminal_gutter_background_color` 配置。已提交历史命令的起始行会在 gutter 绘制一行高的 `terminal.terminal_gutter_command_background_color` 背景标志；多行输入只标记第一行，未提交输入与 alt-screen 不标记，wheel 滚动时按命令绝对行和当前 viewport 重新换算位置。左键点击将选择起点映射到该行第 0 列、终点映射到行尾；拖动时若鼠标仍在空白区则终点按方向映射到所在行行首/行尾，沿用终端原有拖选流程，坐标按下述终端坐标规则转换。终端正文连续三次左键点击选择整行；点击/拖选高亮在当前输入行按最后一个可见字符裁剪，不延伸到输入行尾空白区。
 - 终端右侧 scrollbar 由 `terminal.terminal_scrollbar_width_px` 控制（默认 10px，0 表示关闭），轨道和滑块颜色分别由 `terminal.terminal_scrollbar_background_color` / `terminal.terminal_scrollbar_thumb_color` 配置。scrollbar 为自绘轨道 + 矩形滑块，无两端单行点击按钮；点击轨道跳转到对应 scrollback 位置，拖动滑块滚动。
 - 终端坐标规则：内部状态应优先保存为 scrollback 缓冲区中的绝对行号，屏幕行只作为当前 viewport 的临时表现。鼠标点击、双击、拖选、命令起点记录等事件入口，应先把可见屏幕行换算为缓冲区绝对行再保存；手动 scrollback 滚动或实时输出触发滚屏时，只更新 viewport 起点，不直接平移已保存的绝对行号；绘制选区、gutter 命令块选择等需要屏幕位置的逻辑，再把绝对行换算回当前可见屏幕行；复制选区按绝对行读取完整缓冲区。这个规则可避免长输出（如 `ping`）把命令起始行或选区锚点推入历史区后出现漂移。
+- 历史队列达到容量上限后，`_HistoryScreen` 继续累计输出滚屏淘汰的历史行数，`TerminalVTWidget` 将其计入缓冲区绝对基准，不能仅凭队列长度增量判断滚动。长行自动换行、单批多行输出均沿用该规则；查看历史时尽量保持原视图，原内容已被淘汰则夹到最早可用行。选区内容仍保留时继续随原文本移动，全部淘汰后不再高亮或复制其他行。回归覆盖见 `tests/test_terminal_selection_copy.py`。
 - 终端会按本地输入记录命令起始行：首次输入普通命令内容时记录当前光标所在的缓冲区绝对行，并检查该行光标前缀是否像 shell prompt（`user@host:path$` / `#`，与 `shell_prompt_ready()` 同一规则）。登录后常见末两行是 `Last login: …` 加 `ubuntu@xjp:~$`，此时前缀可识别。按 Enter 提交时，只有前缀匹配、或以 `\` 续行（续行沿用第一行的 prompt 判断）的输入才写入 History / gutter 标记；Python `>>>`、无 `user@host` 的残缺 prompt 等无法判断的环境不记录。普通键盘输入仍须在终端上回显，才通过 `TerminalVTWidget.command_submitted(command, sent_at)` 通知左侧历史命令面板，避免记录密码提示等未回显输入；快捷命令右键「发送并执行」由客户端主动执行，可直接写入历史。历史命令仅在内存中按运行时 `tab_id` 分开保存和显示，切换 Tab 时左侧 History 抽屉只显示当前 Tab 的历史，关闭 Tab 时删除该 Tab 的历史桶。以 `\` 结尾的输入行视为多行命令，暂不提交新的命令标记。鼠标移动到左侧 gutter 的命令块区域时，tooltip 显示该命令的发送时间；gutter 双击选择命令块：从该命令起始行到下一个命令起始行前一行；最后一个命令选到当前输入行前一行（实时输出中的最后一行可能仍在变化，可接受）。alt-screen 中 gutter 双击退回单行选择。
 - 左侧 History 抽屉按 `tab_id` 记住各自列表 scrollbar 位置，切换 Tab 时会恢复当前 Tab 历史列表上次滚动位置。历史项保存对应终端命令块的 `command_start_row` 绝对行号；单击某条历史时，会在当前活动终端中直接按该绝对行号滚动到对应命令块；如果对应命令已被 `clear` 清掉或已经不在 scrollback 中，则忽略跳转。快捷命令或历史命令双击通过 `command_replace_requested` 替换当前活动终端的未执行输入，终端获得焦点，需用户按 Enter 才执行。未执行输入包含实际内容，或仍处于多行/续行状态时，先发送 `Ctrl+C` 取消当前输入，保留终端上的原输入和 shell 的取消回显，便于回看或复制。主提示符后的输入若只有空白字符（空格、Tab、全角空格等），则先发送 readline `Ctrl+A`、`Ctrl+K` 删除整段空白，再等空提示符回显后填入；判断以终端实际回显为准，覆盖光标前后及其后的折行，不依赖可能在光标编辑/Delete 后失真的本地键入记录；手动 `Ctrl+C` 同时重置输入起点，避免下一条输入沿用旧命令的位置。不能把带实际内容的输入或空白续行误判成纯空白输入。空主提示符下直接填入，不额外发送中断。`MainWindow` 在 qasync 中等待新输出及空主提示符后再填入，不把新命令与中断字符一起发送；空提示符可以直接填入。提示符识别支持现有 `user@host:path$` / `#` 规则及裸 `$` / `#` / `%` / `❯`；3 秒内未返回可识别的主提示符时提示重试，不发送新命令。替换同时重置未提交命令的 History/gutter 起点，防止旧内容混入新历史。等待期间用户继续输入会取消自动填入，连续双击只保留最后一次选择；目标固定为点击时的 Tab，关闭 Tab、断线或退出会取消等待，备用屏和未连接终端不接收替换。命令树与历史列表右键提供「发送」（填入不执行）和「发送并执行」；调用后终端获得焦点。命令树叶子与历史项另有「复制命令」，History 项还提供「复制命令和发送时间」，按 `time\ncommand` 写入剪贴板。
 - 终端快捷键和右键菜单「复制」按选区绝对行号读取 `history.top → 当前 buffer → history.bottom`，保留首尾列边界并完整复制跨屏或滚动后部分/全部离开视图的选区；中文宽字符端点也从对应历史行读取，避免截断半个字符。读取历史行时顺序遍历队列，避免长选区逐行随机索引的开销。右键菜单「全部复制」按相同顺序拼接全部可用 scrollback 和屏幕内容，因此复制结果不受当前 wheel 滚动位置影响；alt-screen 中只复制当前屏幕内容。
@@ -390,7 +391,8 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
            → SSHSession.connect（每 Tab 独立 Shell + SFTP channel）
            → on_connected → _init_file_panel_for_session
                 → resolve 本地/远程路径
-                → 若配置了 remote_path：cd_shell 发送 cd 到 Shell
+                → 新 Tab 若配置了 remote_path：cd_shell 同步 Shell 目录
+                → 重连：cd_shell 恢复 handler 记录的远端文件面板当前目录，不再使用 Session 的 remote_path
                 → refresh_remote_list
                 → _attach_file_panel（绑定 SftpUiHandler + list callback）
 
@@ -442,7 +444,7 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - Signal：`connected` / `disconnected` / `data_received` / `error`
 - 单个 Shell 结束时只清理对应 Tab；底层 connection 断开时清理所有关联 Tab。MainWindow 会分别取消 SFTP 任务并清空远端文件面板；曾成功连接的终端仍可按 Enter 重连，首个重连 Tab 建立新共享 connection，之后的 Tab 加入该 connection。
 
-`ConnectionManager.cd_shell()`：优先等待终端画面出现常见 `user@host:path$`/`#` Prompt（最多 5 秒），再向交互式 Shell 写入一次 `cd <path>\r`，使终端工作目录与文件面板远端路径一致。Prompt 无法识别或启动脚本异常时，额外等待最多 1 秒，并在输出连续静默 0.5 秒后兜底发送。等待结束后重新核对原 Tab 的 SSH Session、Terminal 和文件面板仍然有效，关闭期间的过期初始化不再更新 UI。
+`ConnectionManager.cd_shell()`：优先等待终端画面出现常见 `user@host:path$`/`#` Prompt（最多 5 秒），再向交互式 Shell 写入一次 `test "$PWD" = <path> || cd <path>\r`（路径经 shell 转义），仅当实际工作目录与目标路径不同时执行 `cd`，使终端与文件面板远端路径一致。Session 的 `remote_path` 只用于新 Tab 首次初始化；重连使用 `SftpUiHandler.remote_dir` 保存的断线前文件面板当前路径，即使 Session 未配置远端路径也恢复。Prompt 无法识别或启动脚本异常时，额外等待最多 1 秒，并在输出连续静默 0.5 秒后兜底发送。等待结束后重新核对原 Tab 的 SSH Session、Terminal 和文件面板仍然有效，关闭期间的过期初始化不再更新 UI。
 
 ---
 

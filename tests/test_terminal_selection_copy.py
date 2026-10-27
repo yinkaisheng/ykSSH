@@ -108,6 +108,89 @@ class TerminalSelectionCopyTests(unittest.TestCase):
 
         self.assertEqual(QGuiApplication.clipboard().text(), 'four\nfive\nsix')
 
+    def test_continuous_output_keeps_selected_counter_after_history_fills(self) -> None:
+        def output(index: int) -> str:
+            return (
+                'index=34,asset_id=3ab11f1aa0811470c4bc69a295975080,'
+                f'block_count={index}/280,local stat=missing; E2 HEAD=missing; '
+                'cache_origin=unknown\r\n'
+            )
+
+        with patch.object(self.widget, '_calc_cols_rows', return_value=(80, 6)):
+            self.widget._history_lines = 200
+            self.widget._reset_emulator_state(80, 6)
+            self.widget.write_text(''.join(output(index) for index in range(166)))
+            lines = self.widget._safe_display_lines()
+            row = next(y for y, line in enumerate(lines) if '165/280' in line)
+            col = lines[row].index('165/280')
+            abs_row = self.widget._visible_y_to_abs_y(row)
+            self.widget._sel_anchor = (col, abs_row)
+            self.widget._sel_head = (col + 2, abs_row)
+            self.assertEqual(self.widget._selected_text(), '165')
+
+            self.widget.write_text(output(166))
+
+            self.assertEqual(self.widget._selected_text(), '165')
+            self.assertEqual(self.widget._selection_lines(), {row - 2})
+
+    def test_short_lines_keep_selection_when_history_first_overflows(self) -> None:
+        self.widget._history_lines = 2
+        self.widget._reset_emulator_state(20, 3)
+        self.widget.write_text('0\r\n1\r\n2\r\n3\r\n4')
+        self.widget._sel_anchor = (0, 4)
+        self.widget._sel_head = (0, 4)
+
+        for output, expected_rows in (('\r\n5', {1}), ('\r\n6\r\n7', set())):
+            self.widget.write_text(output)
+            self.assertEqual(self.widget._selected_text(), '4')
+            self.assertEqual(self.widget._selection_lines(), expected_rows)
+
+    def test_output_after_history_fills_preserves_scrolled_view_and_selection(self) -> None:
+        self.widget._history_lines = 6
+        self.widget._reset_emulator_state(20, 3)
+        self.widget.write_text('\r\n'.join(str(index) for index in range(12)))
+        self.widget._scroll_view(3)
+        self.widget._select_all_visible()
+        selected = self.widget._selected_text()
+        visible = self.widget._safe_display_lines()
+        viewport_top = self.widget._viewport_top_row
+
+        self.widget.write_text('\r\n12\r\n13')
+
+        self.assertEqual(self.widget._viewport_top_row, viewport_top)
+        self.assertEqual(self.widget._safe_display_lines(), visible)
+        self.assertEqual(self.widget._selected_text(), selected)
+        self.widget._set_scrollbar_target(0)
+        self.assertEqual(self.widget._selected_text(), selected)
+
+    def test_evicted_selection_does_not_jump_to_new_output(self) -> None:
+        self.widget._history_lines = 2
+        self.widget._reset_emulator_state(20, 3)
+        self.widget.write_text('0\r\n1\r\n2\r\n3\r\n4')
+        self.widget._scroll_view(2)
+        self.widget._sel_anchor = (0, 0)
+        self.widget._sel_head = (0, 0)
+        self.assertEqual(self.widget._selected_text(), '0')
+
+        self.widget.write_text('\r\n5\r\n6\r\n7')
+
+        self.assertEqual(self.widget._selected_text(), '')
+        self.assertEqual(self.widget._selection_lines(), set())
+        self.assertEqual([line.rstrip() for line in self.widget._safe_display_lines()], ['3', '4', '5'])
+
+    def test_remote_clear_resets_coordinates_after_history_overflow(self) -> None:
+        self.widget._history_lines = 2
+        self.widget._reset_emulator_state(20, 3)
+        self.widget.write_text('0\r\n1\r\n2\r\n3\r\n4\r\n5')
+        self.widget._select_all_visible()
+
+        self.widget.write_text('\x1b[H\x1b[2Jnew\r\noutput')
+
+        self.assertEqual(self.widget._viewport_top_row, 0)
+        self.assertEqual(self.widget._selected_text(), '')
+        self.widget.write_text('\r\n2\r\n3\r\n4')
+        self.assertEqual(self.widget._viewport_top_row, 2)
+
     def test_multiscreen_copy_respects_endpoint_columns(self) -> None:
         self.widget._sel_anchor = (1, 1)
         self.widget._sel_head = (2, 4)

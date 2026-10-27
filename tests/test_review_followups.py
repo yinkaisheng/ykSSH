@@ -89,7 +89,7 @@ class ReviewFollowupAsyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_file_panel_init_stops_when_tab_closes_during_shell_wait(self) -> None:
         panel = object()
         panels = SimpleNamespace(get_panel=Mock(return_value=panel))
-        handler = Mock()
+        handler = Mock(paths_initialized=False)
         connection_manager = SimpleNamespace(
             get_session=Mock(return_value=object()),
             resolve_remote_path=AsyncMock(side_effect=['/home/user', '/srv/project']),

@@ -147,17 +147,39 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_output_idle_restarts_after_output_activity(self) -> None:
         session = SSHSession('tab-a')
         loop = asyncio.get_running_loop()
-        started_at = loop.time()
-        wait_task = asyncio.create_task(session.wait_for_output_idle(
-            idle_seconds=0.03,
-            timeout_seconds=0.2,
-        ))
+        clock = loop.time()
 
-        await asyncio.sleep(0.015)
-        session._output_activity.set()
-        await wait_task
+        async def settle() -> None:
+            # 只推进任务和超时回调，不依赖平台时钟精度或真实 sleep 时长。
+            for _ in range(10):
+                await asyncio.sleep(0)
 
-        self.assertGreaterEqual(loop.time() - started_at, 0.04)
+        with (
+            patch.object(loop, 'time', side_effect=lambda: clock),
+            patch.object(loop, 'slow_callback_duration', float('inf')),
+        ):
+            wait_task = asyncio.create_task(session.wait_for_output_idle(
+                idle_seconds=30.0,
+                timeout_seconds=200.0,
+            ))
+            try:
+                await settle()
+                clock += 15.0
+                session._output_activity.set()
+                await settle()
+
+                # 已越过最初的空闲截止时间，仍须等待最后一次输出后的完整空闲期。
+                clock += 25.0
+                await settle()
+                self.assertFalse(wait_task.done())
+
+                clock += 5.0
+                await settle()
+                self.assertTrue(wait_task.done())
+                await wait_task
+            finally:
+                wait_task.cancel()
+                await asyncio.gather(wait_task, return_exceptions=True)
 
     async def test_wait_for_shell_ready_rechecks_after_output_activity(self) -> None:
         session = SSHSession('tab-a')
@@ -190,7 +212,7 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
             timeout_seconds=5.0,
         )
         ssh.wait_for_output_idle.assert_not_awaited()
-        ssh.write.assert_called_once_with(b'cd /mnt/sdb/yks\r')
+        ssh.write.assert_called_once_with(b'test "$PWD" = /mnt/sdb/yks || cd /mnt/sdb/yks\r')
 
     async def test_cd_shell_uses_idle_fallback_after_prompt_timeout(self) -> None:
         manager = ConnectionManager(credential_store=Mock())
@@ -207,7 +229,7 @@ class SSHSessionTests(unittest.IsolatedAsyncioTestCase):
             idle_seconds=0.5,
             timeout_seconds=1.0,
         )
-        ssh.write.assert_called_once_with(b'cd /srv/project\r')
+        ssh.write.assert_called_once_with(b'test "$PWD" = /srv/project || cd /srv/project\r')
 
     async def test_trusted_key_is_passed_directly_to_real_connection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

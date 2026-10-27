@@ -10,7 +10,8 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QColor, QKeyEvent, QPalette
-from PyQt5.QtWidgets import QApplication, QLineEdit
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication, QLineEdit, QWidget
 
 from ui.main_window import MainWindow
 from ui.theme import get_theme_palette
@@ -20,6 +21,14 @@ class MainWindowShortcutTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self) -> None:
+        # 无界面插件会缓存最后一次按下时的修饰键，用空按键恢复测试间的状态。
+        receiver = QWidget()
+        self.app.sendEvent(receiver, QKeyEvent(QEvent.KeyPress, Qt.Key_unknown, Qt.NoModifier))
+        receiver.deleteLater()
+        # processEvents() 不会完成延迟删除，避免旧窗口的定时器泄漏到后续测试。
+        self.app.sendPostedEvents(None, QEvent.DeferredDelete)
 
     def test_settings_action_has_no_keyboard_shortcut(self) -> None:
         with patch.object(MainWindow, '_restore_session'):
@@ -212,15 +221,8 @@ class MainWindowShortcutTests(unittest.TestCase):
         terminal.setFocus(Qt.OtherFocusReason)
         self.app.processEvents()
 
-        shortcut = QKeyEvent(
-            QEvent.KeyPress,
-            Qt.Key_Apostrophe,
-            Qt.ControlModifier,
-            "'",
-        )
-        QApplication.sendEvent(terminal, shortcut)
-
-        self.assertTrue(shortcut.isAccepted())
+        # 完整发送按下和释放，避免 Ctrl 状态残留并影响后续文件选择。
+        QTest.keyClick(terminal, Qt.Key_Apostrophe, Qt.ControlModifier)
         self.assertTrue(panel.remote_file_panel.table.hasFocus())
 
         window.hide()

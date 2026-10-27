@@ -53,9 +53,12 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    async def _check_panel_initialization(self, *, reconnect: bool, enter: bool = False) -> None:
+    async def _check_panel_initialization(
+        self, *, reconnect: bool, enter: bool = False,
+        configured_path: str = '/configured', saved_path: str = '/last-directory',
+    ) -> None:
         tab_id = 'reconnect-tab'
-        session = SessionItem(name='reconnect', host='test', remote_path='/configured')
+        session = SessionItem(name='reconnect', host='test', remote_path=configured_path)
         sftp = _RemoteDirectory()
         manager = ConnectionManager(credential_store=Mock())
         ssh = SimpleNamespace(
@@ -64,7 +67,7 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
         manager._sessions[tab_id] = ssh
         manager.cd_shell = AsyncMock()
         handler = SftpUiHandler(tab_id, manager, lambda: None)
-        expected_path = '/last-directory' if reconnect else '/configured'
+        expected_path = saved_path if reconnect else (configured_path or '/home/test')
         if reconnect:
             handler.try_init_session_paths(os.path.expanduser('~'), expected_path, '/home/test')
         remote = RemoteFilePanel()
@@ -133,6 +136,10 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(remote.table.rowCount(), 2)
             self.assertFalse(remote._loading)
             self.assertEqual(sftp.scans, [expected_path], '初始化只能读取一次目标目录')
+            if reconnect or configured_path:
+                manager.cd_shell.assert_awaited_once_with(tab_id, expected_path)
+            else:
+                manager.cd_shell.assert_not_awaited()
             for task in tasks:
                 self.assertFalse(task.cancelled(), '列表读取不能取消后续面板恢复')
                 self.assertIsNone(task.exception())
@@ -159,3 +166,12 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_initial_connection_loads_configured_directory_once(self) -> None:
         await self._check_panel_initialization(reconnect=False)
+
+    async def test_reconnect_without_configured_directory_restores_saved_path(self) -> None:
+        await self._check_panel_initialization(reconnect=True, enter=True, configured_path='')
+
+    async def test_reconnect_at_configured_directory_synchronizes_shell_once(self) -> None:
+        await self._check_panel_initialization(reconnect=True, saved_path='/configured')
+
+    async def test_initial_connection_without_configured_directory_keeps_shell_default(self) -> None:
+        await self._check_panel_initialization(reconnect=False, configured_path='')

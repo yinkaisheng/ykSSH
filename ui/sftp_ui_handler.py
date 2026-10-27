@@ -89,6 +89,11 @@ class SftpUiHandler(QObject):
     def remote_home(self) -> str:
         return self._remote_home
 
+    @property
+    def paths_initialized(self) -> bool:
+        """返回当前 Tab 是否已记录文件面板路径。"""
+        return self._paths_initialized
+
     async def resolve_remote_navigation_target(self, path: str) -> tuple[str, str, bool | None]:
         """Return (directory, filename_to_select, is_file) for a remote favorite/path."""
         text = (path or '').strip() or '/'
