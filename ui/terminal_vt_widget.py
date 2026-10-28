@@ -55,7 +55,7 @@ _WORKING_DIRECTORY_OSC_PREFIXES = (
     _STANDARD_WORKING_DIRECTORY_OSC_PREFIX,
 )
 _SHELL_PROMPT_CWD_RE = re.compile(
-    r"(?:^|\s)[^\s@]+@[^\s:]+:(?P<path>/[^\r\n]*?)\s*[#$]\s*$"
+    r"(?:^|\s)[^\s@]+@[^\s:]+:(?P<path>[/~][^\r\n]*?)\s*[#$]\s*$"
 )
 _SHELL_PROMPT_READY_RE = re.compile(
     r"(?:^|\s)[^\s@]+@[^\s:]+:[^\r\n]*[#$]\s*$"
@@ -169,6 +169,8 @@ class TerminalVTWidget(QWidget):
         self._esc_pending = ""
         self._working_directory_osc_pending = ""
         self._working_directory_path: str | None = None
+        self._working_directory_revision = 0
+        self._reconnect_working_directory_path: str | None = None
         self._working_directory_request_pending = False
         self._restore_input_after_working_directory_report = False
         self._decset_re = re.compile(r"\x1b\[\?([0-9;]*)([hl])")
@@ -892,6 +894,11 @@ class TerminalVTWidget(QWidget):
         """When enabled, Enter requests reconnect instead of sending CR to SSH."""
         enabled = bool(enabled)
         if enabled:
+            if self._working_directory_path is None and self._reconnect_working_directory_path is None:
+                self._working_directory_path = self._working_directory_from_history()
+            # 独立保留重连目录；失败重试没有新目录时沿用上次快照。
+            if self._working_directory_path is not None:
+                self._reconnect_working_directory_path = self._working_directory_path
             self._working_directory_osc_pending = ''
             self._working_directory_path = None
             self._working_directory_request_pending = False
@@ -901,6 +908,11 @@ class TerminalVTWidget(QWidget):
 
     def is_reconnect_enabled(self) -> bool:
         return self._reconnect_enabled
+
+    @property
+    def reconnect_working_directory(self) -> str | None:
+        """返回断线前最后识别的 Shell 目录，不发送查询或改变文件面板。"""
+        return self._reconnect_working_directory_path
 
     def shell_prompt_ready(self) -> bool:
         """Return whether the cursor is currently positioned after a shell prompt."""
@@ -921,7 +933,16 @@ class TerminalVTWidget(QWidget):
     def write_text(self, text: str) -> None:
         if not self._is_alive():
             return
+        cwd_revision = self._working_directory_revision
         self._process_input(text, record=True)
+        if (
+            not self._reconnect_enabled
+            and not self._working_directory_request_pending
+            and cwd_revision == self._working_directory_revision
+        ):
+            # 输出提示符时即记录目录，避免命令运行或断线提示覆盖最后一行。
+            # 本次输出已有 OSC 回报时以回报为准，不用旧提示符覆盖它。
+            self._capture_working_directory_from_current_prompt()
         self._output_revision += 1
 
     @property
@@ -1199,6 +1220,7 @@ class TerminalVTWidget(QWidget):
         if not self._valid_working_directory(path):
             return
         self._working_directory_path = path
+        self._working_directory_revision += 1
         if self._working_directory_request_pending:
             self._working_directory_request_pending = False
             self.working_directory_reported.emit(path)
@@ -1209,12 +1231,44 @@ class TerminalVTWidget(QWidget):
         if match is None:
             return None
         path = match.group('path').rstrip()
+        if path == '~' or path.startswith('~/'):
+            return path if TerminalVTWidget._valid_working_directory('/' + path[2:]) else None
         return path if TerminalVTWidget._valid_working_directory(path) else None
+
+    def _working_directory_from_history(self) -> str | None:
+        """从主屏及滚动历史倒序查找最近的完整目录提示符。"""
+        screen = self._main_screen
+        history = getattr(screen, 'history', None)
+        rows = int(screen.lines)
+        cols = int(screen.columns)
+        # bottom 在当前视图之后；先检查它，才能独立于当前滚动位置。
+        lines = chain(
+            reversed(getattr(history, 'bottom', ())),
+            (self._line_from_screen_buffer(screen, y) for y in range(rows - 1, -1, -1)),
+            reversed(getattr(history, 'top', ())),
+        )
+        continuation = ''
+        for line in lines:
+            text = self._safe_display_line_from_cells(line, cols).rstrip()
+            # 长主机名/目录可能自动折行，向前合并占满终端宽度的前一行。
+            full_width = sum(self._display_width(char) for char in text) >= cols
+            candidate = text + continuation if full_width else text
+            path = self._working_directory_from_prompt(candidate)
+            if path is not None:
+                return path
+            continuation = (
+                candidate if candidate.endswith(('#', '$')) and len(candidate) <= 4096 else ''
+            )
+        return None
 
     def _capture_working_directory_from_prompt(self, prompt: str) -> None:
         path = self._working_directory_from_prompt(prompt)
         if path is not None:
-            self._remember_working_directory(path)
+            if path.startswith('~'):
+                # 重连初始化时用远端 home 展开；导航查询仍要求绝对路径。
+                self._working_directory_path = path
+            else:
+                self._remember_working_directory(path)
 
     def _capture_working_directory_from_current_prompt(self) -> None:
         if self._in_alt_screen or self._scroll_lines != 0:
@@ -1440,7 +1494,7 @@ class TerminalVTWidget(QWidget):
 
         self._esc_pending = ""
         self._working_directory_osc_pending = ""
-        self._working_directory_path = None
+        # 本地清屏/重排不改变远端 Shell 的工作目录，保留已知路径。
         self._working_directory_request_pending = False
         self._restore_input_after_working_directory_report = False
         self.reset_session_input_modes()
@@ -2872,7 +2926,7 @@ class TerminalVTWidget(QWidget):
     def request_working_directory(self) -> None:
         """Report a passively learned cwd, falling back to an interactive query."""
         self._capture_working_directory_from_current_prompt()
-        if self._working_directory_path is not None:
+        if self._working_directory_path is not None and self._valid_working_directory(self._working_directory_path):
             self.working_directory_reported.emit(self._working_directory_path)
             return
         if self._in_alt_screen or self._reconnect_enabled:

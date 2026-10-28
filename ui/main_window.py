@@ -868,6 +868,8 @@ class MainWindow(QMainWindow):
         session_item: SessionItem,
         terminal: TerminalVTWidget,
     ) -> None:
+        reconnecting = tab_id in self._tabs_ever_connected
+        reconnect_path = terminal.reconnect_working_directory if reconnecting else None
         terminal.reset_session_input_modes()
         terminal.set_reconnect_enabled(False)
         terminal.write_text(tr('terminal.connecting') + '\r\n')
@@ -888,7 +890,9 @@ class MainWindow(QMainWindow):
             if self._active_tab_id == tab_id:
                 self._terminal_resize_timer.start()
             self._track_background_task(
-                asyncio.create_task(self._init_file_panel_for_session(tab_id, session_item)),
+                asyncio.create_task(self._init_file_panel_for_session(
+                    tab_id, session_item, reconnecting=reconnecting, shell_path=reconnect_path,
+                )),
                 log_id=f'tab_id={tab_id}',
             )
 
@@ -1004,7 +1008,10 @@ class MainWindow(QMainWindow):
         except Exception:
             return True
 
-    async def _init_file_panel_for_session(self, tab_id: str, session_item: SessionItem) -> None:
+    async def _init_file_panel_for_session(
+        self, tab_id: str, session_item: SessionItem, *,
+        reconnecting: bool = False, shell_path: str | None = None,
+    ) -> None:
         panel = self.file_panels.get_panel(tab_id)
         if panel is None:
             return
@@ -1015,7 +1022,7 @@ class MainWindow(QMainWindow):
         restore_paths = handler.paths_initialized
         remote_home = await self.connection_manager.resolve_remote_path(tab_id, '')
         if restore_paths:
-            # 重连沿用该 Tab 断线前的目录，Session 配置只用于首次初始化。
+            # 文件面板独立恢复自己的目录，不作为终端工作目录来源。
             remote_path = handler.remote_dir
         else:
             remote_path = await self.connection_manager.resolve_remote_path(
@@ -1027,8 +1034,12 @@ class MainWindow(QMainWindow):
             or self.connection_manager.get_session(tab_id) is None
         ):
             return
-        if restore_paths or (session_item.remote_path or '').strip():
-            await self.connection_manager.cd_shell(tab_id, remote_path)
+        if not reconnecting:
+            shell_path = remote_path if (session_item.remote_path or '').strip() else None
+        elif shell_path == '~' or (shell_path or '').startswith('~/'):
+            shell_path = remote_home.rstrip('/') + shell_path[1:] or '/'
+        if shell_path:
+            await self.connection_manager.cd_shell(tab_id, shell_path)
         if (
             self.file_panels.get_panel(tab_id) is not panel
             or self.connection_manager.get_session(tab_id) is None

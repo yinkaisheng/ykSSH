@@ -392,7 +392,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
            → on_connected → _init_file_panel_for_session
                 → resolve 本地/远程路径
                 → 新 Tab 若配置了 remote_path：cd_shell 同步 Shell 目录
-                → 重连：cd_shell 恢复 handler 记录的远端文件面板当前目录，不再使用 Session 的 remote_path
+                → 重连：cd_shell 恢复终端断线前最后识别的 Shell 目录；文件面板独立恢复 handler 记录的目录
                 → refresh_remote_list
                 → _attach_file_panel（绑定 SftpUiHandler + list callback）
 
@@ -444,7 +444,9 @@ Tab 关闭（双击 Tab 栏；无关闭按钮）
 - Signal：`connected` / `disconnected` / `data_received` / `error`
 - 单个 Shell 结束时只清理对应 Tab；底层 connection 断开时清理所有关联 Tab。MainWindow 会分别取消 SFTP 任务并清空远端文件面板；曾成功连接的终端仍可按 Enter 重连，首个重连 Tab 建立新共享 connection，之后的 Tab 加入该 connection。
 
-`ConnectionManager.cd_shell()`：优先等待终端画面出现常见 `user@host:path$`/`#` Prompt（最多 5 秒），再向交互式 Shell 写入一次 `test "$PWD" = <path> || cd <path>\r`（路径经 shell 转义），仅当实际工作目录与目标路径不同时执行 `cd`，使终端与文件面板远端路径一致。Session 的 `remote_path` 只用于新 Tab 首次初始化；重连使用 `SftpUiHandler.remote_dir` 保存的断线前文件面板当前路径，即使 Session 未配置远端路径也恢复。Prompt 无法识别或启动脚本异常时，额外等待最多 1 秒，并在输出连续静默 0.5 秒后兜底发送。等待结束后重新核对原 Tab 的 SSH Session、Terminal 和文件面板仍然有效，关闭期间的过期初始化不再更新 UI。
+`ConnectionManager.cd_shell()`：优先等待终端画面出现常见 `user@host:path$`/`#` Prompt（最多 5 秒），再向交互式 Shell 写入一次 `test "$PWD" = <path> || cd <path>\r`（路径经 shell 转义），仅当实际工作目录与目标路径不同时执行 `cd`。Session 的 `remote_path` 只用于新 Tab 首次初始化；重连使用终端保存的 Shell 目录，文件面板按 `SftpUiHandler.remote_dir` 独立恢复，两者允许不同。Prompt 无法识别或启动脚本异常时，额外等待最多 1 秒，并在输出连续静默 0.5 秒后兜底发送。等待结束后重新核对原 Tab 的 SSH Session、Terminal 和文件面板仍然有效，关闭期间的过期初始化不再更新 UI。
+
+**重连目录来源与限制：** `TerminalVTWidget` 在连接期间被动记录 OSC 7 / 私有 OSC 目录回报，以及常见 `user@host:/path$` / `#` 提示符（支持 `~`、`~/path`，重连时用远端 home 展开）。被动记录不发送命令、不触发文件面板导航；同一批输出内以 OSC 回报优先。进入重连模式前将最后识别的目录保存为独立快照；若目录缓存与重连快照均为空，则从主屏缓冲区及完整滚动历史按最新到最旧查找完整目录提示符，覆盖提示符和断线信息同批到达、或提示符已滚出当前视图的情况。查找在新连接登录输出到达之前完成，不覆盖已知目录回报或已有重连快照。普通目录缓存仍按连接清空；失败重试保留快照，本地清屏/重排不丢失目录。`MainWindow` 在开始重连时捕获恢复目标，避免新登录 Shell 的目录回报覆盖它。断线后无法再查询旧 Shell，所以这是最后已知目录：未发送目录回报且历史中也无可识别的完整路径提示符、路径被缩写/截断，或目录变化尚未回报时，无法保证拿到断线瞬间的准确目录。没有已知终端目录时重连不发送 `cd`，保留新 Shell 默认目录，不以文件面板路径或 Session 配置替代。回归覆盖见 `tests/test_terminal_reconnect_directory.py` 与 `tests/test_sftp_reconnect.py`。
 
 ---
 

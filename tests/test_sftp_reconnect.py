@@ -56,6 +56,7 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
     async def _check_panel_initialization(
         self, *, reconnect: bool, enter: bool = False,
         configured_path: str = '/configured', saved_path: str = '/last-directory',
+        terminal_path: str | None = '/terminal-directory',
     ) -> None:
         tab_id = 'reconnect-tab'
         session = SessionItem(name='reconnect', host='test', remote_path=configured_path)
@@ -93,6 +94,13 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
         terminal = None
         if enter:
             terminal = TerminalVTWidget()
+            if terminal_path is not None:
+                if terminal_path.startswith('~'):
+                    terminal.write_text(
+                        f'user@test:{terminal_path}$\r\nConnection lost\r\n'
+                    )
+                else:
+                    terminal.write_text(f'\x1b]7;file://test{terminal_path}\x07')
             window._tab_sessions = {tab_id: session}
             window._sftp_handlers = {tab_id: handler}
             window._tabs_ever_connected = {tab_id}
@@ -107,6 +115,8 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
 
             async def open_tab(_tab_id, _session, _terminal, **kwargs) -> None:
                 manager._sessions[tab_id] = ssh
+                # 新连接的登录目录不能覆盖上一连接保存的恢复目标。
+                _terminal.write_text('\x1b]7;file://test/home/test\x07')
                 kwargs['on_connected']()
 
             manager._sessions.pop(tab_id)
@@ -117,7 +127,9 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
             terminal.set_reconnect_enabled(True)
             terminal.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
         else:
-            tasks.append(asyncio.create_task(MainWindow._init_file_panel_for_session(window, tab_id, session)))
+            tasks.append(asyncio.create_task(MainWindow._init_file_panel_for_session(
+                window, tab_id, session, reconnecting=reconnect,
+            )))
         try:
             await asyncio.wait_for(sftp.started.wait(), 1)
             await asyncio.gather(*remote._background_tasks, return_exceptions=True)
@@ -136,7 +148,15 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(remote.table.rowCount(), 2)
             self.assertFalse(remote._loading)
             self.assertEqual(sftp.scans, [expected_path], '初始化只能读取一次目标目录')
-            if reconnect or configured_path:
+            if reconnect and enter:
+                if terminal_path is not None:
+                    shell_path = terminal_path
+                    if shell_path.startswith('~'):
+                        shell_path = '/home/test' + shell_path[1:]
+                    manager.cd_shell.assert_awaited_once_with(tab_id, shell_path)
+                else:
+                    manager.cd_shell.assert_not_awaited()
+            elif not reconnect and configured_path:
                 manager.cd_shell.assert_awaited_once_with(tab_id, expected_path)
             else:
                 manager.cd_shell.assert_not_awaited()
@@ -170,8 +190,18 @@ class SftpReconnectTests(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_without_configured_directory_restores_saved_path(self) -> None:
         await self._check_panel_initialization(reconnect=True, enter=True, configured_path='')
 
+    async def test_reconnect_without_terminal_directory_does_not_use_panel_path(self) -> None:
+        await self._check_panel_initialization(reconnect=True, enter=True, terminal_path=None)
+
+    async def test_reconnect_expands_terminal_home_directory(self) -> None:
+        for path in ('~', '~/project'):
+            with self.subTest(path=path):
+                await self._check_panel_initialization(reconnect=True, enter=True, terminal_path=path)
+
     async def test_reconnect_at_configured_directory_synchronizes_shell_once(self) -> None:
-        await self._check_panel_initialization(reconnect=True, saved_path='/configured')
+        await self._check_panel_initialization(
+            reconnect=True, enter=True, saved_path='/configured', terminal_path='/configured',
+        )
 
     async def test_initial_connection_without_configured_directory_keeps_shell_default(self) -> None:
         await self._check_panel_initialization(reconnect=False, configured_path='')
