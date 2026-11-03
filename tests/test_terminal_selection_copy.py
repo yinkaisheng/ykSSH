@@ -41,6 +41,88 @@ class TerminalSelectionCopyTests(unittest.TestCase):
 
         self.assertEqual(QGuiApplication.clipboard().text(), 'four\nfive\nsix')
 
+    def test_copy_joins_automatically_wrapped_rows(self) -> None:
+        self.widget._reset_emulator_state(20, 3)
+        text = 'abcdefghijklmnopqrstuvwxyz'
+        self.widget.write_text(text)
+        self.widget._select_all_visible()
+
+        self.widget.copy()
+
+        self.assertEqual(QGuiApplication.clipboard().text(), text)
+
+    def test_copy_preserves_explicit_breaks_spaces_and_wide_characters(self) -> None:
+        cases = (
+            (['a' * 20, 'b' * 6], 'a' * 20 + 'b' * 6),
+            (['a' * 20, '\r\n', 'b' * 6], 'a' * 20 + '\n' + 'b' * 6),
+            (['a' * 19 + ' ', 'b'], 'a' * 19 + ' b'),
+            (['中文' * 6 + '\r\nnext'], '中文' * 6 + '\nnext'),
+            (['a' * 25 + '\r\n\r\nnext'], 'a' * 25 + '\n\nnext'),
+            (['\x1b[?7l' + 'a' * 20 + 'b'], 'a' * 19 + 'b'),
+        )
+        for chunks, expected in cases:
+            with self.subTest(chunks=chunks):
+                self.widget._reset_emulator_state(20, 3)
+                for chunk in chunks:
+                    self.widget.write_text(chunk)
+                self.widget._sel_anchor = (0, 0)
+                self.widget._sel_head = (19, self.widget._viewport_top_row + 2)
+
+                self.widget.copy()
+
+                self.assertEqual(QGuiApplication.clipboard().text(), expected)
+                self.assertEqual(self.widget._all_text(), expected)
+
+    def test_wrapped_copy_respects_partial_endpoints_in_both_directions(self) -> None:
+        text = '0123456789' * 6
+        self.widget._reset_emulator_state(20, 3)
+        self.widget.write_text(text)
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse):
+                start, end = (5, 0), (6, 2)
+                self.widget._sel_anchor, self.widget._sel_head = (
+                    (end, start) if reverse else (start, end)
+                )
+                self.widget.copy()
+                self.assertEqual(QGuiApplication.clipboard().text(), text[5:47])
+
+    def test_wrapped_copy_survives_scrolling_and_history_eviction(self) -> None:
+        self.widget._history_lines = 2
+        self.widget._reset_emulator_state(20, 3)
+        text = ''.join(str(index) * 20 for index in range(7))
+        self.widget.write_text(text)
+        self.widget._sel_anchor = (0, 2)
+        self.widget._sel_head = (19, 6)
+        for scroll in (0, 1, 2):
+            with self.subTest(scroll=scroll):
+                self.widget._set_scrollbar_target(scroll)
+                self.widget.copy()
+                self.assertEqual(QGuiApplication.clipboard().text(), text[40:])
+                self.widget.copy_all()
+                self.assertEqual(QGuiApplication.clipboard().text(), text[40:])
+
+    def test_erasing_wrapped_row_removes_stale_join(self) -> None:
+        for erase in ('\x1b[2K', '\x1b[J', '\x1b[2J'):
+            with self.subTest(erase=erase):
+                self.widget._reset_emulator_state(20, 3)
+                self.widget.write_text('a' * 30)
+                self.widget.write_text('\x1b[H' + erase + 'first\x1b[2;1Hsecond')
+                self.widget._select_all_visible()
+                self.widget.copy()
+                expected = 'first\nsecond' + ('aaaa' if erase == '\x1b[2K' else '')
+                self.assertEqual(QGuiApplication.clipboard().text(), expected)
+
+    def test_alt_screen_copy_joins_wrapped_rows(self) -> None:
+        text = 'abcdefghijklmnopqrstuvwxyz'
+        self.widget.write_text('\x1b[?1049h' + text)
+        self.widget._select_all_visible()
+
+        self.widget.copy()
+
+        self.assertEqual(QGuiApplication.clipboard().text(), text)
+        self.widget.copy_all()
+        self.assertEqual(QGuiApplication.clipboard().text(), text)
+
     def test_partial_visibility_does_not_truncate_selection(self) -> None:
         for start_scroll, delta, expected in (
             (0, 1, 'four\nfive\nsix'),

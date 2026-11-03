@@ -62,7 +62,45 @@ _SHELL_PROMPT_READY_RE = re.compile(
 )
 
 
-class _HistoryScreen(pyte.HistoryScreen):
+class _WrapTrackingMixin:
+    """将自动折行标记保存在行对象上，随历史滚动一起移动。"""
+
+    _drawing = False
+
+    def draw(self, data: str) -> None:
+        self._drawing = True
+        try:
+            super().draw(data)
+        finally:
+            self._drawing = False
+
+    def index(self) -> None:
+        # pyte.draw 仅在自动折行时调用 index；显式 LF/IND 不属于折行。
+        self.buffer[self.cursor.y]._soft_wrapped = self._drawing
+        super().index()
+
+    def erase_in_line(self, how: int = 0, private: bool = False) -> None:
+        if how in (0, 2) or (how == 1 and self.cursor.x >= self.columns - 1):
+            self.buffer[self.cursor.y]._soft_wrapped = False
+        super().erase_in_line(how, private)
+
+    def erase_in_display(self, how: int = 0, *args: Any, **kwargs: Any) -> None:
+        if how == 0:
+            rows = range(self.cursor.y + 1, self.lines)
+        elif how == 1:
+            rows = range(self.cursor.y)
+        else:
+            rows = range(self.lines)
+        for y in rows:
+            self.buffer[y]._soft_wrapped = False
+        super().erase_in_display(how, *args, **kwargs)
+
+
+class _Screen(_WrapTrackingMixin, pyte.Screen):
+    """带自动折行标记的备用屏幕。"""
+
+
+class _HistoryScreen(_WrapTrackingMixin, pyte.HistoryScreen):
     """记录输出滚屏淘汰的历史行，供绝对坐标计算使用。"""
 
     def __init__(self, columns: int, lines: int, history: int) -> None:
@@ -1841,7 +1879,7 @@ class TerminalVTWidget(QWidget):
         cols, rows = self._calc_cols_rows()
         if self._alt_screen is None:
             try:
-                self._alt_screen = pyte.Screen(cols, rows)  # type: ignore[attr-defined]
+                self._alt_screen = _Screen(cols, rows)
                 self._alt_stream = pyte.Stream(self._alt_screen)  # type: ignore[attr-defined]
             except Exception:
                 self._alt_screen = None
@@ -3279,8 +3317,12 @@ class TerminalVTWidget(QWidget):
                 if ch:
                     chars.append(ch)
                 x += self._cell_span(line, x, cols)
-            out.append("".join(chars).rstrip())
-        return "\n".join(out).rstrip()
+            text = "".join(chars)
+            wrapped = bool(getattr(line, "_soft_wrapped", False))
+            out.append(text if wrapped else text.rstrip())
+            if not wrapped:
+                out.append("\n")
+        return "".join(out).rstrip()
 
     def copy(self) -> None:  # noqa: A003 (Qt naming)
         txt = self._selected_text()
@@ -3309,11 +3351,14 @@ class TerminalVTWidget(QWidget):
         if not self._in_alt_screen:
             history = getattr(self.screen, "history", None)
             lines.extend(list(getattr(history, "bottom", ()) or ()))
-        text_lines = [
-            self._safe_display_line_from_cells(line, cols).rstrip() if line is not None else ""
-            for line in lines
-        ]
-        return "\n".join(text_lines).rstrip()
+        out: list[str] = []
+        for line in lines:
+            text = self._safe_display_line_from_cells(line, cols) if line is not None else ""
+            wrapped = bool(getattr(line, "_soft_wrapped", False))
+            out.append(text if wrapped else text.rstrip())
+            if not wrapped:
+                out.append("\n")
+        return "".join(out).rstrip()
 
     def copy_all(self) -> None:
         txt = self._all_text()
