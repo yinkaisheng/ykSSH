@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import unittest
 from types import SimpleNamespace
+from unicodedata import normalize
 from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -31,6 +32,16 @@ class TerminalSelectionCopyTests(unittest.TestCase):
         self.widget.write_text('one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix')
         QGuiApplication.clipboard().clear()
 
+    def _double_click_cell(self, col: int, row: int) -> None:
+        pos = QPointF(
+            self.widget._text_origin_x() + (col + 0.5) * self.widget._cell_w,
+            (row + 0.5) * self.widget._cell_h,
+        )
+        self.widget.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos, Qt.LeftButton,
+            Qt.LeftButton, Qt.NoModifier,
+        ))
+
     def test_keyboard_copy_keeps_selection_after_scrolling_it_out_of_view(self) -> None:
         self.widget._select_all_visible()
         self.widget._scroll_view(3)
@@ -50,6 +61,64 @@ class TerminalSelectionCopyTests(unittest.TestCase):
         self.widget.copy()
 
         self.assertEqual(QGuiApplication.clipboard().text(), text)
+
+    def test_double_click_selects_whole_word_across_wrapped_rows(self) -> None:
+        text = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN0123456789'
+        self.widget._reset_emulator_state(20, 3)
+        self.widget.write_text(text)
+        for row in range(3):
+            with self.subTest(row=row):
+                self._double_click_cell(5, row)
+                self.assertEqual(self.widget._selected_text(), text)
+                self.widget.copy()
+                self.assertEqual(QGuiApplication.clipboard().text(), text)
+
+    def test_double_click_wrapped_word_stops_at_real_boundaries(self) -> None:
+        cases = (
+            ('a' * 20 + '\r\n' + 'b' * 20, 1, 'b' * 20),
+            ('a' * 20 + '\r\n' + 'b' * 20, 0, 'a' * 20),
+            ('a' * 19 + ' ' + 'b' * 25, 1, 'b' * 25),
+            ('a' * 20 + ' ' + 'b' * 25, 0, 'a' * 20),
+            ('a' * 19 + '/' + 'b' * 25, 1, 'b' * 25),
+            ('a' * 20 + '/' + 'b' * 25, 0, 'a' * 20),
+            ('/' + 'b' * 45 + '/tail', 1, 'b' * 45),
+        )
+        for text, row, expected in cases:
+            with self.subTest(text=text, row=row):
+                self.widget._reset_emulator_state(20, 3)
+                self.widget.write_text(text)
+                self._double_click_cell(5, row)
+                self.assertEqual(self.widget._selected_text(), expected)
+
+    def test_double_click_wrapped_word_includes_offscreen_history(self) -> None:
+        text = 'abcdefghij' * 13
+        for history_size, expected in ((8, text), (2, text[40:])):
+            with self.subTest(history_size=history_size):
+                self.widget._history_lines = history_size
+                self.widget._reset_emulator_state(20, 3)
+                self.widget.write_text(text)
+                for scroll in range(history_size + 1):
+                    self.widget._set_scrollbar_target(scroll)
+                    self._double_click_cell(5, 1)
+                    self.assertEqual(self.widget._selected_text(), expected)
+                    self.widget.copy()
+                    self.assertEqual(QGuiApplication.clipboard().text(), expected)
+
+    def test_double_click_wrapped_word_keeps_wide_and_combining_characters(self) -> None:
+        for text in ('中文' * 11, 'e\u0301' * 25, 'name_\u4e2d\u6587-123.' * 4):
+            with self.subTest(text=text):
+                self.widget._reset_emulator_state(20, 3)
+                self.widget.write_text(text)
+                self._double_click_cell(3, 1)
+                self.assertEqual(self.widget._selected_text(), normalize('NFC', text))
+
+    def test_double_click_wrapped_word_in_alt_screen_excludes_main_history(self) -> None:
+        text = 'abcdefghij' * 5
+        self.widget.write_text('\x1b[?1049h' + text)
+        for row in range(3):
+            with self.subTest(row=row):
+                self._double_click_cell(5, row)
+                self.assertEqual(self.widget._selected_text(), text)
 
     def test_copy_preserves_explicit_breaks_spaces_and_wide_characters(self) -> None:
         cases = (

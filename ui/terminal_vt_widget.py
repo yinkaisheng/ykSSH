@@ -3235,25 +3235,42 @@ class TerminalVTWidget(QWidget):
             self._sel_head = None
             return False
 
-        start = x
-        while start > 0:
-            prev = start - 1
-            if self._is_wide_continuation_cell(line, prev):
-                prev = max(0, prev - 1)
-            if not self._is_word_char(self._cell_data(line, prev)):
-                break
-            start = prev
-
-        end = x
-        while end + 1 < cols:
-            nxt = end + self._cell_span(line, end, cols)
-            if nxt >= cols or not self._is_word_char(self._cell_data(line, nxt)):
-                break
-            end = nxt
-
         abs_y = self._visible_y_to_abs_y(y)
-        self._sel_anchor = (start, abs_y)
-        self._sel_head = self._expand_selection_endpoint(end, abs_y, is_end=True)
+        start, start_y, start_line = x, abs_y, line
+        while True:
+            prev = start - 1
+            prev_y, prev_line = start_y, start_line
+            if prev < 0:
+                prev_y -= 1
+                prev_line = self._line_from_absolute_buffer(prev_y)
+                # 只有前一行自动折行，当前行才属于同一逻辑行。
+                if prev_line is None or not getattr(prev_line, "_soft_wrapped", False):
+                    break
+                prev = cols - 1
+            if self._is_wide_continuation_cell(prev_line, prev):
+                prev = max(0, prev - 1)
+            if not self._is_word_char(self._cell_data(prev_line, prev)):
+                break
+            start, start_y, start_line = prev, prev_y, prev_line
+
+        end, end_y, end_line = x, abs_y, line
+        while True:
+            nxt = end + self._cell_span(end_line, end, cols)
+            nxt_y, nxt_line = end_y, end_line
+            if nxt >= cols:
+                if not getattr(end_line, "_soft_wrapped", False):
+                    break
+                nxt_y += 1
+                nxt_line = self._line_from_absolute_buffer(nxt_y)
+                if nxt_line is None:
+                    break
+                nxt = 0
+            if not self._is_word_char(self._cell_data(nxt_line, nxt)):
+                break
+            end, end_y, end_line = nxt, nxt_y, nxt_line
+
+        self._sel_anchor = (start, start_y)
+        self._sel_head = self._expand_selection_endpoint(end, end_y, is_end=True)
         return True
 
     def _normalized_selection(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
