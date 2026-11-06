@@ -84,3 +84,4 @@ class AppConfig:
     file_panel: FilePanelConfig
     side_panel: SidePanelConfig
     editor: EditorConfig
+    file_dialog_directories: dict[str, str]

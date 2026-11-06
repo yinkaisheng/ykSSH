@@ -197,6 +197,8 @@ BUILTIN_STRINGS: dict[str, str] = {
     'file.move_to_trash': 'Move to Recycle Bin',
     'file.delete_permanently': 'Delete Permanently',
     'file.mkdir': 'New Folder',
+    'file.mkdir_local_title': 'New Local Folder',
+    'file.mkdir_remote_title': 'New Remote Folder',
     'file.rename': 'Rename',
     'file.properties': 'Properties',
     'file.properties.selected': '{count} item(s) selected',

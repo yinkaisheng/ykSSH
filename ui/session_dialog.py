@@ -25,6 +25,7 @@ from log_util import logger
 from models.session_item import AUTH_PASSWORD, AUTH_PUBLIC_KEY, SessionItem
 from storage.app_config import get_app_config, save_session_edit_dialog_size
 from ui.dialog_i18n import message_warning, translate_button_box
+from ui.file_dialog_history import initial_directory, remember_selection
 from ui.widgets import ArrowComboBox, GlyphSpinBox
 
 CONNECT_DIRECT = 'direct'
@@ -293,10 +294,11 @@ class SessionDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self,
             tr('sessions.select_key_title'),
-            self.key_path_edit.text() or '',
+            initial_directory('session.private_key', self.key_path_edit.text() or ''),
             tr('sessions.key_filter'),
         )
         if path:
+            remember_selection('session.private_key', path, is_file=True)
             self.key_path_edit.setText(path)
 
     def _browse_ssh_config(self) -> None:
@@ -304,10 +306,11 @@ class SessionDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self,
             tr('sessions.select_ssh_config_title'),
-            start,
+            initial_directory('session.ssh_config', start),
             tr('sessions.ssh_config_filter'),
         )
         if path:
+            remember_selection('session.ssh_config', path, is_file=True)
             self.ssh_config_path_edit.setText(os.path.normpath(path))
             self._reload_ssh_config_hosts()
 
@@ -316,9 +319,10 @@ class SessionDialog(QDialog):
         path = QFileDialog.getExistingDirectory(
             self,
             tr('sessions.select_local_title'),
-            start,
+            initial_directory('session.local_directory', start),
         )
         if path:
+            remember_selection('session.local_directory', path)
             self.local_path_edit.setText(_normalize_local_path(path))
 
     def _reload_ssh_config_hosts(self, preferred_alias: str | None = None) -> None:

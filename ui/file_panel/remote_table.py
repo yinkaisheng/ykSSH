@@ -40,6 +40,7 @@ from core.file_permissions import PermissionChange, format_local_permission
 from i18n import tr
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_file_panel_column_widths
+from ui.file_dialog_history import initial_directory, remember_selection
 from ui.theme import active_theme_palette
 from ui.dialog_i18n import ask_yes_no, message_warning
 from ui.menu_shortcuts import ShortcutMenu, add_menu_key, exec_menu
@@ -289,7 +290,7 @@ class RemoteFileTable(_BaseFileTable):
         self.refresh_requested.emit()
 
     def _mkdir(self) -> None:
-        name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
+        name = prompt_text(self, tr('file.mkdir_remote_title'), tr('file.prompt_name'))
         if name:
             self.mkdir_requested.emit(name)
 
@@ -392,10 +393,11 @@ class RemoteFileTable(_BaseFileTable):
         directory = QFileDialog.getExistingDirectory(
             self,
             tr('file.select_download_dir'),
-            self._download_directory() or os.path.expanduser('~'),
+            initial_directory('remote.download', self._download_directory() or os.path.expanduser('~')),
         )
         if not directory:
             return
+        remember_selection('remote.download', directory)
         paths = [self._remote_full_path(name) for name, _ in selected]
         self.download_to_requested.emit(paths, directory)
 

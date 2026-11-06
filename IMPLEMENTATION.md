@@ -174,6 +174,8 @@ ykSSH/
 
 拖动 splitter 后 500ms 防抖保存（`MainWindow._schedule_session_save`）。当前处于开发阶段，配置字段以当前 schema 为准，不为旧字段保留兼容分支。
 
+**文件选择目录记忆：** `config.json` 的 `file_dialog_directories` 按入口保存最后一次确认选择的本地目录：`session.private_key`、`session.ssh_config`、`session.local_directory`、`remote.download`、`settings.editor`、`favorites.global_local`、`favorites.session_local`。文件选择记录文件所在目录，目录选择记录所选目录；各入口互不覆盖，在不同 Session / Tab 间共享同一入口的记忆，并在重启后恢复。下次优先打开仍存在的历史目录，无记录或目录已不存在时使用该入口原有默认位置；取消不更新记录。选择确认后立即保存，不依赖外层编辑对话框是否保存；保存失败仅记日志，不阻断文件选择后的操作。远端“下载到其它位置”只记忆目标目录，不改变左侧文件面板路径。统一逻辑见 `ui/file_dialog_history.py`。
+
 ### 5.1 无边框标题栏拖动（Windows）
 
 `WindowTitleBar` 在标题文字区域用 `window.move()` **手动拖动**，**不**调用 `QWindow.startSystemMove()`。

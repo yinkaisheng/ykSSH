@@ -28,6 +28,7 @@ from ui.dialog_common import (
     select_combo_by_data,
 )
 from ui.dialog_i18n import get_open_file_name, translate_button_box
+from ui.file_dialog_history import initial_directory, remember_selection
 from ui.theme import (
     THEME_OPTIONS,
     ThemeName,
@@ -163,10 +164,11 @@ def prompt_app_settings(
         selected, _ = get_open_file_name(
             dialog,
             tr('settings.select_editor'),
-            editor_edit.text().strip(),
+            initial_directory('settings.editor', editor_edit.text().strip()),
             tr('settings.executable_filter'),
         )
         if selected:
+            remember_selection('settings.editor', selected, is_file=True)
             editor_edit.setText(selected)
 
     editor_browse.clicked.connect(browse_editor)

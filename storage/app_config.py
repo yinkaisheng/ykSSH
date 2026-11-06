@@ -421,6 +421,15 @@ def _window_to_config(window: dict[str, Any]) -> WindowConfig:
     )
 
 
+def _normalize_file_dialog_directories(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value for key, value in raw.items()
+        if isinstance(key, str) and key and isinstance(value, str) and value
+    }
+
+
 def _normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {'version': CONFIG_VERSION}
     normalized['themes'] = _normalize_themes(raw.get('themes'))
@@ -431,6 +440,7 @@ def _normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     normalized['file_panel'] = _normalize_file_panel(raw.get('file_panel'))
     normalized['side_panel'] = _normalize_side_panel(raw.get('side_panel'))
     normalized['editor'] = _normalize_editor(raw.get('editor'))
+    normalized['file_dialog_directories'] = _normalize_file_dialog_directories(raw.get('file_dialog_directories'))
     return normalized
 
 
@@ -445,6 +455,7 @@ def _default_config() -> dict[str, Any]:
         'file_panel': _normalize_file_panel({}),
         'side_panel': _normalize_side_panel({}),
         'editor': _normalize_editor({}),
+        'file_dialog_directories': {},
     }
 
 
@@ -458,6 +469,7 @@ def _to_app_config(data: dict[str, Any]) -> AppConfig:
         file_panel=_file_panel_to_config(data.get('file_panel', _normalize_file_panel({}))),
         side_panel=_side_panel_to_config(data.get('side_panel', _normalize_side_panel({}))),
         editor=_editor_to_config(data.get('editor', _normalize_editor({}))),
+        file_dialog_directories=dict(data.get('file_dialog_directories', {})),
     )
 
 
@@ -490,6 +502,8 @@ def _config_needs_save(raw: dict[str, Any], normalized: dict[str, Any]) -> bool:
     if raw.get('side_panel') != normalized['side_panel']:
         return True
     if raw.get('editor') != normalized['editor']:
+        return True
+    if raw.get('file_dialog_directories') != normalized['file_dialog_directories']:
         return True
     return False
 
@@ -552,6 +566,25 @@ def get_setting(key: str, default: Any = None) -> Any:
     if key in _TERMINAL_SETTING_DEFAULTS:
         return _TERMINAL_SETTING_DEFAULTS[key]
     return default
+
+
+def save_file_dialog_directory(
+    purpose: str,
+    directory: str,
+    *,
+    path: Path = CONFIG_FILE,
+) -> AppConfig:
+    """按选择入口持久化目录，写入成功后再更新缓存。"""
+    global _config_cache, _raw_config_cache
+    get_app_config()
+    data = dict(_raw_config_cache)
+    directories = dict(data['file_dialog_directories'])
+    directories[purpose] = directory
+    data['file_dialog_directories'] = _normalize_file_dialog_directories(directories)
+    _save_config(path, data)
+    _raw_config_cache = data
+    _config_cache = _to_app_config(data)
+    return _config_cache
 
 
 def save_app_preferences(

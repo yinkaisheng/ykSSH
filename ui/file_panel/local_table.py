@@ -235,7 +235,7 @@ class LocalFileTable(_BaseFileTable):
         self.refresh()
 
     def _mkdir(self) -> None:
-        name = prompt_text(self, tr('file.mkdir'), tr('file.prompt_name'))
+        name = prompt_text(self, tr('file.mkdir_local_title'), tr('file.prompt_name'))
         if not name:
             return
         path = self._local_full_path(name)

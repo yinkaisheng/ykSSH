@@ -26,6 +26,7 @@ from log_util import logger
 from models.favorite_path import FavoritePath
 from storage.app_config import get_app_config, save_favorites_dialog_size
 from ui.dialog_i18n import translate_button_box
+from ui.file_dialog_history import initial_directory, remember_selection
 
 _ROLE_FAVORITE_IS_FILE = Qt.UserRole + 1
 _ROLE_FAVORITE_ORIGINAL_PATH = Qt.UserRole + 2
@@ -48,10 +49,12 @@ class _FavoriteListEditor(QWidget):
         title: str = '',
         allow_browse: bool = False,
         browse_start_provider: Callable[[], str] | None = None,
+        browse_history_key: str = '',
     ) -> None:
         super().__init__(parent)
         self._allow_browse = allow_browse
         self._browse_start_provider = browse_start_provider
+        self._browse_history_key = browse_history_key
         self._title_text = title
 
         layout = QVBoxLayout(self)
@@ -172,9 +175,10 @@ class _FavoriteListEditor(QWidget):
         path = QFileDialog.getExistingDirectory(
             self,
             tr('file.favorites.browse_title'),
-            start,
+            initial_directory(self._browse_history_key, start),
         )
         if path:
+            remember_selection(self._browse_history_key, path)
             self._append_row(_normalize_local_path(path), is_file=False, start_edit=False)
 
     def _remove_selected(self) -> None:
@@ -233,12 +237,14 @@ class LocalFavoritesDialog(QWidget):
             title=tr('file.favorites.global_local'),
             allow_browse=True,
             browse_start_provider=browse_start_provider,
+            browse_history_key='favorites.global_local',
         )
         self._session_editor = _FavoriteListEditor(
             self,
             title=tr('file.favorites.session_local'),
             allow_browse=True,
             browse_start_provider=browse_start_provider,
+            browse_history_key='favorites.session_local',
         )
         self._global_editor.set_entries(global_entries)
         self._session_editor.set_entries(session_entries)
