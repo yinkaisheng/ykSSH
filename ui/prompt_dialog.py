@@ -12,7 +12,6 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QShortcut,
     QVBoxLayout,
     QWidget,
@@ -20,6 +19,7 @@ from PyQt5.QtWidgets import (
 
 from ui.dialog_common import add_form_field, create_dialog, create_form_grid
 from ui.dialog_i18n import translate_button_box
+from ui.line_number_edit import LineNumberEdit
 
 
 def prompt_text(
@@ -79,9 +79,8 @@ def prompt_multiline_confirm(
     layout = QVBoxLayout(dialog)
     layout.addWidget(QLabel(label))
 
-    edit = QPlainTextEdit()
+    edit = LineNumberEdit(dialog)
     edit.setPlainText(initial)
-    edit.setLineWrapMode(QPlainTextEdit.NoWrap)
     layout.addWidget(edit, stretch=1)
 
     buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No, parent=dialog)
@@ -112,7 +111,7 @@ def prompt_multiline_confirm(
         char_w = metrics.horizontalAdvance('M')
     else:
         char_w = metrics.width('M')
-    content_w = char_w * min(max_line_chars + 4, 120) + 48
+    content_w = char_w * min(max_line_chars + 4, 120) + 48 + edit.line_number_width()
     content_h = metrics.lineSpacing() * min(line_count + 2, 40) + 120
 
     screen = QApplication.primaryScreen()

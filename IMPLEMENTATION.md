@@ -127,6 +127,7 @@ ykSSH/
     ├── window_title_bar.py      # 无边框标题栏 + 菜单（见 §5.1）
     ├── side_panel.py            # 左侧抽屉容器及 Session/快捷命令树
     ├── command_dialog.py        # 快捷命令编辑对话框
+    ├── line_number_edit.py      # 命令编辑 / 多行粘贴共用的纯文本行号控件
     ├── command_history_panel.py # 按运行时 Tab 隔离的历史命令列表
     ├── favorite_tree_widget.py  # 可拖拽 QTreeWidget
     ├── session_dialog.py        # 新建/编辑 Session
@@ -285,6 +286,10 @@ FilePanelsContainer                    # 主窗口底部，QStackedWidget
 - 远端收藏/路径经过上述解析后，使用 `RemoteFileTable.set_directory()` 直接进入已知目录并保留待选文件，避免 `set_path()` 再为类型判断加载整个父目录。
 - 关闭管理对话框时写入窗口尺寸（`file_panel.local/remote_favorites_dialog_width/height`），下次打开恢复。
 - Session / 快捷命令 **编辑** 对话框关闭时写入 `side_panel.session_edit_dialog_*` / `side_panel.command_edit_dialog_*`，再次编辑时恢复。
+- 快捷命令的 command 输入框使用 `LineNumberEdit`（基于 `QPlainTextEdit`），与终端多行粘贴确认框共用：显示从 1 开始的实际文本行号、不自动折行，行号栏随滚动、行数和字体变化更新，颜色跟随应用主题。命令通过 `setPlainText()` 加载、`toPlainText()` 保存，保留换行、空行及首尾空白，不按 HTML 解析；仍拒绝纯空白命令。回归覆盖见 `tests/test_command_dialog.py`。
+- `LineNumberEdit` 默认启用 Qt 原生 `QTextOption.ShowTabsAndSpaces`：空格显示为点、Tab 显示为箭头；通过 `QSyntaxHighlighter` 仅对空格和 Tab 设置淡化的前景色，透明度由 `ui/line_number_edit.py` 中的 `WHITESPACE_MARKER_OPACITY` 控制（默认 `0.35`，越小越淡），主题变化时刷新。仅改变绘制效果，不替换实际字符或影响复制、保存与发送内容。
+- `LineNumberEdit` 复用 `bodyTextEdit` 字体样式，与终端共用配置的等宽字体名称和回退字体；字号使用普通界面的 `appearance.ui_font_size_px`，与对话框其它控件一致，不跟随终端字号。初始化时完成样式应用，确保弹窗尺寸及行号栏按实际字体计算，修改应用字体设置后同步更新。
+- 命令说明使用普通 `QPlainTextEdit`，不显示行号；通过 `setPlainText()` 加载，保留内部换行、空行及 HTML 字面内容，保存时仍去掉首尾空白。
 - 不自动去重；收藏内容经 `save_file_panel_local_favorites` / `SidePanel.persist_sessions()` 保存。
 - `MainWindow._register_files_panel` 注入 provider / manage handler（按 `tab_id` 取 `SSHSession.session_item`）。
 
@@ -379,7 +384,7 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - `terminal.terminal_debug_history_jump` 打开时，历史命令单击定位会把请求参数、命令标记、时间/命令校验结果、跳转前后 viewport/scrollback 状态写入 `logs/terminal_history_jump.log`，用于排查 History 定位异常。
 - 其它自定义右键菜单也显示并响应单键热键：常用约定包括 `R` 刷新、`N` 新建文件夹、`C/P/L` 复制名称/路径/当前目录、`C` 复制命令（快捷命令树叶子 / 历史项）、`H` 复制 Host（Session 树叶子 / 终端 Tab）、`T` 上传/下载传输或发送并执行（快捷命令 / 历史）、`F2` 重命名、`F3`/`F4` 使用系统关联程序/配置编辑器打开、`E` 编辑 Session/快捷命令、`D` 删除、`X` 剪切/清屏、`S` 发送（快捷命令 / 历史）或保存列宽、`M` 管理收藏、`V` 粘贴、`A/L` 展开/折叠。
 - 粘贴时仅在配置允许且远端显式开启 `DECSET ?2004` bracketed paste 模式后才发送 `ESC[200~...ESC[201~` 包装；普通 shell 密码提示（如 `sudo`）不发送该包装，避免控制序列被当作密码字符。
-- 多行粘贴且 `terminal_paste_confirm_multiline` 开启时，弹出可编辑确认框（完整文本、`QPlainTextEdit`）；用户可修改后点「是」或按 `Alt+Y` 粘贴编辑结果，按 `Alt+N` 取消；快捷键在编辑框聚焦时仍有效；对话框可拖动改大小，初始尺寸按内容在屏占比上限内自动扩展。判断是否多行前会去掉末尾连续空白行；去掉后只剩一行时直接粘贴该行（不再弹出确认框，也不把尾部空行当成额外回车发出）。
+- 多行粘贴且 `terminal_paste_confirm_multiline` 开启时，弹出可编辑确认框（完整文本、带行号的 `LineNumberEdit`）；用户可修改后点「是」或按 `Alt+Y` 粘贴编辑结果，按 `Alt+N` 取消；快捷键在编辑框聚焦时仍有效；对话框可拖动改大小，初始尺寸按内容（含行号栏宽度）在屏占比上限内自动扩展。判断是否多行前会去掉末尾连续空白行；去掉后只剩一行时直接粘贴该行（不再弹出确认框，也不把尾部空行当成额外回车发出）。
 
 ### 6.5 连接生命周期
 

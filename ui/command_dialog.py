@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLineEdit,
-    QTextEdit,
+    QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -20,6 +20,7 @@ from models.command_item import CommandItem
 from storage.app_config import get_app_config, save_command_edit_dialog_size
 from ui.dialog_common import add_form_field, create_form_grid
 from ui.dialog_i18n import message_warning, translate_button_box
+from ui.line_number_edit import LineNumberEdit
 
 
 class CommandDialog(QDialog):
@@ -44,11 +45,11 @@ class CommandDialog(QDialog):
         grid = create_form_grid()
 
         self.name_edit = QLineEdit(command.name if command is not None else '')
-        self.command_edit = QTextEdit(command.command if command is not None else '')
-        self.command_edit.setAcceptRichText(False)
+        self.command_edit = LineNumberEdit(self)
+        self.command_edit.setPlainText(command.command if command is not None else '')
         self.command_edit.setMinimumHeight(90)
-        self.description_edit = QTextEdit(command.description if command is not None else '')
-        self.description_edit.setAcceptRichText(False)
+        self.description_edit = QPlainTextEdit(self)
+        self.description_edit.setPlainText(command.description if command is not None else '')
         self.description_edit.setMinimumHeight(70)
 
         add_form_field(grid, 0, tr('commands.name'), self.name_edit)
@@ -85,8 +86,8 @@ class CommandDialog(QDialog):
 
     def get_command(self, existing: CommandItem | None = None) -> CommandItem | None:
         name = self.name_edit.text().strip()
-        command = self.command_edit.toPlainText().strip()
-        if not name or not command:
+        command = self.command_edit.toPlainText()
+        if not name or not command.strip():
             return None
         item = existing or CommandItem()
         item.name = name

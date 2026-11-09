@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication, QDialog, QDialogButtonBox, QWidget
 
+from ui.line_number_edit import LineNumberEdit
+from ui.prompt_dialog import prompt_multiline_confirm
 from ui.terminal_vt_widget import TerminalVTWidget, _paste_text_without_trailing_blank_lines
 
 
@@ -77,6 +80,37 @@ class TerminalPasteConfirmTests(unittest.TestCase):
 
         confirm.assert_not_called()
         self.assertEqual(self.emitted, [])
+
+
+class MultilinePromptTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_numbered_editor_returns_edits_or_cancels(self) -> None:
+        initial = 'ls\n\npwd\n'
+        edited = '  echo <literal>\n\tprintf second\n\n'
+        for accept in (True, False):
+            with self.subTest(accept=accept):
+                parent = QWidget()
+                observed = []
+
+                def respond() -> None:
+                    dialog = parent.findChild(QDialog)
+                    editor = dialog.findChild(LineNumberEdit)
+                    if editor is not None:
+                        observed.append(editor.toPlainText())
+                        editor.setPlainText(edited)
+                    buttons = dialog.findChild(QDialogButtonBox)
+                    buttons.button(QDialogButtonBox.Yes if accept else QDialogButtonBox.No).click()
+
+                try:
+                    QTimer.singleShot(0, respond)
+                    result = prompt_multiline_confirm(parent, 'test', 'test', initial)
+                    self.assertEqual(observed, [initial])
+                    self.assertEqual(result, edited if accept else None)
+                finally:
+                    parent.deleteLater()
 
 
 if __name__ == '__main__':

@@ -533,7 +533,7 @@ QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {{
 
 QPlainTextEdit#bodyTextEdit {{
     font-family: {terminal_font_family_css_value};
-    font-size: {resolved_terminal_font_size}px;
+    font-size: {ui_size_px}px;
 }}
 
 TerminalVTWidget#terminalVTWidget {{
