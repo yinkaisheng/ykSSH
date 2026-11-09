@@ -74,7 +74,6 @@ def prompt_multiline_confirm(
     """
     dialog = create_dialog(parent, title, min_width=min_width)
     dialog.setMinimumHeight(min_height)
-    dialog.setSizeGripEnabled(True)
 
     layout = QVBoxLayout(dialog)
     layout.addWidget(QLabel(label))

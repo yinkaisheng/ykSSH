@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QRect, QTimer
 from PyQt5.QtWidgets import QApplication, QDialog, QDialogButtonBox, QWidget
 
 from ui.line_number_edit import LineNumberEdit
@@ -86,6 +86,33 @@ class MultilinePromptTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_no_button_stays_uncovered_at_bottom_right(self) -> None:
+        parent = QWidget()
+        observed = []
+
+        def inspect() -> None:
+            dialog = parent.findChild(QDialog)
+            buttons = dialog.findChild(QDialogButtonBox)
+            button = buttons.button(QDialogButtonBox.No)
+            for width, height in [(dialog.width(), dialog.height()), (720, 420), (480, 240)]:
+                dialog.resize(width, height)
+                dialog.layout().activate()
+                button_rect = QRect(button.mapTo(dialog, button.rect().topLeft()), button.size())
+                margins = dialog.layout().contentsMargins()
+                observed.append((
+                    button_rect.right() == dialog.width() - 1 - margins.right(),
+                    button_rect.bottom() == dialog.height() - 1 - margins.bottom(),
+                    dialog.childAt(button_rect.bottomRight()) is button,
+                ))
+            dialog.reject()
+
+        try:
+            QTimer.singleShot(0, inspect)
+            self.assertIsNone(prompt_multiline_confirm(parent, 'test', 'test', 'ls\npwd'))
+            self.assertEqual(observed, [(True, True, True)] * 3)
+        finally:
+            parent.deleteLater()
 
     def test_numbered_editor_returns_edits_or_cancels(self) -> None:
         initial = 'ls\n\npwd\n'
