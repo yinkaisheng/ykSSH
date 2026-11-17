@@ -85,6 +85,7 @@ class CommandReplacementTests(unittest.IsolatedAsyncioTestCase):
         self.terminal.command_submitted.connect(lambda command, _time, _row: submitted.append(command))
         self.output('git status')
         self.terminal.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
+        self.output('\r\n')
         self.assertEqual(submitted, ['git status'])
 
     async def test_quote_continuation_is_interrupted_before_filling(self) -> None:
@@ -117,6 +118,7 @@ class CommandReplacementTests(unittest.IsolatedAsyncioTestCase):
         self.terminal.command_submitted.connect(lambda command, _time, _row: submitted.append(command))
         self.output('pwd')
         self.terminal.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
+        self.output('\r\n')
         self.assertEqual(submitted, ['pwd'])
 
     async def test_multiline_buffer_requires_fresh_output_even_on_primary_prompt(self) -> None:

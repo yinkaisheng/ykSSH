@@ -379,6 +379,8 @@ TerminalVTWidget.input_received(bytes) → SSHSession.write() → SSH stdin
 - 终端快捷键和右键菜单「复制」按选区绝对行号读取 `history.top → 当前 buffer → history.bottom`，保留首尾列边界并完整复制跨屏或滚动后部分/全部离开视图的选区；中文宽字符端点也从对应历史行读取，避免截断半个字符。读取历史行时顺序遍历队列，避免长选区逐行随机索引的开销。右键菜单「全部复制」按相同顺序拼接全部可用 scrollback 和屏幕内容，因此复制结果不受当前 wheel 滚动位置影响；alt-screen 中只复制当前屏幕内容。
 - 主屏与备用屏在 pyte 自动折行时将标记存入行对象，随行进入/离开历史区；「复制」和「全部复制」连接这些显示行时不插入换行，并保留折行处的文本空格，实际的 LF/CRLF 行边界仍复制为 `\n`。显式换行、擦除行尾或擦除整行/屏幕会清除对应折行标记，避免重绘后错误连接无关行。回归覆盖分批输出、真实换行、中文宽字符、部分选区、历史滚动/淘汰与备用屏，见 `tests/test_terminal_selection_copy.py`。
 - 终端正文双击选词沿自动折行向前后扩展，可选中跨多行及视图外历史区的完整单词；实际换行、空白和原有标点边界（如 `/`）仍会终止选词。选区按绝对行号保存，中文宽字符与组合字符保持完整；历史已淘汰的部分不再选择，备用屏只在当前屏幕内扩展。
+- 使用 `↑` / `↓` 召回远端 Shell 历史时，在发送按键前保存提示符处的命令起点与列位置；按 Enter 时从该位置读取最终回显，因此直接执行召回命令、或修改后执行，均可写入 History。长命令按终端自动折行标记连接完整内容，保留折行边界的空格，并可读取已滚入 scrollback 的起始行；实际换行不作为自动折行连接。Python REPL 等非 Shell 提示符及未回显输入仍不记录。回归覆盖见 `tests/test_command_history_capture.py`。
+- 普通键盘输入按 Enter 时只排队保存命令起始行、列和发送时间；`write_text()` 收到后续远端输出、光标越过命令的自动折行末行后，才读取完整回显并发送 History 信号。不能在 Enter 时用当下的部分回显覆盖命令（例如快速输入 `ifconfig` 时仅收到 `ifcon`），也不能用未回显的本地文本兜底。该规则同时覆盖零回显/分批回显、延迟的 Tab 补全与历史召回编辑；未回显的输入不写入 History。清屏、重置终端或断线时清除待采集位置，避免串入后续连接；客户端主动「发送并执行」仍直接记录。
 - 远端 `clear`/`Ctrl+L` 等发出主屏全屏清除序列（如 `ESC[H ESC[2J` 或 `ESC[3J`）时，会重置本地选区、命令起点记录、viewport 绝对基准与 pyte history 队列；之后的新命令从清屏后的缓冲区重新建立绝对行坐标。
 - `terminal.terminal_debug_gutter_selection` 打开时，终端会把实时输出滚屏、手动 scrollback 滚动、gutter 双击命令块选择的坐标换算过程写入 `logs/terminal_debug.log`，用于排查长输出场景下的选区漂移问题。
 - `terminal.terminal_debug_history_jump` 打开时，历史命令单击定位会把请求参数、命令标记、时间/命令校验结果、跳转前后 viewport/scrollback 状态写入 `logs/terminal_history_jump.log`，用于排查 History 定位异常。

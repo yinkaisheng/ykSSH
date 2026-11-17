@@ -262,6 +262,7 @@ class TerminalVTWidget(QWidget):
         self._pending_command_text = ''
         self._pending_command_history_forced = False
         self._pending_command_from_shell_prompt = False
+        self._awaiting_command_echo: list[tuple[int, int, str]] = []
         self._output_revision = 0
         self._command_start_commands: dict[int, str] = {}
         self._last_gutter_tooltip_row: int | None = None
@@ -919,6 +920,7 @@ class TerminalVTWidget(QWidget):
         without resetting them makes clicks/wheel emit stale SGR sequences
         (for example ``64;20;37M``) into the new shell.
         """
+        self._awaiting_command_echo.clear()
         self._app_cursor_keys = False
         self._bracketed_paste_mode = False
         self._mouse_track_1000 = False
@@ -973,6 +975,7 @@ class TerminalVTWidget(QWidget):
             return
         cwd_revision = self._working_directory_revision
         self._process_input(text, record=True)
+        self._flush_awaiting_command_echo()
         if (
             not self._reconnect_enabled
             and not self._working_directory_request_pending
@@ -2845,6 +2848,7 @@ class TerminalVTWidget(QWidget):
         self._pending_command_start_x = None
 
     def _clear_command_marks(self) -> None:
+        self._awaiting_command_echo.clear()
         self._command_start_rows.clear()
         self._command_start_times.clear()
         self._pending_command_start_y = None
@@ -2881,55 +2885,59 @@ class TerminalVTWidget(QWidget):
     def _emit_pending_command_submitted(self, sent_at: str, start_y: int | None) -> None:
         command = self._pending_command_text.strip()
         force_history = self._pending_command_history_forced
-        visible_command = (
-            '' if force_history else self._visible_command_text_for_history(start_y, command)
-        )
-        if visible_command:
-            command = visible_command
+        start_x = max(0, int(self._pending_command_start_x or 0))
         self._pending_command_text = ''
         self._pending_command_history_forced = False
         self._pending_command_from_shell_prompt = False
-        if command and sent_at and (
-            force_history
-            or self._history_command_looks_echoed(command, start_y)
-        ):
-            if start_y is not None:
-                self._command_start_commands[start_y] = command
-            self.command_submitted.emit(command, sent_at, int(start_y))
+        if not sent_at or start_y is None:
+            return
+        if not force_history:
+            # 等提交行结束后再读取最终回显，兼顾延迟、历史召回和补全。
+            # 只保留位置和时间，不把未回显的本地输入存入等待队列。
+            self._awaiting_command_echo.append((start_y, start_x, sent_at))
+            self._awaiting_command_echo = self._awaiting_command_echo[-1000:]
+            self._flush_awaiting_command_echo()
+            return
+        if command:
+            self._command_start_commands[start_y] = command
+            self.command_submitted.emit(command, sent_at, start_y)
 
-    def _visible_command_text_for_history(self, start_y: int | None, typed_command: str) -> str:
-        if start_y is None:
-            return ''
-        visible_y = self._abs_y_to_visible_y(start_y)
-        _cols, rows = self._calc_cols_rows()
-        if visible_y < 0 or visible_y >= rows:
-            return ''
-        line = self._line_text(visible_y).rstrip()
-        if not line:
-            return ''
-        start_x = max(0, int(self._pending_command_start_x or 0))
-        candidate = line[start_x:].strip()
-        if not candidate:
-            return ''
-        return candidate
-
-    def _history_command_looks_echoed(self, command: str, start_y: int | None) -> bool:
-        if self._pending_command_was_visible(command):
-            return True
-        if start_y is None:
-            return False
+    def _flush_awaiting_command_echo(self) -> None:
+        if self._in_alt_screen:
+            return
         cursor_y = self._cursor_abs_y()
-        return cursor_y is not None and cursor_y != start_y
+        waiting: list[tuple[int, int, str]] = []
+        for start_y, start_x, sent_at in self._awaiting_command_echo:
+            command, end_y = self._command_echo_for_history(start_y, start_x)
+            if end_y is None:
+                continue
+            if cursor_y is None or cursor_y <= end_y:
+                waiting.append((start_y, start_x, sent_at))
+            elif command:
+                self._command_start_commands[start_y] = command
+                self.command_submitted.emit(command, sent_at, start_y)
+        self._awaiting_command_echo = waiting
 
-    def _pending_command_was_visible(self, command: str) -> bool:
-        y = self._cursor_y()
-        if y is None:
-            return False
-        visible = self._line_text(y).rstrip()
-        if not visible:
-            return False
-        tail = command.splitlines()[-1].rstrip()
-        return bool(tail) and visible.endswith(tail)
+    def _command_echo_for_history(self, start_y: int, start_x: int) -> tuple[str, int | None]:
+        cols = int(getattr(self.screen, 'columns', self._calc_cols_rows()[0]))
+        x = start_x
+        chars: list[str] = []
+        y = start_y
+        while True:
+            line = self._line_from_absolute_buffer(y)
+            if line is None:
+                return '', None
+            while x < cols:
+                if self._is_wide_continuation_cell(line, x):
+                    x += 1
+                    continue
+                chars.append(self._cell_data(line, x))
+                x += self._cell_span(line, x, cols)
+            # 只拼接自动折行，保留跨行边界上的空格，不混入下一条输出。
+            if not getattr(line, '_soft_wrapped', False):
+                return ''.join(chars).strip(), y
+            y += 1
+            x = 0
 
     def send_command_text(self, command: str, *, execute: bool = True) -> None:
         command = (command or '').strip()
@@ -3579,6 +3587,9 @@ class TerminalVTWidget(QWidget):
             Qt.Key_F12: b"\x1b[24~",
         }
         if key in key_map:
+            if key in (Qt.Key_Up, Qt.Key_Down):
+                # 历史命令由远端回显；召回前保存空提示符处的输入起点。
+                self._record_pending_command_start()
             self.input_received.emit(key_map[key])
             event.accept()
             return
